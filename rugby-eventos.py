@@ -1,60 +1,248 @@
-# 1. Primeiro, importamos as ferramentas que vamos usar
+import streamlit as st
 import pandas as pd
-from CatapultPy import ofCreateToken, ofGetAthletes, ofGetActivities, ofGetStats
+import requests
+from datetime import datetime, timedelta
+import os
+from dotenv import load_dotenv
 
-# 2. O SEU TOKEN que você tem (copie ele inteiro aqui)
-MEU_TOKEN_STRING = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImtpZCI6ImU3NzY0MDAzODU1YjlmZWNlOGMxYzIyY2U0YWIxNjlkIn0.eyJhdWQiOiI0NjFiMTExMS02ZjdhLTRkYmItOWQyOS0yMzAzOWZlMjI4OGUiLCJqdGkiOiI3Nzk0YzBiMTdjYjMyNGFhOGE0ZWU0YWI4ODg1ZGE0OWQwZjdkMjg0MjEyYmRjNzY5MzhiYjIyOTY3Y2ZlZGM1ZDZmNDhmODVhOGFlOGNiNSIsImlhdCI6MTc3NzQ2NTczNS45NDE0OTIsIm5iZiI6MTc3NzQ2NTczNS45NDE0OTMsImV4cCI6NDkzMTA2NTczNS45MzI5MjMsInN1YiI6ImJkODAyMzAxLTk1YzgtNDgxNy05ZTAxLWFjOTI5Y2ZlZGMwNiIsInNjb3BlcyI6WyJjb25uZWN0IiwiY2F0YXB1bHRyIiwic2Vuc29yLXJlYWQtb25seSIsImF0aGxldGVzLXVwZGF0ZSIsImFjdGl2aXRpZXMtdXBkYXRlIiwiYW5ub3RhdGlvbnMtdXBkYXRlIiwicGFyYW1ldGVycy11cGRhdGUiXSwiaXNzIjoiaHR0cHM6Ly9iYWNrZW5kLXVzLm9wZW5maWVsZC5jYXRhcHVsc3BvcnRzLmNvbSIsImNvbS5jYXRhcHVsc3BvcnRzIjp7Im9wZW5maWVsZCI6eyJjdXN0b21lcnMiOlt7InJlbGF0aW9uIjoiYXV0aCIsImlkIjoxMzc3fV19fX0.p8Io8nPlCH3Ih-ckTYc_VNN88eWX4FIOjCJvUIC--6wQIfa_Ga_FsTS3HQ-nL_3TMg3KaV_4FChjmG0a1Gxmsj7J2b026Dl9yeHEg7TrbGcIVxKXSy2fdGs4e0VgSGG1BoVYlfQBkaDUxm6gFtmsevmE5xXWuTFlJkHFA1mHQofMWGtbnKJ-AmI2tAmNKADsNDxvdN-io4aVVaB4QVbuCUPf19zMPX0n6qlo1W8HWMoh5w3qjT6r9easbHskUvfPIN5cURZ3vdfq8WQ8hZ5TSMCI1asgrAGTjHC6ZMKv6p-GhFslcoZzYtuafsb8n0clc4_uRswoESnzbJtxDUnt_gtMP7CcLIboVsWJDnmDIvi2nx_OODLYntT9Yi_sb-NJHEctoe5iPc59-GT4Z7rvlObzHElUBRE8ad-HzimW6AwYPcXC9w_bUYcY91z_KNDguIcQiHFuYsh9mzmAAiK7bbQ0NEwVpXRJF83gYS3qM78ZAfhbjq33txg9F8SIA6SIZDWEA7K1bySZEwBILtKbFY9liJbkx5EAlbmAmU4yMXF5xZI1fZNWDSvQQOAgOG8P0hlOiF1V8QwrCFZ09Z0ewDzfOhecSMd8zNLb3iQY6ilNSkxEj_Au-lYKsgHVnneAiuzXKMgT1xAp8ynqu_jSP8ZMhEW0-dadLDM_zbbphM4"
+# Carrega o token do arquivo .env
+load_dotenv()
+TOKEN = os.getenv("CATAPULT_TOKEN")
 
-# 3. Agora, "apresentamos" nosso token para a Catapult.
-# O 'region' precisa ser o mesmo do seu token. O seu veio do "backend-us", então é 'us'.
-print("🔄 Conectando à Catapult...")
-meu_token_oficial = ofCreateToken(MEU_TOKEN_STRING, region="us")
-print("✅ Token criado com sucesso!")
+# Configuração da API (do seu token, a região é 'us')
+BASE_URL = "https://backend-us.openfield.catapultsports.com/api/v1"
 
-# 4. Vamos puxar os dados que você quer!
+# Headers para todas as requisições
+headers = {
+    "Authorization": f"Bearer {TOKEN}",
+    "Content-Type": "application/json"
+}
 
-# --- Dados dos Atletas (nomes) ---
-print("\n📊 Buscando lista de atletas...")
-df_atletas = ofGetAthletes(meu_token_oficial)
-print(f"✅ Encontrados {len(df_atletas)} atletas.")
-# Exibe as primeiras linhas da tabela para você ver
-print(df_atletas.head())
+# Cache para evitar sobrecarregar a API
+@st.cache_data(ttl=300)
+def fetch_from_api(endpoint):
+    """Função genérica para buscar dados da API"""
+    try:
+        response = requests.get(f"{BASE_URL}/{endpoint}", headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            if isinstance(data, list):
+                return pd.DataFrame(data)
+            elif isinstance(data, dict) and "data" in data:
+                return pd.DataFrame(data["data"])
+            else:
+                return pd.DataFrame([data])
+        else:
+            st.error(f"Erro {response.status_code}: {response.text[:200]}")
+            return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Erro de conexão: {str(e)}")
+        return pd.DataFrame()
 
-# --- Dados das Atividades (nomes e informações básicas) ---
-print("\n📊 Buscando lista de atividades...")
-df_atividades = ofGetActivities(meu_token_oficial)
-print(f"✅ Encontradas {len(df_atividades)} atividades.")
-print(df_atividades.head())
+# Título da aplicação
+st.set_page_config(page_title="Rugby Analytics", layout="wide")
+st.title("🏉 Rugby Analytics - Catapult Data")
+st.markdown("Análise de desempenho de atletas")
 
-# --- Dados Estatísticos (A PARTE MAIS LEGAL!) ---
-# É aqui que vamos pegar a distância total, velocidade máxima, etc.
-print("\n📊 Buscando as estatísticas detalhadas...")
-try:
-    # Vamos pedir as principais métricas para todos os atletas e atividades disponíveis
-    df_stats = ofGetStats(
-        meu_token_oficial,
-        params=[
-            "athlete_id", "athlete_name",      # Identificação do atleta
-            "activity_id", "activity_name",    # Identificação da atividade
-            "date",                             # Data da atividade
-            "total_distance",                   # 🎯 Distância total (o que você quer)
-            "max_vel",                          # 🎯 Velocidade máxima (o que você quer)
-            "total_player_load",                # Carga do jogador (métrica importante)
-            "hsr_efforts"                       # Esforços de alta velocidade
-        ],
-        # group_by=["athlete", "activity"]     # Se quiser dados por atleta+atividade, descomente
-    )
-    print(f"✅ Estatísticas capturadas! Tabela com {len(df_stats)} linhas.")
-    print("🎉 VEJA SEUS DADOS! 🎉")
-    print(df_stats.head(10)) # Mostra as primeiras 10 linhas
+# Sidebar com navegação
+st.sidebar.title("📁 Navegação")
+pagina = st.sidebar.radio(
+    "Escolha uma página:",
+    ["📊 Dashboard Principal", "👥 Atletas", "📅 Atividades", "📈 Estatísticas"]
+)
+
+# ============ PÁGINA PRINCIPAL ============
+if pagina == "📊 Dashboard Principal":
+    st.header("📊 Dashboard Principal")
     
-    # Se quiser salvar tudo em um arquivo Excel para analisar depois:
-    # df_stats.to_excel("meus_dados_catapult.xlsx", index=False)
-    # print("💾 Dados salvos no arquivo 'meus_dados_catapult.xlsx'")
+    # Cards com resumo
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        with st.spinner("Contando atletas..."):
+            df_athletes = fetch_from_api("athletes")
+            st.metric("👥 Total de Atletas", len(df_athletes))
+    
+    with col2:
+        with st.spinner("Contando atividades..."):
+            df_activities = fetch_from_api("activities")
+            st.metric("📅 Total de Atividades", len(df_activities))
+    
+    with col3:
+        st.metric("📊 Status", "Conectado", delta="API OK")
+    
+    st.divider()
+    
+    # Últimas atividades
+    st.subheader("📋 Últimas Atividades")
+    if not df_activities.empty:
+        # Pega as 5 atividades mais recentes
+        if "date" in df_activities.columns:
+            df_activities["date"] = pd.to_datetime(df_activities["date"])
+            df_recent = df_activities.sort_values("date", ascending=False).head(5)
+        else:
+            df_recent = df_activities.head(5)
+        st.dataframe(df_recent, use_container_width=True)
+    else:
+        st.info("Nenhuma atividade encontrada.")
+    
+    # Filtros rápidos
+    st.subheader("🔍 Filtros Rápidos")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if not df_athletes.empty and "name" in df_athletes.columns:
+            atleta_filter = st.multiselect(
+                "Filtrar por Atleta:",
+                options=df_athletes["name"].tolist()
+            )
+    
+    with col2:
+        if not df_activities.empty and "name" in df_activities.columns:
+            atividade_filter = st.multiselect(
+                "Filtrar por Atividade:",
+                options=df_activities["name"].tolist()
+            )
+    
+    if st.button("🔄 Atualizar Dados"):
+        st.cache_data.clear()
+        st.rerun()
 
-except Exception as e:
-    print(f"⚠️ Aviso: Não foi possível buscar estatísticas. Erro: {e}")
-    print("Isso pode acontecer se sua conta não tiver acesso a essa função ou se não houver dados ainda.")
-    print("Mas você já tem a lista de atletas e atividades, que é um ótimo começo!")
+# ============ PÁGINA DE ATLETAS ============
+elif pagina == "👥 Atletas":
+    st.header("👥 Atletas")
+    
+    with st.spinner("Carregando lista de atletas..."):
+        df_athletes = fetch_from_api("athletes")
+    
+    if not df_athletes.empty:
+        # Mostra estatísticas rápidas
+        st.subheader("📊 Resumo")
+        st.write(f"**Total:** {len(df_athletes)} atletas")
+        
+        # Tabela completa
+        st.subheader("📋 Lista Completa")
+        st.dataframe(df_athletes, use_container_width=True)
+        
+        # Botão para download
+        csv = df_athletes.to_csv(index=False)
+        st.download_button(
+            "📥 Baixar CSV",
+            csv,
+            "atletas.csv",
+            "text/csv"
+        )
+    else:
+        st.warning("Não foi possível carregar os atletas. Verifique seu token e permissões.")
 
-print("\n✨ Pronto! Agora os dados estão na variável 'df_stats' e você pode analisá-los.")
+# ============ PÁGINA DE ATIVIDADES ============
+elif pagina == "📅 Atividades":
+    st.header("📅 Atividades")
+    
+    with st.spinner("Carregando lista de atividades..."):
+        df_activities = fetch_from_api("activities")
+    
+    if not df_activities.empty:
+        st.subheader("📊 Resumo")
+        st.write(f"**Total:** {len(df_activities)} atividades")
+        
+        # Seletor de atividade para detalhes
+        if "name" in df_activities.columns:
+            selected_activity = st.selectbox(
+                "Selecione uma atividade para ver detalhes:",
+                options=df_activities["name"].tolist()
+            )
+            
+            if selected_activity:
+                # Encontra o ID da atividade selecionada
+                if "id" in df_activities.columns:
+                    activity_id = df_activities[df_activities["name"] == selected_activity]["id"].iloc[0]
+                    with st.spinner("Carregando detalhes..."):
+                        df_details = fetch_from_api(f"activities/{activity_id}")
+                        if not df_details.empty:
+                            st.subheader(f"📌 Detalhes: {selected_activity}")
+                            st.dataframe(df_details, use_container_width=True)
+        
+        st.divider()
+        st.subheader("📋 Todas as Atividades")
+        st.dataframe(df_activities, use_container_width=True)
+        
+        csv = df_activities.to_csv(index=False)
+        st.download_button("📥 Baixar CSV", csv, "atividades.csv", "text/csv")
+    else:
+        st.warning("Não foi possível carregar as atividades.")
+
+# ============ PÁGINA DE ESTATÍSTICAS ============
+elif pagina == "📈 Estatísticas":
+    st.header("📈 Estatísticas de Desempenho")
+    st.info("💡 Os dados estatísticos podem requerer permissões específicas na sua conta Catapult.")
+    
+    # Carrega dados necessários
+    with st.spinner("Carregando dados..."):
+        df_athletes = fetch_from_api("athletes")
+        df_activities = fetch_from_api("activities")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if not df_athletes.empty and "name" in df_athletes.columns:
+            atleta = st.selectbox("👤 Selecione o Atleta:", df_athletes["name"].tolist())
+    
+    with col2:
+        if not df_activities.empty and "name" in df_activities.columns:
+            atividade = st.selectbox("📅 Selecione a Atividade:", df_activities["name"].tolist())
+    
+    if st.button("📊 Buscar Estatísticas", type="primary"):
+        if atleta and atividade:
+            # Encontra os IDs
+            athlete_id = df_athletes[df_athletes["name"] == atleta]["id"].iloc[0]
+            activity_id = df_activities[df_activities["name"] == atividade]["id"].iloc[0]
+            
+            with st.spinner("Buscando dados de desempenho..."):
+                # Tenta buscar dados específicos do atleta na atividade
+                # Nota: O endpoint exato pode variar conforme sua versão da API
+                endpoints_to_try = [
+                    f"activities/{activity_id}/athletes/{athlete_id}/stats",
+                    f"activities/{activity_id}/stats?athlete_id={athlete_id}",
+                    f"athletes/{athlete_id}/activities/{activity_id}"
+                ]
+                
+                df_stats = pd.DataFrame()
+                for endpoint in endpoints_to_try:
+                    df_stats = fetch_from_api(endpoint)
+                    if not df_stats.empty:
+                        break
+                
+                if not df_stats.empty:
+                    st.success("✅ Dados encontrados!")
+                    
+                    # Tenta encontrar métricas específicas
+                    numeric_cols = df_stats.select_dtypes(include=['number']).columns.tolist()
+                    
+                    if numeric_cols:
+                        col1, col2, col3 = st.columns(3)
+                        for i, col in enumerate(numeric_cols[:3]):
+                            with [col1, col2, col3][i % 3]:
+                                st.metric(f"📊 {col.replace('_', ' ').title()}", 
+                                         f"{df_stats[col].iloc[0]:.1f}")
+                    
+                    st.subheader("📋 Dados Completos")
+                    st.dataframe(df_stats.T, use_container_width=True)
+                else:
+                    st.warning("""
+                        Não foi possível encontrar estatísticas para esta combinação.
+                        
+                        **Possíveis causas:**
+                        1. A atividade pode não ter dados de sensor processados
+                        2. Seu token pode não ter permissão para acessar estatísticas
+                        3. O atleta pode não ter participado desta atividade específica
+                        
+                        **Teste:** Verifique se consegue ver os dados diretamente no OpenField Cloud.
+                    """)
+        else:
+            st.warning("Selecione um atleta e uma atividade primeiro.")
+
+# Rodapé
+st.sidebar.divider()
+st.sidebar.caption("🔐 Dados da API Catapult OpenField")
+st.sidebar.caption(f"🌎 Região: US")
