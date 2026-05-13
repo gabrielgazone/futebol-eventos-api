@@ -1,4 +1,4 @@
-# rugby-eventos.py - VERSÃO COMPLETA COM ESFORÇOS (EFFORTS)
+# rugby-eventos.py - VERSÃO FINAL CORRIGIDA
 import streamlit as st
 import requests
 import pandas as pd
@@ -8,6 +8,7 @@ from datetime import datetime
 import json
 import base64
 import numpy as np
+import re
 
 # Configuração da página
 st.set_page_config(
@@ -62,14 +63,14 @@ class CatapultAPI:
     def get_activity_athletes(self, activity_id):
         return self._request(f"activities/{activity_id}/athletes")
     
-    # ==================== NOVO: ENDPOINT DE ESFORÇOS (EFFORTS) ====================
-    def get_activity_efforts(self, activity_id, athlete_id, effort_types="acceleration,velocity", velocity_bands=None, acceleration_bands=None):
+    # ==================== ENDPOINTS DE ESFORÇOS (EFFORTS) ====================
+    def get_activity_efforts(self, activity_id, athlete_id, effort_types="acceleration,velocity", 
+                              velocity_bands=None, acceleration_bands=None):
         """
         GET /activities/{id}/athletes/{id}/efforts
-        Retorna dados de esforços (aceleração e velocidade) do atleta na atividade
         - effort_types: 'acceleration', 'velocity' ou 'acceleration,velocity'
-        - velocity_bands: números 1 a 8 (ex: '1,2,3')
-        - acceleration_bands: números -3 a 3 (ex: '-3,-2,-1,0,1,2,3')
+        - velocity_bands: string com números 1 a 8 separados por vírgula (ex: '1,2,3')
+        - acceleration_bands: string com números -3 a 3 separados por vírgula (ex: '-3,-2,-1,0,1,2,3')
         """
         params = {"effort_types": effort_types}
         if velocity_bands:
@@ -78,10 +79,10 @@ class CatapultAPI:
             params["acceleration_bands"] = acceleration_bands
         return self._request(f"activities/{activity_id}/athletes/{athlete_id}/efforts", params=params)
     
-    def get_period_efforts(self, period_id, athlete_id, effort_types="acceleration,velocity", velocity_bands=None, acceleration_bands=None):
+    def get_period_efforts(self, period_id, athlete_id, effort_types="acceleration,velocity",
+                           velocity_bands=None, acceleration_bands=None):
         """
         GET /periods/{period_id}/athletes/{athlete_id}/efforts
-        Retorna dados de esforços (aceleração e velocidade) do atleta no período
         """
         params = {"effort_types": effort_types}
         if velocity_bands:
@@ -98,14 +99,14 @@ def decode_token(token):
     except:
         return {}
 
-def process_efforts_data(efforts_data, effort_type):
+def process_efforts_data(efforts_data):
     """Processa dados de esforços (aceleração/velocidade) para DataFrame"""
     if not efforts_data:
         return pd.DataFrame()
     
     if isinstance(efforts_data, dict):
         if 'data' in efforts_data:
-            return process_efforts_data(efforts_data['data'], effort_type)
+            return process_efforts_data(efforts_data['data'])
         efforts_data = [efforts_data]
     
     if not isinstance(efforts_data, list):
@@ -113,15 +114,30 @@ def process_efforts_data(efforts_data, effort_type):
     
     records = []
     for item in efforts_data:
-        record = {
-            'Banda': item.get('band', item.get('name', '')),
+        # Extrair banda (pode ser número, string ou objeto)
+        band = item.get('band', item.get('name', ''))
+        if isinstance(band, dict):
+            band = band.get('name', band.get('id', str(band)))
+        
+        records.append({
+            'Banda': str(band),
             'Quantidade': item.get('count', item.get('value', 0)),
-            'Duração (s)': item.get('duration', item.get('time', 0)),
-            'Percentual (%)': item.get('percentage', 0)
-        }
-        records.append(record)
+            'Duração (s)': round(item.get('duration', item.get('time', 0)), 1),
+            'Percentual (%)': round(item.get('percentage', 0), 1)
+        })
     
-    return pd.DataFrame(records)
+    df = pd.DataFrame(records)
+    
+    # Extrair número da banda para ordenação
+    def extract_band_number(banda):
+        nums = re.findall(r'-?\d+', str(banda))
+        return int(nums[0]) if nums else 0
+    
+    if not df.empty:
+        df['Banda_Num'] = df['Banda'].apply(extract_band_number)
+        df = df.sort_values('Banda_Num')
+    
+    return df
 
 def process_sensor_data(sensor_data):
     if not sensor_data:
@@ -355,9 +371,17 @@ def main():
                 default=["acceleration", "velocity"]
             )
             
-            st.subheader("🏷️ Bandas")
-            show_velocity_bands = st.checkbox("Mostrar bandas de velocidade", value=True)
-            show_acceleration_bands = st.checkbox("Mostrar bandas de aceleração", value=True)
+            st.subheader("🏷️ Bandas de Velocidade (1-8)")
+            velocity_bands_input = st.text_input(
+                "Bandas de velocidade (ex: '1,2,3' ou deixe vazio para todas):",
+                placeholder="1,2,3,4,5,6,7,8"
+            )
+            
+            st.subheader("🔄 Bandas de Aceleração (-3 a 3)")
+            acceleration_bands_input = st.text_input(
+                "Bandas de aceleração (ex: '-3,-2,-1,0,1,2,3' ou deixe vazio para todas):",
+                placeholder="-3,-2,-1,0,1,2,3"
+            )
     
     # ==================== TELA INICIAL ====================
     if st.session_state.get('df_athletes') is not None:
@@ -487,9 +511,12 @@ def main():
                 
                 period_type_vel = st.radio("Período:", ["Atividade Completa", "Período Específico"], horizontal=True, key="vel_period_type")
                 
+                # Preparar parâmetros
                 effort_types_str = ",".join([et for et in effort_types if et == "velocity"])
                 if not effort_types_str:
                     effort_types_str = "velocity"
+                
+                velocity_bands = velocity_bands_input if velocity_bands_input else None
                 
                 all_velocity_data = {}
                 progress_bar = st.progress(0)
@@ -498,18 +525,26 @@ def main():
                     athlete_id_val = st.session_state.df_athletes[st.session_state.df_athletes['Atleta'] == athlete_name]['ID'].values[0]
                     
                     if period_type_vel == "Atividade Completa":
-                        efforts_data = st.session_state.api.get_activity_efforts(activity_id, athlete_id_val, effort_types=effort_types_str)
+                        efforts_data = st.session_state.api.get_activity_efforts(
+                            activity_id, athlete_id_val, 
+                            effort_types=effort_types_str,
+                            velocity_bands=velocity_bands
+                        )
                     else:
                         if period_options:
                             selected_period = st.selectbox("Período:", list(period_options.keys()), key=f"vel_period_{athlete_name}")
                             if selected_period:
                                 period_id = period_options[selected_period]
-                                efforts_data = st.session_state.api.get_period_efforts(period_id, athlete_id_val, effort_types=effort_types_str)
+                                efforts_data = st.session_state.api.get_period_efforts(
+                                    period_id, athlete_id_val,
+                                    effort_types=effort_types_str,
+                                    velocity_bands=velocity_bands
+                                )
                         else:
                             efforts_data = None
                     
                     if efforts_data:
-                        df_efforts = process_efforts_data(efforts_data, "velocity")
+                        df_efforts = process_efforts_data(efforts_data)
                         if not df_efforts.empty:
                             all_velocity_data[athlete_name] = df_efforts
                     
@@ -526,6 +561,7 @@ def main():
                             fig = px.bar(df_efforts, x='Banda', y='Percentual (%)', 
                                         title=f"Distribuição de Velocidade - {athlete_name}",
                                         color='Percentual (%)', color_continuous_scale='Viridis')
+                            fig.update_layout(xaxis_title="Banda de Velocidade", yaxis_title="Percentual do Tempo (%)")
                             st.plotly_chart(fig, use_container_width=True)
                 else:
                     st.warning("Nenhum dado de esforço de velocidade encontrado")
@@ -537,9 +573,12 @@ def main():
                 
                 period_type_acc = st.radio("Período:", ["Atividade Completa", "Período Específico"], horizontal=True, key="acc_period_type")
                 
+                # Preparar parâmetros
                 effort_types_acc = ",".join([et for et in effort_types if et == "acceleration"])
                 if not effort_types_acc:
                     effort_types_acc = "acceleration"
+                
+                acceleration_bands = acceleration_bands_input if acceleration_bands_input else None
                 
                 all_acceleration_data = {}
                 progress_bar = st.progress(0)
@@ -548,18 +587,26 @@ def main():
                     athlete_id_val = st.session_state.df_athletes[st.session_state.df_athletes['Atleta'] == athlete_name]['ID'].values[0]
                     
                     if period_type_acc == "Atividade Completa":
-                        efforts_data = st.session_state.api.get_activity_efforts(activity_id, athlete_id_val, effort_types=effort_types_acc)
+                        efforts_data = st.session_state.api.get_activity_efforts(
+                            activity_id, athlete_id_val,
+                            effort_types=effort_types_acc,
+                            acceleration_bands=acceleration_bands
+                        )
                     else:
                         if period_options:
                             selected_period = st.selectbox("Período:", list(period_options.keys()), key=f"acc_period_{athlete_name}")
                             if selected_period:
                                 period_id = period_options[selected_period]
-                                efforts_data = st.session_state.api.get_period_efforts(period_id, athlete_id_val, effort_types=effort_types_acc)
+                                efforts_data = st.session_state.api.get_period_efforts(
+                                    period_id, athlete_id_val,
+                                    effort_types=effort_types_acc,
+                                    acceleration_bands=acceleration_bands
+                                )
                         else:
                             efforts_data = None
                     
                     if efforts_data:
-                        df_efforts = process_efforts_data(efforts_data, "acceleration")
+                        df_efforts = process_efforts_data(efforts_data)
                         if not df_efforts.empty:
                             all_acceleration_data[athlete_name] = df_efforts
                     
@@ -573,16 +620,30 @@ def main():
                         st.dataframe(df_efforts, use_container_width=True)
                         
                         if not df_efforts.empty and 'Percentual (%)' in df_efforts.columns:
-                            # Ordenar bandas corretamente (-3 a 3)
-                            df_efforts['Banda_Num'] = pd.to_numeric(df_efforts['Banda'], errors='coerce')
-                            df_efforts = df_efforts.sort_values('Banda_Num')
+                            # Criar gráfico com cores baseadas no valor da banda
+                            colors = []
+                            for banda in df_efforts['Banda_Num']:
+                                if banda < 0:
+                                    colors.append('red')
+                                elif banda == 0:
+                                    colors.append('gray')
+                                else:
+                                    colors.append('green')
                             
-                            cores = ['red' if int(b) < 0 else 'gray' if int(b) == 0 else 'green' for b in df_efforts['Banda_Num']]
-                            
-                            fig = px.bar(df_efforts, x='Banda', y='Percentual (%)', 
-                                        title=f"Distribuição de Aceleração/Desaceleração - {athlete_name}",
-                                        color='Percentual (%)', color_continuous_scale='RdYlGn')
-                            fig.update_layout(xaxis_title="Banda de Aceleração", yaxis_title="Percentual do Tempo (%)")
+                            fig = go.Figure()
+                            fig.add_trace(go.Bar(
+                                x=df_efforts['Banda'],
+                                y=df_efforts['Percentual (%)'],
+                                marker_color=colors,
+                                text=df_efforts['Percentual (%)'].round(1),
+                                textposition='outside'
+                            ))
+                            fig.update_layout(
+                                title=f"Distribuição de Aceleração/Desaceleração - {athlete_name}",
+                                xaxis_title="Banda de Aceleração",
+                                yaxis_title="Percentual do Tempo (%)",
+                                height=400
+                            )
                             st.plotly_chart(fig, use_container_width=True)
                 else:
                     st.warning("Nenhum dado de esforço de aceleração encontrado")
@@ -601,14 +662,15 @@ def main():
         | 📅 Data | Selecione uma ou mais datas |
         | 📊 Atividade | Escolha a atividade/jogo |
         | 🏃 Atletas | Selecione **múltiplos atletas** para comparar |
+        | ⚡ Bandas | Configure bandas de velocidade (1-8) e aceleração (-3 a 3) |
         
         **Análises disponíveis:**
         
         | Aba | Dados |
         |-----|-------|
-        | 📈 Dados de Sensor | Velocidade, distância, frequência cardíaca |
-        | ⚡ Esforços (Velocidade) | Bandas de velocidade (1-8) |
-        | 🔄 Esforços (Aceleração) | Bandas de aceleração/desaceleração (-3 a 3) |
+        | 📈 Dados de Sensor | Velocidade (km/h), distância (m), frequência cardíaca (bpm) |
+        | ⚡ Esforços (Velocidade) | Bandas de velocidade 1-8 com percentual de tempo |
+        | 🔄 Esforços (Aceleração) | Bandas de aceleração/desaceleração -3 a 3 com percentual de tempo |
         """)
 
 if __name__ == "__main__":
