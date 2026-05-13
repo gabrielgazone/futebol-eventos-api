@@ -1,4 +1,4 @@
-# rugby-eventos.py - VERSÃO CORRIGIDA (km/h e filtro de data na sidebar)
+# rugby-eventos.py - VERSÃO COMPLETA COM ESFORÇOS (EFFORTS)
 import streamlit as st
 import requests
 import pandas as pd
@@ -53,8 +53,42 @@ class CatapultAPI:
     def get_activity_sensor(self, activity_id, athlete_id):
         return self._request(f"activities/{activity_id}/athletes/{athlete_id}/sensor")
     
+    def get_activity_periods(self, activity_id):
+        return self._request(f"activities/{activity_id}/periods")
+    
+    def get_period_sensor(self, period_id, athlete_id):
+        return self._request(f"periods/{period_id}/athletes/{athlete_id}/sensor")
+    
     def get_activity_athletes(self, activity_id):
         return self._request(f"activities/{activity_id}/athletes")
+    
+    # ==================== NOVO: ENDPOINT DE ESFORÇOS (EFFORTS) ====================
+    def get_activity_efforts(self, activity_id, athlete_id, effort_types="acceleration,velocity", velocity_bands=None, acceleration_bands=None):
+        """
+        GET /activities/{id}/athletes/{id}/efforts
+        Retorna dados de esforços (aceleração e velocidade) do atleta na atividade
+        - effort_types: 'acceleration', 'velocity' ou 'acceleration,velocity'
+        - velocity_bands: números 1 a 8 (ex: '1,2,3')
+        - acceleration_bands: números -3 a 3 (ex: '-3,-2,-1,0,1,2,3')
+        """
+        params = {"effort_types": effort_types}
+        if velocity_bands:
+            params["velocity_bands"] = velocity_bands
+        if acceleration_bands:
+            params["acceleration_bands"] = acceleration_bands
+        return self._request(f"activities/{activity_id}/athletes/{athlete_id}/efforts", params=params)
+    
+    def get_period_efforts(self, period_id, athlete_id, effort_types="acceleration,velocity", velocity_bands=None, acceleration_bands=None):
+        """
+        GET /periods/{period_id}/athletes/{athlete_id}/efforts
+        Retorna dados de esforços (aceleração e velocidade) do atleta no período
+        """
+        params = {"effort_types": effort_types}
+        if velocity_bands:
+            params["velocity_bands"] = velocity_bands
+        if acceleration_bands:
+            params["acceleration_bands"] = acceleration_bands
+        return self._request(f"periods/{period_id}/athletes/{athlete_id}/efforts", params=params)
 
 def decode_token(token):
     try:
@@ -63,6 +97,31 @@ def decode_token(token):
         return json.loads(base64.b64decode(payload))
     except:
         return {}
+
+def process_efforts_data(efforts_data, effort_type):
+    """Processa dados de esforços (aceleração/velocidade) para DataFrame"""
+    if not efforts_data:
+        return pd.DataFrame()
+    
+    if isinstance(efforts_data, dict):
+        if 'data' in efforts_data:
+            return process_efforts_data(efforts_data['data'], effort_type)
+        efforts_data = [efforts_data]
+    
+    if not isinstance(efforts_data, list):
+        return pd.DataFrame()
+    
+    records = []
+    for item in efforts_data:
+        record = {
+            'Banda': item.get('band', item.get('name', '')),
+            'Quantidade': item.get('count', item.get('value', 0)),
+            'Duração (s)': item.get('duration', item.get('time', 0)),
+            'Percentual (%)': item.get('percentage', 0)
+        }
+        records.append(record)
+    
+    return pd.DataFrame(records)
 
 def process_sensor_data(sensor_data):
     if not sensor_data:
@@ -85,19 +144,15 @@ def process_sensor_data(sensor_data):
         elif 'cs' in point:
             record['timestamp'] = float(point['cs']) / 100
         
-        # Velocidade - converter para km/h
         if 'v' in point:
             record['velocity_ms'] = float(point['v'])
-            record['velocity_kmh'] = float(point['v']) * 3.6  # CONVERSÃO PARA km/h
+            record['velocity_kmh'] = float(point['v']) * 3.6
         
         if 'a' in point:
             record['acceleration'] = float(point['a'])
         
         if 'hr' in point:
             record['heart_rate'] = float(point['hr'])
-        
-        if 'pl' in point:
-            record['player_load'] = float(point['pl'])
         
         records.append(record)
     
@@ -118,15 +173,10 @@ def process_sensor_data(sensor_data):
         duration = df['timestamp'].max() - df['timestamp'].min()
         metrics['Duração (s)'] = round(duration, 1)
         metrics['Duração (min)'] = round(duration / 60, 1)
-    else:
-        metrics['Duração (s)'] = len(df) * 0.1
-        metrics['Duração (min)'] = round(metrics['Duração (s)'] / 60, 1)
     
-    # Métricas de velocidade (já em km/h)
     if 'velocity_kmh' in df.columns:
         metrics['Velocidade Máx (km/h)'] = round(df['velocity_kmh'].max(), 2)
         metrics['Velocidade Média (km/h)'] = round(df['velocity_kmh'].mean(), 2)
-        # Distância em metros (usando velocidade em m/s)
         if 'velocity_ms' in df.columns:
             metrics['Distância Estimada (m)'] = round(df['velocity_ms'].sum() * 0.1, 0)
     
@@ -134,16 +184,13 @@ def process_sensor_data(sensor_data):
         metrics['FC Máx (bpm)'] = round(df['heart_rate'].max(), 0)
         metrics['FC Média (bpm)'] = round(df['heart_rate'].mean(), 0)
     
-    if 'player_load' in df.columns:
-        metrics['Player Load Total'] = round(df['player_load'].sum(), 2)
-    
     metrics['Total de Pontos'] = len(df)
     
     return df, metrics
 
 def main():
     st.title("🏉 Rugby Eventos - Catapult Sports")
-    st.markdown("### Análise de Performance - Dados Sensor 10Hz")
+    st.markdown("### Análise de Performance - Dados Sensor 10Hz e Esforços")
     
     # ==================== SIDEBAR ====================
     with st.sidebar:
@@ -183,7 +230,7 @@ def main():
                             team_athletes_map[team['Time']] = athletes_in_team
                     st.session_state.team_athletes_map = team_athletes_map
                 
-                # Processar atletas com velocidade em km/h
+                # Processar atletas
                 if athletes_raw:
                     athletes_data = []
                     for a in athletes_raw:
@@ -193,7 +240,6 @@ def main():
                         if not name:
                             name = a.get('name', 'Sem nome')
                         
-                        # Converter velocidade máxima de m/s para km/h
                         vel_max = a.get('velocity_max', '')
                         if vel_max and vel_max != '':
                             try:
@@ -215,7 +261,6 @@ def main():
                         })
                     st.session_state.df_athletes = pd.DataFrame(athletes_data)
                     
-                    # Mapear atleta para time
                     athlete_to_team = {}
                     for team_name, athletes_list in st.session_state.team_athletes_map.items():
                         for athlete in athletes_list:
@@ -241,22 +286,16 @@ def main():
                             try:
                                 start_dt = datetime.fromtimestamp(float(start))
                                 start_date = start_dt.strftime('%d/%m/%Y')
-                                activity_date = start_dt.date()
                             except:
                                 start_date = str(start)
-                                activity_date = None
-                        
-                        activity_name = act.get('name', 'Sem nome')
                         
                         activities_data.append({
                             'ID': act.get('id', ''),
-                            'Atividade': activity_name,
-                            'Data': start_date,
-                            'Data_Obj': activity_date
+                            'Atividade': act.get('name', 'Sem nome'),
+                            'Data': start_date
                         })
                     st.session_state.df_activities = pd.DataFrame(activities_data)
                     
-                    # Associar atividades a times pelo nome
                     st.session_state.df_activities['Time_Associado'] = 'Todos'
                     for team in st.session_state.df_teams['Time'].tolist():
                         mask = st.session_state.df_activities['Atividade'].str.contains(team, case=False, na=False)
@@ -266,37 +305,25 @@ def main():
         
         st.markdown("---")
         
-        # ==================== FILTROS EM CASCATA ====================
+        # ==================== FILTROS ====================
         if st.session_state.get('df_teams') is not None:
             st.header("🎯 Filtros")
             
-            # 1. FILTRO DE TIME
             st.subheader("🏢 Time")
             team_options = ['Todos'] + st.session_state.df_teams['Time'].tolist()
             selected_teams = st.multiselect("Selecione os times:", team_options, default=['Todos'])
             
-            # 2. FILTRO DE DATA (na sidebar como solicitado)
             st.subheader("📅 Data")
-            
-            # Obter todas as datas disponíveis das atividades
             available_dates = st.session_state.df_activities['Data'].dropna().unique()
             available_dates = sorted(available_dates)
             
             if len(available_dates) > 0:
                 date_options = ['Todas'] + available_dates
-                selected_dates = st.multiselect(
-                    "Selecione as datas:",
-                    options=date_options,
-                    default=['Todas']
-                )
+                selected_dates = st.multiselect("Selecione as datas:", date_options, default=['Todas'])
             else:
                 selected_dates = ['Todas']
-                st.info("Nenhuma data disponível")
             
-            # 3. FILTRO DE ATIVIDADE (baseado no time E na data)
             st.subheader("📊 Atividade")
-            
-            # Filtrar atividades pelo time selecionado
             if 'Todos' not in selected_teams:
                 filtered_by_team = st.session_state.df_activities[
                     st.session_state.df_activities['Time_Associado'].isin(selected_teams) | 
@@ -305,41 +332,40 @@ def main():
             else:
                 filtered_by_team = st.session_state.df_activities
             
-            # Filtrar atividades pela data selecionada
             if 'Todas' not in selected_dates:
                 filtered_activities = filtered_by_team[filtered_by_team['Data'].isin(selected_dates)]
             else:
                 filtered_activities = filtered_by_team
             
             activity_options = filtered_activities['Atividade'].tolist()
-            selected_activity = st.selectbox(
-                "Selecione uma atividade:",
-                options=activity_options if activity_options else ['']
-            ) if activity_options else None
+            selected_activity = st.selectbox("Selecione uma atividade:", activity_options if activity_options else [''])
             
-            # 4. FILTRO DE ATLETA (baseado no time selecionado)
             st.subheader("🏃 Atletas")
-            
             filtered_athletes = st.session_state.df_athletes.copy()
             if 'Todos' not in selected_teams:
                 filtered_athletes = filtered_athletes[filtered_athletes['Equipe'].isin(selected_teams)]
             
             athlete_options = filtered_athletes['Atleta'].tolist()
-            selected_athletes = st.multiselect(
-                "Selecione os atletas:",
-                options=athlete_options,
-                default=athlete_options[:1] if athlete_options else []
+            selected_athletes = st.multiselect("Selecione os atletas:", athlete_options, default=athlete_options[:1] if athlete_options else [])
+            
+            st.subheader("⚡ Configuração de Esforços")
+            effort_types = st.multiselect(
+                "Tipos de esforço:",
+                options=["acceleration", "velocity"],
+                default=["acceleration", "velocity"]
             )
+            
+            st.subheader("🏷️ Bandas")
+            show_velocity_bands = st.checkbox("Mostrar bandas de velocidade", value=True)
+            show_acceleration_bands = st.checkbox("Mostrar bandas de aceleração", value=True)
     
-    # ==================== TELA INICIAL - DADOS DOS ATLETAS ====================
+    # ==================== TELA INICIAL ====================
     if st.session_state.get('df_athletes') is not None:
         
-        # Filtrar atletas pelo time selecionado
         display_athletes = st.session_state.df_athletes.copy()
         if 'Todos' not in selected_teams:
             display_athletes = display_athletes[display_athletes['Equipe'].isin(selected_teams)]
         
-        # Métricas principais
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("🏃 Total de Atletas", len(display_athletes))
@@ -348,7 +374,6 @@ def main():
         with col3:
             st.metric("📊 Atividades", len(filtered_activities) if 'filtered_activities' in locals() else len(st.session_state.df_activities))
         with col4:
-            # Calcular média de velocidade (convertendo para numérico)
             vel_values = pd.to_numeric(display_athletes['Velocidade Máx (km/h)'], errors='coerce')
             st.metric("⚡ Vel. Média", f"{vel_values.mean():.1f} km/h" if not vel_values.isna().all() else "N/A")
         
@@ -356,25 +381,16 @@ def main():
         
         # ==================== TABELA DE ATLETAS ====================
         st.subheader(f"📋 Informações dos Atletas ({len(display_athletes)})")
-        
-        # Colunas para exibir
         athlete_cols = ['Atleta', 'Equipe', 'Camisa', 'Altura (cm)', 'Peso (kg)', 'Velocidade Máx (km/h)', 'FC Máx']
         existing_cols = [col for col in athlete_cols if col in display_athletes.columns]
-        
         st.dataframe(display_athletes[existing_cols], use_container_width=True)
         
-        # Download
         csv_athletes = display_athletes[existing_cols].to_csv(index=False)
-        st.download_button(
-            label="📥 Download Dados dos Atletas (CSV)",
-            data=csv_athletes,
-            file_name=f"atletas_{datetime.now().strftime('%Y%m%d')}.csv"
-        )
+        st.download_button("📥 Download Dados dos Atletas (CSV)", csv_athletes, f"atletas_{datetime.now().strftime('%Y%m%d')}.csv")
         
         # ==================== GRÁFICOS DOS ATLETAS ====================
         with st.expander("📊 Estatísticas dos Atletas"):
             col1, col2 = st.columns(2)
-            
             with col1:
                 if 'Velocidade Máx (km/h)' in display_athletes.columns:
                     vel_data = display_athletes[pd.to_numeric(display_athletes['Velocidade Máx (km/h)'], errors='coerce').notna()]
@@ -385,149 +401,214 @@ def main():
                             x='Atleta', y='Velocidade Máx (km/h)',
                             title="Top 15 - Velocidade Máxima (km/h)",
                             color='Velocidade Máx (km/h)',
-                            color_continuous_scale='RdYlGn',
-                            text='Velocidade Máx (km/h)'
+                            color_continuous_scale='RdYlGn'
                         )
-                        fig_vel.update_traces(textposition='outside')
                         st.plotly_chart(fig_vel, use_container_width=True)
-            
             with col2:
                 team_counts = display_athletes['Equipe'].value_counts().reset_index()
                 team_counts.columns = ['Equipe', 'Quantidade']
-                fig_team = px.pie(
-                    team_counts, values='Quantidade', names='Equipe',
-                    title="Distribuição de Atletas por Equipe"
-                )
+                fig_team = px.pie(team_counts, values='Quantidade', names='Equipe', title="Distribuição por Equipe")
                 st.plotly_chart(fig_team, use_container_width=True)
         
         st.markdown("---")
         
-        # ==================== ANÁLISE DE SENSOR ====================
+        # ==================== ANÁLISE DE SENSOR E ESFORÇOS ====================
         if selected_activity and selected_athletes:
-            
             activity_id = st.session_state.df_activities[st.session_state.df_activities['Atividade'] == selected_activity]['ID'].values[0]
             
-            # Buscar dados para cada atleta selecionado
-            all_athletes_data = []
+            # Buscar períodos da atividade
+            periods = st.session_state.api.get_activity_periods(activity_id)
+            period_options = {}
+            if periods:
+                for p in periods:
+                    period_options[p.get('name', f'Período')] = p.get('id')
             
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+            # Abas para diferentes análises
+            tab1, tab2, tab3 = st.tabs(["📈 Dados de Sensor", "⚡ Esforços (Velocidade)", "🔄 Esforços (Aceleração)"])
             
-            for idx, athlete_name in enumerate(selected_athletes):
-                status_text.text(f"Carregando dados de {athlete_name}...")
+            # ==================== TAB 1: DADOS DE SENSOR ====================
+            with tab1:
+                st.subheader("📈 Dados de Sensor 10Hz")
                 
-                athlete_id = st.session_state.df_athletes[st.session_state.df_athletes['Atleta'] == athlete_name]['ID'].values[0]
+                period_type = st.radio("Período:", ["Atividade Completa", "Período Específico"], horizontal=True, key="sensor_period_type")
                 
-                sensor_data = st.session_state.api.get_activity_sensor(activity_id, athlete_id)
+                all_sensor_data = []
+                progress_bar = st.progress(0)
                 
-                if sensor_data:
-                    df, metrics = process_sensor_data(sensor_data)
-                    if metrics:
-                        metrics['Atleta'] = athlete_name
-                        metrics['Equipe'] = st.session_state.df_athletes[st.session_state.df_athletes['Atleta'] == athlete_name]['Equipe'].values[0]
-                        all_athletes_data.append(metrics)
-                
-                progress_bar.progress((idx + 1) / len(selected_athletes))
-            
-            status_text.text("✅ Carregamento concluído!")
-            progress_bar.empty()
-            
-            if all_athletes_data:
-                st.session_state.comparison_df = pd.DataFrame(all_athletes_data)
-                st.success(f"✅ Dados de sensor carregados para {len(all_athletes_data)} atletas!")
-                
-                # ==================== TABELA COMPARATIVA ====================
-                st.subheader("📊 Dados de Sensor por Atleta")
-                
-                df_compare = st.session_state.comparison_df
-                
-                exclude_cols = ['Atleta', 'Equipe']
-                available_params = [col for col in df_compare.columns if col not in exclude_cols]
-                
-                st.markdown("**Selecione os parâmetros para exibir:**")
-                param_cols = st.columns(4)
-                selected_params = ['Atleta', 'Equipe']
-                
-                for i, param in enumerate(available_params):
-                    with param_cols[i % 4]:
-                        if st.checkbox(param, value=True, key=f"sensor_{param}"):
-                            selected_params.append(param)
-                
-                display_df = df_compare[selected_params].copy()
-                for col in display_df.columns:
-                    if col not in ['Atleta', 'Equipe']:
-                        display_df[col] = display_df[col].apply(
-                            lambda x: f"{x:.1f}" if isinstance(x, (int, float)) else x
-                        )
-                
-                st.dataframe(display_df, use_container_width=True)
-                
-                csv = display_df.to_csv(index=False)
-                st.download_button(
-                    label="📥 Download Dados de Sensor (CSV)",
-                    data=csv,
-                    file_name=f"sensor_{selected_activity}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
-                )
-                
-                # ==================== GRÁFICOS ====================
-                with st.expander("📈 Gráficos dos Dados de Sensor"):
+                for idx, athlete_name in enumerate(selected_athletes):
+                    athlete_id_val = st.session_state.df_athletes[st.session_state.df_athletes['Atleta'] == athlete_name]['ID'].values[0]
                     
-                    if 'Velocidade Máx (km/h)' in df_compare.columns:
-                        fig_vel = px.bar(
-                            df_compare, x='Atleta', y='Velocidade Máx (km/h)',
-                            title="Velocidade Máxima por Atleta (km/h)",
-                            color='Velocidade Máx (km/h)',
-                            color_continuous_scale='RdYlGn',
-                            text='Velocidade Máx (km/h)'
-                        )
-                        fig_vel.update_traces(textposition='outside')
-                        st.plotly_chart(fig_vel, use_container_width=True)
+                    if period_type == "Atividade Completa":
+                        sensor_data = st.session_state.api.get_activity_sensor(activity_id, athlete_id_val)
+                    else:
+                        if period_options:
+                            selected_period = st.selectbox("Período:", list(period_options.keys()), key=f"period_{athlete_name}")
+                            if selected_period:
+                                period_id = period_options[selected_period]
+                                sensor_data = st.session_state.api.get_period_sensor(period_id, athlete_id_val)
+                        else:
+                            sensor_data = None
                     
-                    if 'Distância Estimada (m)' in df_compare.columns:
-                        fig_dist = px.bar(
-                            df_compare, x='Atleta', y='Distância Estimada (m)',
-                            title="Distância Percorrida por Atleta (metros)",
-                            color='Distância Estimada (m)',
-                            color_continuous_scale='Blues',
-                            text='Distância Estimada (m)'
-                        )
-                        fig_dist.update_traces(textposition='outside')
-                        st.plotly_chart(fig_dist, use_container_width=True)
+                    if sensor_data:
+                        df, metrics = process_sensor_data(sensor_data)
+                        if metrics:
+                            metrics['Atleta'] = athlete_name
+                            all_sensor_data.append(metrics)
                     
-                    if 'FC Máx (bpm)' in df_compare.columns:
-                        fig_fc = px.bar(
-                            df_compare, x='Atleta', y='FC Máx (bpm)',
-                            title="Frequência Cardíaca Máxima por Atleta (bpm)",
-                            color='FC Máx (bpm)',
-                            color_continuous_scale='Reds',
-                            text='FC Máx (bpm)'
-                        )
-                        fig_fc.update_traces(textposition='outside')
-                        st.plotly_chart(fig_fc, use_container_width=True)
+                    progress_bar.progress((idx + 1) / len(selected_athletes))
+                
+                progress_bar.empty()
+                
+                if all_sensor_data:
+                    df_sensor = pd.DataFrame(all_sensor_data)
+                    st.subheader("📊 Comparativo de Dados de Sensor")
+                    
+                    sensor_params = ['Atleta', 'Duração (min)', 'Velocidade Máx (km/h)', 'Velocidade Média (km/h)', 'Distância Estimada (m)', 'FC Máx (bpm)', 'Total de Pontos']
+                    available_params = [p for p in sensor_params if p in df_sensor.columns]
+                    st.dataframe(df_sensor[available_params], use_container_width=True)
+                    
+                    csv_sensor = df_sensor[available_params].to_csv(index=False)
+                    st.download_button("📥 Download Dados de Sensor (CSV)", csv_sensor, f"sensor_{selected_activity}.csv")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if 'Velocidade Máx (km/h)' in df_sensor.columns:
+                            fig = px.bar(df_sensor, x='Atleta', y='Velocidade Máx (km/h)', title="Velocidade Máxima por Atleta")
+                            st.plotly_chart(fig, use_container_width=True)
+                    with col2:
+                        if 'Distância Estimada (m)' in df_sensor.columns:
+                            fig = px.bar(df_sensor, x='Atleta', y='Distância Estimada (m)', title="Distância por Atleta")
+                            st.plotly_chart(fig, use_container_width=True)
+            
+            # ==================== TAB 2: ESFORÇOS DE VELOCIDADE ====================
+            with tab2:
+                st.subheader("⚡ Esforços - Bandas de Velocidade")
+                st.caption("Distribuição do tempo em diferentes faixas de velocidade (Bandas 1-8)")
+                
+                period_type_vel = st.radio("Período:", ["Atividade Completa", "Período Específico"], horizontal=True, key="vel_period_type")
+                
+                effort_types_str = ",".join([et for et in effort_types if et == "velocity"])
+                if not effort_types_str:
+                    effort_types_str = "velocity"
+                
+                all_velocity_data = {}
+                progress_bar = st.progress(0)
+                
+                for idx, athlete_name in enumerate(selected_athletes):
+                    athlete_id_val = st.session_state.df_athletes[st.session_state.df_athletes['Atleta'] == athlete_name]['ID'].values[0]
+                    
+                    if period_type_vel == "Atividade Completa":
+                        efforts_data = st.session_state.api.get_activity_efforts(activity_id, athlete_id_val, effort_types=effort_types_str)
+                    else:
+                        if period_options:
+                            selected_period = st.selectbox("Período:", list(period_options.keys()), key=f"vel_period_{athlete_name}")
+                            if selected_period:
+                                period_id = period_options[selected_period]
+                                efforts_data = st.session_state.api.get_period_efforts(period_id, athlete_id_val, effort_types=effort_types_str)
+                        else:
+                            efforts_data = None
+                    
+                    if efforts_data:
+                        df_efforts = process_efforts_data(efforts_data, "velocity")
+                        if not df_efforts.empty:
+                            all_velocity_data[athlete_name] = df_efforts
+                    
+                    progress_bar.progress((idx + 1) / len(selected_athletes))
+                
+                progress_bar.empty()
+                
+                if all_velocity_data:
+                    for athlete_name, df_efforts in all_velocity_data.items():
+                        st.subheader(f"🏃 {athlete_name}")
+                        st.dataframe(df_efforts, use_container_width=True)
+                        
+                        if not df_efforts.empty and 'Percentual (%)' in df_efforts.columns:
+                            fig = px.bar(df_efforts, x='Banda', y='Percentual (%)', 
+                                        title=f"Distribuição de Velocidade - {athlete_name}",
+                                        color='Percentual (%)', color_continuous_scale='Viridis')
+                            st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("Nenhum dado de esforço de velocidade encontrado")
+            
+            # ==================== TAB 3: ESFORÇOS DE ACELERAÇÃO ====================
+            with tab3:
+                st.subheader("🔄 Esforços - Bandas de Aceleração/Desaceleração")
+                st.caption("Bandas negativas = desaceleração | Banda 0 = velocidade constante | Bandas positivas = aceleração")
+                
+                period_type_acc = st.radio("Período:", ["Atividade Completa", "Período Específico"], horizontal=True, key="acc_period_type")
+                
+                effort_types_acc = ",".join([et for et in effort_types if et == "acceleration"])
+                if not effort_types_acc:
+                    effort_types_acc = "acceleration"
+                
+                all_acceleration_data = {}
+                progress_bar = st.progress(0)
+                
+                for idx, athlete_name in enumerate(selected_athletes):
+                    athlete_id_val = st.session_state.df_athletes[st.session_state.df_athletes['Atleta'] == athlete_name]['ID'].values[0]
+                    
+                    if period_type_acc == "Atividade Completa":
+                        efforts_data = st.session_state.api.get_activity_efforts(activity_id, athlete_id_val, effort_types=effort_types_acc)
+                    else:
+                        if period_options:
+                            selected_period = st.selectbox("Período:", list(period_options.keys()), key=f"acc_period_{athlete_name}")
+                            if selected_period:
+                                period_id = period_options[selected_period]
+                                efforts_data = st.session_state.api.get_period_efforts(period_id, athlete_id_val, effort_types=effort_types_acc)
+                        else:
+                            efforts_data = None
+                    
+                    if efforts_data:
+                        df_efforts = process_efforts_data(efforts_data, "acceleration")
+                        if not df_efforts.empty:
+                            all_acceleration_data[athlete_name] = df_efforts
+                    
+                    progress_bar.progress((idx + 1) / len(selected_athletes))
+                
+                progress_bar.empty()
+                
+                if all_acceleration_data:
+                    for athlete_name, df_efforts in all_acceleration_data.items():
+                        st.subheader(f"🏃 {athlete_name}")
+                        st.dataframe(df_efforts, use_container_width=True)
+                        
+                        if not df_efforts.empty and 'Percentual (%)' in df_efforts.columns:
+                            # Ordenar bandas corretamente (-3 a 3)
+                            df_efforts['Banda_Num'] = pd.to_numeric(df_efforts['Banda'], errors='coerce')
+                            df_efforts = df_efforts.sort_values('Banda_Num')
+                            
+                            cores = ['red' if int(b) < 0 else 'gray' if int(b) == 0 else 'green' for b in df_efforts['Banda_Num']]
+                            
+                            fig = px.bar(df_efforts, x='Banda', y='Percentual (%)', 
+                                        title=f"Distribuição de Aceleração/Desaceleração - {athlete_name}",
+                                        color='Percentual (%)', color_continuous_scale='RdYlGn')
+                            fig.update_layout(xaxis_title="Banda de Aceleração", yaxis_title="Percentual do Tempo (%)")
+                            st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("Nenhum dado de esforço de aceleração encontrado")
     
     else:
         st.info("👈 **Selecione o servidor, cole seu token e aguarde o carregamento dos dados**")
         
         st.markdown("""
-        ### 🏉 Catapult Sports - Análise de Sensor 10Hz
+        ### 🏉 Catapult Sports - Análise de Sensor 10Hz e Esforços
         
         **Funcionalidades:**
         
         | Filtro | Descrição |
         |--------|-----------|
         | 🏢 Time | Selecione um ou mais times |
-        | 📅 Data | Selecione uma ou mais datas (na sidebar) |
-        | 📊 Atividade | Atualiza automaticamente baseado no time E na data |
+        | 📅 Data | Selecione uma ou mais datas |
+        | 📊 Atividade | Escolha a atividade/jogo |
         | 🏃 Atletas | Selecione **múltiplos atletas** para comparar |
         
-        **Tela Inicial:**
-        - Informações básicas dos atletas (nome, equipe, camisa, peso, altura, **velocidade máxima em km/h**)
-        - Gráficos de distribuição por equipe e top velocidade
+        **Análises disponíveis:**
         
-        **Análise de Sensor:**
-        - Tabela comparativa entre atletas selecionados
-        - Gráficos de velocidade (km/h), distância (m) e FC (bpm)
-        - Download dos dados em CSV
+        | Aba | Dados |
+        |-----|-------|
+        | 📈 Dados de Sensor | Velocidade, distância, frequência cardíaca |
+        | ⚡ Esforços (Velocidade) | Bandas de velocidade (1-8) |
+        | 🔄 Esforços (Aceleração) | Bandas de aceleração/desaceleração (-3 a 3) |
         """)
 
 if __name__ == "__main__":
