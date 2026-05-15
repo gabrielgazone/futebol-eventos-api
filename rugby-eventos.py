@@ -1,4 +1,4 @@
-# rugby-eventos.py - VERSÃO FINAL CORRIGIDA
+# rugby-eventos.py - VERSÃO COM PARAMETERS INTEGRADOS
 import streamlit as st
 import requests
 import pandas as pd
@@ -63,15 +63,17 @@ class CatapultAPI:
     def get_activity_athletes(self, activity_id):
         return self._request(f"activities/{activity_id}/athletes")
     
+    # ==================== NOVO: ENDPOINT DE PARAMETERS ====================
+    def get_parameters(self):
+        """
+        GET /parameters
+        Retorna todos os parâmetros disponíveis (PlayerLoad, heart rate, etc.)
+        """
+        return self._request("parameters")
+    
     # ==================== ENDPOINTS DE ESFORÇOS (EFFORTS) ====================
     def get_activity_efforts(self, activity_id, athlete_id, effort_types="acceleration,velocity", 
                               velocity_bands=None, acceleration_bands=None):
-        """
-        GET /activities/{id}/athletes/{id}/efforts
-        - effort_types: 'acceleration', 'velocity' ou 'acceleration,velocity'
-        - velocity_bands: string com números 1 a 8 separados por vírgula (ex: '1,2,3')
-        - acceleration_bands: string com números -3 a 3 separados por vírgula (ex: '-3,-2,-1,0,1,2,3')
-        """
         params = {"effort_types": effort_types}
         if velocity_bands:
             params["velocity_bands"] = velocity_bands
@@ -81,9 +83,6 @@ class CatapultAPI:
     
     def get_period_efforts(self, period_id, athlete_id, effort_types="acceleration,velocity",
                            velocity_bands=None, acceleration_bands=None):
-        """
-        GET /periods/{period_id}/athletes/{athlete_id}/efforts
-        """
         params = {"effort_types": effort_types}
         if velocity_bands:
             params["velocity_bands"] = velocity_bands
@@ -114,7 +113,6 @@ def process_efforts_data(efforts_data):
     
     records = []
     for item in efforts_data:
-        # Extrair banda (pode ser número, string ou objeto)
         band = item.get('band', item.get('name', ''))
         if isinstance(band, dict):
             band = band.get('name', band.get('id', str(band)))
@@ -128,7 +126,6 @@ def process_efforts_data(efforts_data):
     
     df = pd.DataFrame(records)
     
-    # Extrair número da banda para ordenação
     def extract_band_number(banda):
         nums = re.findall(r'-?\d+', str(banda))
         return int(nums[0]) if nums else 0
@@ -233,6 +230,7 @@ def main():
                 athletes_raw = api.get_athletes()
                 teams_raw = api.get_teams()
                 activities_raw = api.get_activities()
+                parameters_raw = api.get_parameters()  # NOVO: Carregar parâmetros
                 
                 # Processar times
                 if teams_raw:
@@ -317,11 +315,89 @@ def main():
                         mask = st.session_state.df_activities['Atividade'].str.contains(team, case=False, na=False)
                         st.session_state.df_activities.loc[mask, 'Time_Associado'] = team
                 
+                # ==================== NOVO: Processar Parameters ====================
+                if parameters_raw:
+                    if isinstance(parameters_raw, dict):
+                        params_list = parameters_raw.get('data', parameters_raw.get('items', []))
+                    else:
+                        params_list = parameters_raw
+                    
+                    parameters_data = []
+                    for param in params_list:
+                        parameters_data.append({
+                            'ID': param.get('id', ''),
+                            'Nome': param.get('name', 'Sem nome'),
+                            'Nome Original': param.get('original_name', ''),
+                            'Slug': param.get('slug', ''),
+                            'Unidade': param.get('unit', ''),
+                            'Descrição': param.get('description', '')
+                        })
+                    st.session_state.df_parameters = pd.DataFrame(parameters_data)
+                else:
+                    st.session_state.df_parameters = pd.DataFrame()
+                
                 st.success("✅ Dados carregados!")
         
         st.markdown("---")
         
-        # ==================== FILTROS ====================
+        # ==================== NOVO: SEÇÃO DE PARAMETERS NA SIDEBAR ====================
+        if st.session_state.get('df_parameters') is not None and not st.session_state.df_parameters.empty:
+            st.header("📊 Métricas (Parameters)")
+            
+            with st.expander("🔍 Filtrar Métricas", expanded=True):
+                # Filtro por nome ou slug
+                param_search = st.text_input("Buscar métrica:", placeholder="Digite parte do nome...")
+                
+                # Filtro por tipo/unidade
+                units = ['Todas'] + sorted(st.session_state.df_parameters['Unidade'].dropna().unique().tolist())
+                selected_unit = st.selectbox("Filtrar por unidade:", units)
+                
+                # Aplicar filtros
+                filtered_params = st.session_state.df_parameters.copy()
+                if param_search:
+                    filtered_params = filtered_params[
+                        filtered_params['Nome'].str.contains(param_search, case=False, na=False) |
+                        filtered_params['Nome Original'].str.contains(param_search, case=False, na=False) |
+                        filtered_params['Slug'].str.contains(param_search, case=False, na=False)
+                    ]
+                if selected_unit != 'Todas':
+                    filtered_params = filtered_params[filtered_params['Unidade'] == selected_unit]
+                
+                # Seleção múltipla de métricas
+                param_options = filtered_params.apply(
+                    lambda x: f"{x['Nome']} ({x['Unidade']})" if x['Unidade'] else x['Nome'], 
+                    axis=1
+                ).tolist()
+                
+                selected_params = st.multiselect(
+                    "Selecione as métricas para análise:",
+                    options=param_options,
+                    default=param_options[:3] if len(param_options) >= 3 else param_options,
+                    help="Selecione quais métricas serão exibidas nos gráficos comparativos"
+                )
+                
+                # Armazenar seleção na session state
+                st.session_state.selected_parameters = selected_params
+                
+                # Mostrar tabela de parâmetros
+                if st.checkbox("Mostrar todos os parâmetros disponíveis"):
+                    st.dataframe(
+                        filtered_params[['Nome', 'Nome Original', 'Slug', 'Unidade']], 
+                        use_container_width=True,
+                        height=300
+                    )
+                    
+                    # Download dos parâmetros
+                    csv_params = filtered_params[['Nome', 'Nome Original', 'Slug', 'Unidade', 'Descrição']].to_csv(index=False)
+                    st.download_button(
+                        "📥 Download Parâmetros (CSV)", 
+                        csv_params, 
+                        f"parametros_{datetime.now().strftime('%Y%m%d')}.csv"
+                    )
+        
+        st.markdown("---")
+        
+        # ==================== FILTROS EXISTENTES ====================
         if st.session_state.get('df_teams') is not None:
             st.header("🎯 Filtros")
             
@@ -398,8 +474,19 @@ def main():
         with col3:
             st.metric("📊 Atividades", len(filtered_activities) if 'filtered_activities' in locals() else len(st.session_state.df_activities))
         with col4:
-            vel_values = pd.to_numeric(display_athletes['Velocidade Máx (km/h)'], errors='coerce')
-            st.metric("⚡ Vel. Média", f"{vel_values.mean():.1f} km/h" if not vel_values.isna().all() else "N/A")
+            # NOVO: Mostrar total de parâmetros disponíveis
+            total_params = len(st.session_state.get('df_parameters', pd.DataFrame()))
+            st.metric("📊 Parâmetros", total_params if total_params > 0 else "N/A")
+        
+        st.markdown("---")
+        
+        # ==================== NOVO: SEÇÃO DE PARÂMETROS SELECIONADOS ====================
+        if st.session_state.get('selected_parameters') and len(st.session_state.selected_parameters) > 0:
+            with st.expander("📊 Métricas Selecionadas", expanded=True):
+                st.markdown(f"**{len(st.session_state.selected_parameters)} métricas selecionadas:**")
+                cols = st.columns(min(4, len(st.session_state.selected_parameters)))
+                for idx, param in enumerate(st.session_state.selected_parameters):
+                    cols[idx % 4].markdown(f"- {param}")
         
         st.markdown("---")
         
@@ -503,6 +590,8 @@ def main():
                         if 'Distância Estimada (m)' in df_sensor.columns:
                             fig = px.bar(df_sensor, x='Atleta', y='Distância Estimada (m)', title="Distância por Atleta")
                             st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("Nenhum dado de sensor encontrado para os atletas selecionados")
             
             # ==================== TAB 2: ESFORÇOS DE VELOCIDADE ====================
             with tab2:
@@ -511,7 +600,6 @@ def main():
                 
                 period_type_vel = st.radio("Período:", ["Atividade Completa", "Período Específico"], horizontal=True, key="vel_period_type")
                 
-                # Preparar parâmetros
                 effort_types_str = ",".join([et for et in effort_types if et == "velocity"])
                 if not effort_types_str:
                     effort_types_str = "velocity"
@@ -573,7 +661,6 @@ def main():
                 
                 period_type_acc = st.radio("Período:", ["Atividade Completa", "Período Específico"], horizontal=True, key="acc_period_type")
                 
-                # Preparar parâmetros
                 effort_types_acc = ",".join([et for et in effort_types if et == "acceleration"])
                 if not effort_types_acc:
                     effort_types_acc = "acceleration"
@@ -620,7 +707,6 @@ def main():
                         st.dataframe(df_efforts, use_container_width=True)
                         
                         if not df_efforts.empty and 'Percentual (%)' in df_efforts.columns:
-                            # Criar gráfico com cores baseadas no valor da banda
                             colors = []
                             for banda in df_efforts['Banda_Num']:
                                 if banda < 0:
@@ -658,6 +744,7 @@ def main():
         
         | Filtro | Descrição |
         |--------|-----------|
+        | 📊 Métricas (Parameters) | Selecione e filtre métricas disponíveis (PlayerLoad, heart rate, etc.) |
         | 🏢 Time | Selecione um ou mais times |
         | 📅 Data | Selecione uma ou mais datas |
         | 📊 Atividade | Escolha a atividade/jogo |
@@ -671,6 +758,12 @@ def main():
         | 📈 Dados de Sensor | Velocidade (km/h), distância (m), frequência cardíaca (bpm) |
         | ⚡ Esforços (Velocidade) | Bandas de velocidade 1-8 com percentual de tempo |
         | 🔄 Esforços (Aceleração) | Bandas de aceleração/desaceleração -3 a 3 com percentual de tempo |
+        
+        **Sobre os Parameters:**
+        - Os parâmetros são carregados automaticamente ao conectar
+        - Você pode filtrar por nome ou unidade
+        - Selecione as métricas que deseja visualizar
+        - Faça download da lista completa de parâmetros em CSV
         """)
 
 if __name__ == "__main__":
