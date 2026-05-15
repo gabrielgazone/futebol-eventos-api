@@ -1,4 +1,4 @@
-# rugby-eventos.py - VERSÃO COM PARAMETERS INTEGRADOS
+# rugby-eventos.py - VERSÃO COM PARAMETERS E POSITIONS INTEGRADOS
 import streamlit as st
 import requests
 import pandas as pd
@@ -63,13 +63,20 @@ class CatapultAPI:
     def get_activity_athletes(self, activity_id):
         return self._request(f"activities/{activity_id}/athletes")
     
-    # ==================== NOVO: ENDPOINT DE PARAMETERS ====================
     def get_parameters(self):
         """
         GET /parameters
         Retorna todos os parâmetros disponíveis (PlayerLoad, heart rate, etc.)
         """
         return self._request("parameters")
+    
+    # ==================== NOVO: ENDPOINT DE POSITIONS ====================
+    def get_positions(self):
+        """
+        GET /positions
+        Retorna todas as posições disponíveis na conta
+        """
+        return self._request("positions")
     
     # ==================== ENDPOINTS DE ESFORÇOS (EFFORTS) ====================
     def get_activity_efforts(self, activity_id, athlete_id, effort_types="acceleration,velocity", 
@@ -230,7 +237,8 @@ def main():
                 athletes_raw = api.get_athletes()
                 teams_raw = api.get_teams()
                 activities_raw = api.get_activities()
-                parameters_raw = api.get_parameters()  # NOVO: Carregar parâmetros
+                parameters_raw = api.get_parameters()
+                positions_raw = api.get_positions()  # NOVO: Carregar posições
                 
                 # Processar times
                 if teams_raw:
@@ -243,6 +251,36 @@ def main():
                         if athletes_in_team:
                             team_athletes_map[team['Time']] = athletes_in_team
                     st.session_state.team_athletes_map = team_athletes_map
+                
+                # ==================== NOVO: Processar Positions ====================
+                positions_map = {}  # Mapeia ID da posição para nome e slug
+                if positions_raw:
+                    if isinstance(positions_raw, dict):
+                        positions_list = positions_raw.get('data', positions_raw.get('items', []))
+                    else:
+                        positions_list = positions_raw
+                    
+                    positions_data = []
+                    for pos in positions_list:
+                        pos_id = pos.get('id', '')
+                        pos_name = pos.get('name', '')
+                        pos_slug = pos.get('slug', '')
+                        pos_sport = pos.get('sport_name', '')
+                        
+                        positions_data.append({
+                            'ID': pos_id,
+                            'Posição': pos_name,
+                            'Slug': pos_slug,
+                            'Esporte': pos_sport
+                        })
+                        positions_map[pos_id] = {'name': pos_name, 'slug': pos_slug}
+                    
+                    st.session_state.df_positions = pd.DataFrame(positions_data)
+                    st.session_state.positions_map = positions_map
+                    st.success(f"✅ {len(positions_data)} posições carregadas!")
+                else:
+                    st.session_state.df_positions = pd.DataFrame()
+                    st.session_state.positions_map = {}
                 
                 # Processar atletas
                 if athletes_raw:
@@ -264,10 +302,22 @@ def main():
                         else:
                             vel_max_display = ''
                         
+                        # ==================== NOVO: Capturar posição do atleta ====================
+                        position_id = a.get('position_id', '')
+                        position_name = ''
+                        if position_id and position_id in positions_map:
+                            position_name = positions_map[position_id]['name']
+                        elif position_id:
+                            # Tenta buscar do objeto raw se tiver position
+                            position_data = a.get('position', {})
+                            if isinstance(position_data, dict):
+                                position_name = position_data.get('name', '')
+                        
                         athletes_data.append({
                             'ID': a.get('id', ''),
                             'Atleta': name,
                             'Camisa': a.get('jersey', ''),
+                            'Posição': position_name,  # NOVO: Campo de posição
                             'Peso (kg)': a.get('weight', ''),
                             'Altura (cm)': a.get('height', ''),
                             'Velocidade Máx (km/h)': vel_max_display,
@@ -315,7 +365,7 @@ def main():
                         mask = st.session_state.df_activities['Atividade'].str.contains(team, case=False, na=False)
                         st.session_state.df_activities.loc[mask, 'Time_Associado'] = team
                 
-                # ==================== NOVO: Processar Parameters ====================
+                # Processar Parameters
                 if parameters_raw:
                     if isinstance(parameters_raw, dict):
                         params_list = parameters_raw.get('data', parameters_raw.get('items', []))
@@ -340,7 +390,41 @@ def main():
         
         st.markdown("---")
         
-        # ==================== NOVO: SEÇÃO DE PARAMETERS NA SIDEBAR ====================
+        # ==================== NOVO: SEÇÃO DE POSITIONS NA SIDEBAR ====================
+        if st.session_state.get('df_positions') is not None and not st.session_state.df_positions.empty:
+            st.header("🎯 Posições")
+            
+            with st.expander("🔍 Filtrar por Posição", expanded=True):
+                # Lista de posições únicas
+                all_positions = ['Todas'] + sorted(st.session_state.df_positions['Posição'].unique().tolist())
+                selected_positions = st.multiselect(
+                    "Selecione as posições:",
+                    options=all_positions,
+                    default=['Todas'],
+                    help="Filtre atletas por posição (ex: Back, Forward, Hooker, etc.)"
+                )
+                st.session_state.selected_positions = selected_positions
+                
+                # Mostrar estatísticas de posições
+                pos_counts = st.session_state.df_athletes['Posição'].value_counts().reset_index()
+                pos_counts.columns = ['Posição', 'Quantidade']
+                if not pos_counts.empty:
+                    st.markdown("**📊 Distribuição por Posição:**")
+                    for _, row in pos_counts.iterrows():
+                        st.markdown(f"- {row['Posição']}: {row['Quantidade']} atletas")
+                
+                # Download das posições
+                if st.button("📥 Download Lista de Posições"):
+                    csv_positions = st.session_state.df_positions.to_csv(index=False)
+                    st.download_button(
+                        "✅ Confirmar Download",
+                        csv_positions,
+                        f"posicoes_{datetime.now().strftime('%Y%m%d')}.csv"
+                    )
+        
+        st.markdown("---")
+        
+        # ==================== SEÇÃO DE PARAMETERS NA SIDEBAR ====================
         if st.session_state.get('df_parameters') is not None and not st.session_state.df_parameters.empty:
             st.header("📊 Métricas (Parameters)")
             
@@ -437,6 +521,10 @@ def main():
             if 'Todos' not in selected_teams:
                 filtered_athletes = filtered_athletes[filtered_athletes['Equipe'].isin(selected_teams)]
             
+            # ==================== NOVO: Filtrar atletas por posição ====================
+            if st.session_state.get('selected_positions') and 'Todas' not in st.session_state.selected_positions:
+                filtered_athletes = filtered_athletes[filtered_athletes['Posição'].isin(st.session_state.selected_positions)]
+            
             athlete_options = filtered_athletes['Atleta'].tolist()
             selected_athletes = st.multiselect("Selecione os atletas:", athlete_options, default=athlete_options[:1] if athlete_options else [])
             
@@ -466,7 +554,11 @@ def main():
         if 'Todos' not in selected_teams:
             display_athletes = display_athletes[display_athletes['Equipe'].isin(selected_teams)]
         
-        col1, col2, col3, col4 = st.columns(4)
+        # NOVO: Filtrar por posição também nos cards
+        if st.session_state.get('selected_positions') and 'Todas' not in st.session_state.selected_positions:
+            display_athletes = display_athletes[display_athletes['Posição'].isin(st.session_state.selected_positions)]
+        
+        col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
             st.metric("🏃 Total de Atletas", len(display_athletes))
         with col2:
@@ -474,13 +566,17 @@ def main():
         with col3:
             st.metric("📊 Atividades", len(filtered_activities) if 'filtered_activities' in locals() else len(st.session_state.df_activities))
         with col4:
-            # NOVO: Mostrar total de parâmetros disponíveis
+            # Mostrar total de parâmetros disponíveis
             total_params = len(st.session_state.get('df_parameters', pd.DataFrame()))
             st.metric("📊 Parâmetros", total_params if total_params > 0 else "N/A")
+        with col5:
+            # NOVO: Mostrar total de posições disponíveis
+            total_positions = len(st.session_state.get('df_positions', pd.DataFrame()))
+            st.metric("🎯 Posições", total_positions if total_positions > 0 else "N/A")
         
         st.markdown("---")
         
-        # ==================== NOVO: SEÇÃO DE PARÂMETROS SELECIONADOS ====================
+        # ==================== SEÇÃO DE PARÂMETROS SELECIONADOS ====================
         if st.session_state.get('selected_parameters') and len(st.session_state.selected_parameters) > 0:
             with st.expander("📊 Métricas Selecionadas", expanded=True):
                 st.markdown(f"**{len(st.session_state.selected_parameters)} métricas selecionadas:**")
@@ -490,13 +586,30 @@ def main():
         
         st.markdown("---")
         
-        # ==================== TABELA DE ATLETAS ====================
+        # ==================== TABELA DE ATLETAS (COM POSIÇÃO AO LADO DO NOME) ====================
         st.subheader(f"📋 Informações dos Atletas ({len(display_athletes)})")
-        athlete_cols = ['Atleta', 'Equipe', 'Camisa', 'Altura (cm)', 'Peso (kg)', 'Velocidade Máx (km/h)', 'FC Máx']
-        existing_cols = [col for col in athlete_cols if col in display_athletes.columns]
-        st.dataframe(display_athletes[existing_cols], use_container_width=True)
         
-        csv_athletes = display_athletes[existing_cols].to_csv(index=False)
+        # NOVO: Formatar a tabela com posição destacada
+        # Criar uma coluna combinada "Atleta + Posição" para melhor visualização
+        display_table = display_athletes.copy()
+        
+        # Opção 1: Adicionar emoji de posição ao lado do nome
+        display_table['Atleta'] = display_table.apply(
+            lambda x: f"{x['Atleta']} 🎯 {x['Posição']}" if x['Posição'] else x['Atleta'], 
+            axis=1
+        )
+        
+        athlete_cols = ['Atleta', 'Equipe', 'Camisa', 'Altura (cm)', 'Peso (kg)', 'Velocidade Máx (km/h)', 'FC Máx']
+        existing_cols = [col for col in athlete_cols if col in display_table.columns]
+        st.dataframe(display_table[existing_cols], use_container_width=True)
+        
+        # Versão alternativa: Tabela separada com posição em coluna própria
+        st.markdown("**📋 Visão alternativa (com posição em coluna separada):**")
+        athlete_cols_alt = ['Atleta', 'Posição', 'Equipe', 'Camisa', 'Altura (cm)', 'Peso (kg)', 'Velocidade Máx (km/h)', 'FC Máx']
+        existing_cols_alt = [col for col in athlete_cols_alt if col in display_athletes.columns]
+        st.dataframe(display_athletes[existing_cols_alt], use_container_width=True)
+        
+        csv_athletes = display_athletes[existing_cols_alt].to_csv(index=False)
         st.download_button("📥 Download Dados dos Atletas (CSV)", csv_athletes, f"atletas_{datetime.now().strftime('%Y%m%d')}.csv")
         
         # ==================== GRÁFICOS DOS ATLETAS ====================
@@ -520,6 +633,32 @@ def main():
                 team_counts.columns = ['Equipe', 'Quantidade']
                 fig_team = px.pie(team_counts, values='Quantidade', names='Equipe', title="Distribuição por Equipe")
                 st.plotly_chart(fig_team, use_container_width=True)
+        
+        # ==================== NOVO: GRÁFICO DE DISTRIBUIÇÃO POR POSIÇÃO ====================
+        if not display_athletes.empty and 'Posição' in display_athletes.columns:
+            with st.expander("🎯 Distribuição por Posição", expanded=False):
+                pos_counts = display_athletes['Posição'].value_counts().reset_index()
+                pos_counts.columns = ['Posição', 'Quantidade']
+                if not pos_counts.empty:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        fig_pos = px.bar(
+                            pos_counts, 
+                            x='Posição', 
+                            y='Quantidade',
+                            title="Quantidade de Atletas por Posição",
+                            color='Quantidade',
+                            color_continuous_scale='Blues'
+                        )
+                        st.plotly_chart(fig_pos, use_container_width=True)
+                    with col2:
+                        fig_pos_pie = px.pie(
+                            pos_counts, 
+                            values='Quantidade', 
+                            names='Posição',
+                            title="Distribuição Percentual por Posição"
+                        )
+                        st.plotly_chart(fig_pos_pie, use_container_width=True)
         
         st.markdown("---")
         
@@ -563,7 +702,10 @@ def main():
                     if sensor_data:
                         df, metrics = process_sensor_data(sensor_data)
                         if metrics:
+                            # NOVO: Adicionar posição do atleta nos dados de sensor
+                            athlete_pos = st.session_state.df_athletes[st.session_state.df_athletes['Atleta'] == athlete_name]['Posição'].values[0] if not st.session_state.df_athletes.empty else ''
                             metrics['Atleta'] = athlete_name
+                            metrics['Posição'] = athlete_pos
                             all_sensor_data.append(metrics)
                     
                     progress_bar.progress((idx + 1) / len(selected_athletes))
@@ -574,7 +716,7 @@ def main():
                     df_sensor = pd.DataFrame(all_sensor_data)
                     st.subheader("📊 Comparativo de Dados de Sensor")
                     
-                    sensor_params = ['Atleta', 'Duração (min)', 'Velocidade Máx (km/h)', 'Velocidade Média (km/h)', 'Distância Estimada (m)', 'FC Máx (bpm)', 'Total de Pontos']
+                    sensor_params = ['Atleta', 'Posição', 'Duração (min)', 'Velocidade Máx (km/h)', 'Velocidade Média (km/h)', 'Distância Estimada (m)', 'FC Máx (bpm)', 'Total de Pontos']
                     available_params = [p for p in sensor_params if p in df_sensor.columns]
                     st.dataframe(df_sensor[available_params], use_container_width=True)
                     
@@ -584,11 +726,16 @@ def main():
                     col1, col2 = st.columns(2)
                     with col1:
                         if 'Velocidade Máx (km/h)' in df_sensor.columns:
-                            fig = px.bar(df_sensor, x='Atleta', y='Velocidade Máx (km/h)', title="Velocidade Máxima por Atleta")
+                            fig = px.bar(df_sensor, x='Atleta', y='Velocidade Máx (km/h)', 
+                                        title="Velocidade Máxima por Atleta",
+                                        color='Posição' if 'Posição' in df_sensor.columns else None,
+                                        hover_data=['Posição'] if 'Posição' in df_sensor.columns else None)
                             st.plotly_chart(fig, use_container_width=True)
                     with col2:
                         if 'Distância Estimada (m)' in df_sensor.columns:
-                            fig = px.bar(df_sensor, x='Atleta', y='Distância Estimada (m)', title="Distância por Atleta")
+                            fig = px.bar(df_sensor, x='Atleta', y='Distância Estimada (m)', 
+                                        title="Distância por Atleta",
+                                        color='Posição' if 'Posição' in df_sensor.columns else None)
                             st.plotly_chart(fig, use_container_width=True)
                 else:
                     st.warning("Nenhum dado de sensor encontrado para os atletas selecionados")
@@ -642,12 +789,15 @@ def main():
                 
                 if all_velocity_data:
                     for athlete_name, df_efforts in all_velocity_data.items():
-                        st.subheader(f"🏃 {athlete_name}")
+                        # NOVO: Mostrar posição do atleta no subtítulo
+                        athlete_pos = st.session_state.df_athletes[st.session_state.df_athletes['Atleta'] == athlete_name]['Posição'].values[0] if not st.session_state.df_athletes.empty else ''
+                        pos_text = f" - {athlete_pos}" if athlete_pos else ""
+                        st.subheader(f"🏃 {athlete_name}{pos_text}")
                         st.dataframe(df_efforts, use_container_width=True)
                         
                         if not df_efforts.empty and 'Percentual (%)' in df_efforts.columns:
                             fig = px.bar(df_efforts, x='Banda', y='Percentual (%)', 
-                                        title=f"Distribuição de Velocidade - {athlete_name}",
+                                        title=f"Distribuição de Velocidade - {athlete_name}{pos_text}",
                                         color='Percentual (%)', color_continuous_scale='Viridis')
                             fig.update_layout(xaxis_title="Banda de Velocidade", yaxis_title="Percentual do Tempo (%)")
                             st.plotly_chart(fig, use_container_width=True)
@@ -703,7 +853,10 @@ def main():
                 
                 if all_acceleration_data:
                     for athlete_name, df_efforts in all_acceleration_data.items():
-                        st.subheader(f"🏃 {athlete_name}")
+                        # NOVO: Mostrar posição do atleta no subtítulo
+                        athlete_pos = st.session_state.df_athletes[st.session_state.df_athletes['Atleta'] == athlete_name]['Posição'].values[0] if not st.session_state.df_athletes.empty else ''
+                        pos_text = f" - {athlete_pos}" if athlete_pos else ""
+                        st.subheader(f"🏃 {athlete_name}{pos_text}")
                         st.dataframe(df_efforts, use_container_width=True)
                         
                         if not df_efforts.empty and 'Percentual (%)' in df_efforts.columns:
@@ -725,7 +878,7 @@ def main():
                                 textposition='outside'
                             ))
                             fig.update_layout(
-                                title=f"Distribuição de Aceleração/Desaceleração - {athlete_name}",
+                                title=f"Distribuição de Aceleração/Desaceleração - {athlete_name}{pos_text}",
                                 xaxis_title="Banda de Aceleração",
                                 yaxis_title="Percentual do Tempo (%)",
                                 height=400
@@ -744,6 +897,7 @@ def main():
         
         | Filtro | Descrição |
         |--------|-----------|
+        | 🎯 Posições | Filtre atletas por posição (Back, Forward, etc.) e visualize posição ao lado do nome |
         | 📊 Métricas (Parameters) | Selecione e filtre métricas disponíveis (PlayerLoad, heart rate, etc.) |
         | 🏢 Time | Selecione um ou mais times |
         | 📅 Data | Selecione uma ou mais datas |
@@ -759,11 +913,12 @@ def main():
         | ⚡ Esforços (Velocidade) | Bandas de velocidade 1-8 com percentual de tempo |
         | 🔄 Esforços (Aceleração) | Bandas de aceleração/desaceleração -3 a 3 com percentual de tempo |
         
-        **Sobre os Parameters:**
-        - Os parâmetros são carregados automaticamente ao conectar
-        - Você pode filtrar por nome ou unidade
-        - Selecione as métricas que deseja visualizar
-        - Faça download da lista completa de parâmetros em CSV
+        **Novidades (Posições):**
+        - As posições são carregadas automaticamente via GET /positions
+        - Filtro de posições na sidebar
+        - Posição exibida ao lado do nome do atleta na tabela
+        - Gráficos coloridos por posição para melhor visualização
+        - Download da lista completa de posições em CSV
         """)
 
 if __name__ == "__main__":
