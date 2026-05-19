@@ -129,7 +129,6 @@ def extrair_efforts_data(response_data):
     velocity_efforts = []
     acceleration_efforts = []
     
-    # A resposta é uma lista com um dicionário que tem o campo 'data'
     if isinstance(response_data, list) and len(response_data) > 0:
         item = response_data[0]
         if isinstance(item, dict) and 'data' in item:
@@ -202,20 +201,24 @@ def calcular_metricas(sensor_points, athlete_name):
         'Total Pontos': len(sensor_points)
     }
 
-def processar_efforts_velocidade(efforts_data, max_velocity=None):
-    """Processa dados de esforços de velocidade para tabela"""
+def processar_efforts_velocidade(efforts_data):
+    """
+    Processa dados de esforços de velocidade para tabela
+    O % do Máximo é calculado com base no maior valor da própria lista
+    """
     if not efforts_data:
         return pd.DataFrame()
     
     records = []
-    max_vel_encontrada = 0
     
+    # Encontrar a maior velocidade nos próprios esforços
+    max_vel_encontrada = 0
     for effort in efforts_data:
         max_vel = effort.get('max_velocity', 0)
         if max_vel:
             max_vel_encontrada = max(max_vel_encontrada, max_vel)
     
-    velocidade_max = max_velocity if max_velocity else max_vel_encontrada
+    velocidade_max = max_vel_encontrada
     
     for i, effort in enumerate(efforts_data, 1):
         start_time = effort.get('start_time', 0)
@@ -226,6 +229,7 @@ def processar_efforts_velocidade(efforts_data, max_velocity=None):
         distance = effort.get('distance', 0)
         band = effort.get('band', '')
         
+        # Percentual em relação à máxima dos esforços
         percent_of_max = (max_vel / velocidade_max * 100) if velocidade_max > 0 else 0
         
         hora_str = ''
@@ -248,20 +252,24 @@ def processar_efforts_velocidade(efforts_data, max_velocity=None):
     
     return pd.DataFrame(records)
 
-def processar_efforts_aceleracao(efforts_data, max_acceleration=None):
-    """Processa dados de esforços de aceleração para tabela"""
+def processar_efforts_aceleracao(efforts_data):
+    """
+    Processa dados de esforços de aceleração para tabela
+    O % do Máximo é calculado com base no maior valor (absoluto) da própria lista
+    """
     if not efforts_data:
         return pd.DataFrame()
     
     records = []
-    max_acc_encontrada = 0
     
+    # Encontrar a maior aceleração (em valor absoluto) nos próprios esforços
+    max_acc_encontrada = 0
     for effort in efforts_data:
         acc = effort.get('acceleration', 0)
         if acc:
             max_acc_encontrada = max(max_acc_encontrada, abs(acc))
     
-    aceleracao_max = max_acceleration if max_acceleration else max_acc_encontrada
+    aceleracao_max = max_acc_encontrada
     
     for i, effort in enumerate(efforts_data, 1):
         start_time = effort.get('start_time', 0)
@@ -271,6 +279,7 @@ def processar_efforts_aceleracao(efforts_data, max_acceleration=None):
         distance = effort.get('distance', 0)
         band = effort.get('band', '')
         
+        # Percentual em relação à máxima dos esforços
         percent_of_max = (abs(acceleration) / aceleracao_max * 100) if aceleracao_max > 0 else 0
         
         hora_str = ''
@@ -630,7 +639,6 @@ def main():
                         period_id = st.session_state.get('period_id')
                         periodo_sel = st.session_state.get('periodo_sel', 'Atividade Completa')
                         
-                        # Decidir qual endpoint usar
                         if period_id and periodo_sel != 'Atividade Completa':
                             st.info(f"📌 Buscando atletas do período: {periodo_sel}")
                             response_data = api.get_athletes_in_period(period_id)
@@ -639,7 +647,6 @@ def main():
                             response_data = api.get_activity_athletes(activity_id)
                         
                         if response_data:
-                            # Extrair atletas do response
                             athletes_in = None
                             
                             if isinstance(response_data, list):
@@ -655,7 +662,6 @@ def main():
                             if athletes_in and len(athletes_in) > 0:
                                 st.success(f"📊 Encontrados {len(athletes_in)} atletas na API")
                                 
-                                # Criar DataFrame
                                 atletas_temp = []
                                 for a in athletes_in:
                                     nome = f"{a.get('first_name', '')} {a.get('last_name', '')}".strip()
@@ -676,26 +682,21 @@ def main():
                                 
                                 df_atletas_temp = pd.DataFrame(atletas_temp)
                                 
-                                # Aplicar filtro de equipe
                                 if 'equipes_selecionadas' in st.session_state:
                                     if 'Todas' not in st.session_state.equipes_selecionadas and st.session_state.equipes_selecionadas:
                                         df_atletas_temp = df_atletas_temp[
                                             df_atletas_temp['equipe'].isin(st.session_state.equipes_selecionadas)
                                         ]
-                                        st.info(f"📊 Após filtro de equipe: {len(df_atletas_temp)} atletas")
                                 
-                                # Aplicar filtro de posição
                                 if 'posicoes_selecionadas' in st.session_state:
                                     if 'Todas' not in st.session_state.posicoes_selecionadas and st.session_state.posicoes_selecionadas:
                                         df_atletas_temp = df_atletas_temp[
                                             df_atletas_temp['posicao'].isin(st.session_state.posicoes_selecionadas)
                                         ]
-                                        st.info(f"📊 Após filtro de posição: {len(df_atletas_temp)} atletas")
                                 
                                 st.session_state.atletas_filtrados = df_atletas_temp
                                 st.success(f"✅ {len(df_atletas_temp)} atletas encontrados no {periodo_sel}")
                                 
-                                # Estatísticas
                                 if not df_atletas_temp.empty:
                                     st.subheader("📊 Distribuição")
                                     col1, col2 = st.columns(2)
@@ -755,7 +756,6 @@ def main():
             athlete_posicao = athlete_row['posicao'].values[0] if 'posicao' in athlete_row.columns else ''
             athlete_equipe = athlete_row['equipe'].values[0] if 'equipe' in athlete_row.columns else ''
             
-            # Sensor data
             if period_id and periodo_sel != 'Atividade Completa':
                 response = api.get_period_sensor_data(period_id, athlete_id)
                 efforts_response = api.get_period_efforts(period_id, athlete_id, "velocity,acceleration")
@@ -785,7 +785,6 @@ def main():
                         'posicao': athlete_posicao, 'equipe': athlete_equipe
                     }
                 
-                # Extrair efforts corretamente
                 if efforts_response:
                     vel_efforts, acc_efforts = extrair_efforts_data(efforts_response)
                     if vel_efforts:
@@ -793,7 +792,7 @@ def main():
                     if acc_efforts:
                         dados_efforts_aceleracao[atleta_nome] = acc_efforts
                     
-                    st.success(f"✅ {atleta_nome}: {len(sensor_points)} pontos | Velocidade: {len(vel_efforts)} | Aceleração: {len(acc_efforts)}")
+                    st.success(f"✅ {atleta_nome}: {len(sensor_points)} pts sensor | Vel: {len(vel_efforts)} | Acc: {len(acc_efforts)}")
                 else:
                     st.success(f"✅ {atleta_nome}: {len(sensor_points)} pontos (sem dados de esforços)")
             
@@ -805,9 +804,7 @@ def main():
         if resultados:
             df = pd.DataFrame(resultados)
             
-            # Métricas resumidas
             st.subheader("📊 Métricas Biométricas")
-            
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("🏃 Atletas", len(resultados))
@@ -820,13 +817,12 @@ def main():
             
             st.markdown("---")
             
-            # Tabela
             colunas = ['Atleta', 'Equipe', 'Posição', 'Duração (min)', 'Distância (m)', 
                       'PlayerLoad', 'Velocidade Máx (km/h)', 'FC Máx (bpm)']
             colunas_existentes = [c for c in colunas if c in df.columns]
             st.dataframe(df[colunas_existentes], use_container_width=True)
             
-            # Criar abas
+            # Abas
             tab1, tab2, tab3, tab4 = st.tabs([
                 "📈 Gráficos Comparativos", 
                 "🗺️ Mapas de Calor", 
@@ -834,16 +830,13 @@ def main():
                 "📋 Métricas Detalhadas"
             ])
             
-            # TAB 1: Gráficos Comparativos
             with tab1:
                 st.subheader("📈 Gráficos Comparativos")
-                
                 col1, col2 = st.columns(2)
                 with col1:
                     fig = px.bar(df, x='Atleta', y='Distância (m)', color='Equipe',
                                 title="Distância por Atleta", color_discrete_sequence=px.colors.qualitative.Set2)
                     st.plotly_chart(fig, key="dist", use_container_width=True)
-                
                 with col2:
                     fig = px.bar(df, x='Atleta', y='PlayerLoad', color='Equipe',
                                 title="PlayerLoad por Atleta", color_discrete_sequence=px.colors.qualitative.Set3)
@@ -854,7 +847,6 @@ def main():
                     fig = px.bar(df, x='Atleta', y='Velocidade Máx (km/h)', color='Posição',
                                 title="Velocidade Máxima por Atleta")
                     st.plotly_chart(fig, key="speed", use_container_width=True)
-                
                 with col4:
                     if 'Equipe' in df.columns:
                         team_counts = df['Equipe'].value_counts().reset_index()
@@ -863,11 +855,9 @@ def main():
                             fig = px.pie(team_counts, values='Quantidade', names='Equipe', title="Atletas por Equipe")
                             st.plotly_chart(fig, key="pie_team", use_container_width=True)
             
-            # TAB 2: Mapas de Calor
             with tab2:
                 if dados_posicao:
                     st.subheader("🗺️ Mapas de Calor e Trajetórias")
-                    
                     for atleta, dados in dados_posicao.items():
                         with st.expander(f"📍 {atleta} ({dados['equipe']} - {dados['posicao']})", expanded=False):
                             col1, col2 = st.columns(2)
@@ -880,7 +870,6 @@ def main():
                 else:
                     st.info("Dados de posição não disponíveis para esta atividade")
             
-            # TAB 3: Esforços ao Longo do Tempo (COM TABELA DE ESFORÇOS CORRIGIDA)
             with tab3:
                 st.subheader("⏱️ Esforços ao Longo do Tempo")
                 
@@ -894,28 +883,20 @@ def main():
                     if atleta_escolhido:
                         sensor_points = dados_sensor_por_atleta[atleta_escolhido]
                         
-                        # Gráfico de Velocidade
                         st.markdown("### 🏃‍♂️ Velocidade ao Longo do Tempo")
                         fig_vel = criar_grafico_velocidade_tempo(sensor_points, atleta_escolhido)
                         if fig_vel:
                             st.plotly_chart(fig_vel, use_container_width=True)
-                        else:
-                            st.info("Dados de velocidade não disponíveis")
                         
                         st.markdown("---")
-                        
-                        # Gráfico de Aceleração
                         st.markdown("### 🔄 Aceleração ao Longo do Tempo")
                         fig_acc = criar_grafico_aceleracao_tempo(sensor_points, atleta_escolhido)
                         if fig_acc:
                             st.plotly_chart(fig_acc, use_container_width=True)
-                        else:
-                            st.info("Dados de aceleração não disponíveis")
                         
                         st.markdown("---")
                         st.markdown("## 📋 Tabela de Esforços Detalhada")
                         
-                        # Selecionar tipo de esforço
                         tipo_esforco = st.radio(
                             "Selecione o tipo de esforço:",
                             ["🏃‍♂️ Velocidade", "🔄 Aceleração/Desaceleração"],
@@ -928,25 +909,19 @@ def main():
                         if "Velocidade" in tipo_esforco:
                             if atleta_escolhido in dados_efforts_velocidade:
                                 efforts_data = dados_efforts_velocidade[atleta_escolhido]
-                                # Calcular velocidade máxima do atleta a partir dos dados de sensor
-                                velocidades_sensor = [p.get('v', 0) * 3.6 for p in sensor_points if p.get('v')]
-                                max_velocidade = max(velocidades_sensor) if velocidades_sensor else 0
-                                efforts_df = processar_efforts_velocidade(efforts_data, max_velocidade / 3.6)
+                                efforts_df = processar_efforts_velocidade(efforts_data)
                                 st.success(f"📊 {len(efforts_data)} esforços de velocidade encontrados")
                             else:
-                                st.warning("Dados de esforços de velocidade não disponíveis para este atleta")
+                                st.warning("Dados de esforços de velocidade não disponíveis")
                         else:
                             if atleta_escolhido in dados_efforts_aceleracao:
                                 efforts_data = dados_efforts_aceleracao[atleta_escolhido]
-                                # Calcular aceleração máxima
-                                aceleracoes = [abs(p.get('a', 0)) for p in sensor_points if p.get('a')]
-                                max_aceleracao = max(aceleracoes) if aceleracoes else 0
-                                efforts_df = processar_efforts_aceleracao(efforts_data, max_aceleracao)
+                                efforts_df = processar_efforts_aceleracao(efforts_data)
                                 st.success(f"📊 {len(efforts_data)} esforços de aceleração encontrados")
                             else:
-                                st.warning("Dados de esforços de aceleração não disponíveis para este atleta")
+                                st.warning("Dados de esforços de aceleração não disponíveis")
                         
-                        if not efforts_df.empty and len(efforts_df) > 0:
+                        if not efforts_df.empty:
                             # Filtro por bandas
                             if 'Banda' in efforts_df.columns and efforts_df['Banda'].notna().any():
                                 bandas_disponiveis = sorted(efforts_df['Banda'].dropna().unique().tolist())
@@ -955,13 +930,12 @@ def main():
                                     bandas_selecionadas = st.multiselect(
                                         "Selecione as bandas para filtrar:",
                                         options=bandas_disponiveis,
-                                        default=bandas_disponiveis,
-                                        help="Filtre por bandas de esforço (ex: Banda 2+, Banda 3+)"
+                                        default=bandas_disponiveis
                                     )
                                     if bandas_selecionadas:
                                         efforts_df = efforts_df[efforts_df['Banda'].isin(bandas_selecionadas)]
                             
-                            # Mostrar estatísticas resumidas
+                            # Estatísticas
                             st.subheader("📊 Resumo dos Esforços")
                             col1, col2, col3, col4 = st.columns(4)
                             with col1:
@@ -976,11 +950,11 @@ def main():
                                 if '% do Máximo' in efforts_df.columns:
                                     st.metric("Média % do Máximo", round(efforts_df['% do Máximo'].mean(), 1))
                             
-                            # Tabela detalhada
+                            # Tabela
                             st.subheader("📋 Tabela Detalhada de Esforços")
                             st.dataframe(efforts_df, use_container_width=True, height=400)
                             
-                            # Botão de exportar
+                            # Exportar
                             csv_efforts = efforts_df.to_csv(index=False)
                             st.download_button(
                                 "📥 Exportar Tabela de Esforços (CSV)",
@@ -989,16 +963,13 @@ def main():
                                 "text/csv"
                             )
                         else:
-                            st.info("Nenhum dado de esforço disponível para os filtros selecionados")
+                            st.info("Nenhum dado de esforço disponível")
                 else:
-                    st.info("Dados de sensor não disponíveis para gerar gráficos temporais")
+                    st.info("Dados de sensor não disponíveis")
             
-            # TAB 4: Métricas Detalhadas
             with tab4:
                 st.subheader("📋 Métricas Detalhadas")
                 st.dataframe(df, use_container_width=True)
-                
-                # Exportar
                 csv = df.to_csv(index=False)
                 st.download_button(
                     "📥 Exportar Dados (CSV)",
@@ -1009,22 +980,14 @@ def main():
         
         else:
             st.warning("Nenhum dado de sensor encontrado para os atletas selecionados")
-            st.info("""
-            **Dicas:**
-            1. Tente selecionar um período específico (1º Tempo, 2º Tempo)
-            2. Verifique se os atletas usaram dispositivos nesta atividade
-            3. Os dados de sensor podem estar disponíveis apenas por período
-            """)
     
     elif 'df_athletes' in st.session_state and not st.session_state.df_athletes.empty:
         st.info("👈 Selecione uma atividade, um período e clique em 'Buscar Atletas da Atividade'")
         
-        # Mostrar estatísticas
         if not st.session_state.df_athletes.empty:
             st.subheader("📊 Distribuição de Posições (Todos os Atletas)")
             pos_counts = st.session_state.df_athletes['posicao'].value_counts().reset_index()
             pos_counts.columns = ['Posição', 'Quantidade']
-            
             if not pos_counts.empty:
                 col1, col2 = st.columns(2)
                 with col1:
