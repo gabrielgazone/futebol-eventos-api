@@ -229,7 +229,6 @@ def processar_efforts_velocidade(efforts_data):
         distance = effort.get('distance', 0)
         band = effort.get('band', '')
         
-        # Percentual em relação à máxima dos esforços
         percent_of_max = (max_vel / velocidade_max * 100) if velocidade_max > 0 else 0
         
         hora_str = ''
@@ -255,21 +254,23 @@ def processar_efforts_velocidade(efforts_data):
 def processar_efforts_aceleracao(efforts_data):
     """
     Processa dados de esforços de aceleração para tabela
-    O % do Máximo é calculado com base no maior valor (absoluto) da própria lista
+    O % do Máximo é calculado SEPARADAMENTE para acelerações (positivas) e desacelerações (negativas)
     """
     if not efforts_data:
         return pd.DataFrame()
     
     records = []
     
-    # Encontrar a maior aceleração (em valor absoluto) nos próprios esforços
-    max_acc_encontrada = 0
+    # Encontrar a maior aceleração positiva e a maior desaceleração (mais negativa)
+    max_acc_positiva = 0
+    max_acc_negativa = 0
+    
     for effort in efforts_data:
         acc = effort.get('acceleration', 0)
-        if acc:
-            max_acc_encontrada = max(max_acc_encontrada, abs(acc))
-    
-    aceleracao_max = max_acc_encontrada
+        if acc > 0:
+            max_acc_positiva = max(max_acc_positiva, acc)
+        elif acc < 0:
+            max_acc_negativa = min(max_acc_negativa, acc)  # mais negativo
     
     for i, effort in enumerate(efforts_data, 1):
         start_time = effort.get('start_time', 0)
@@ -279,8 +280,19 @@ def processar_efforts_aceleracao(efforts_data):
         distance = effort.get('distance', 0)
         band = effort.get('band', '')
         
-        # Percentual em relação à máxima dos esforços
-        percent_of_max = (abs(acceleration) / aceleracao_max * 100) if aceleracao_max > 0 else 0
+        # Calcular percentual baseado no tipo (positivo ou negativo)
+        if acceleration > 0:
+            # Aceleração positiva: % em relação à maior aceleração positiva
+            percent_of_max = (acceleration / max_acc_positiva * 100) if max_acc_positiva > 0 else 0
+            tipo = 'Aceleração'
+        elif acceleration < 0:
+            # Desaceleração: % em relação à maior desaceleração (valor mais negativo)
+            # Ex: -5.85 é 100%, -4.37 é (4.37/5.85)*100 = 74.7%
+            percent_of_max = (abs(acceleration) / abs(max_acc_negativa) * 100) if max_acc_negativa < 0 else 0
+            tipo = 'Desaceleração'
+        else:
+            percent_of_max = 0
+            tipo = 'Constante'
         
         hora_str = ''
         if start_time:
@@ -288,8 +300,6 @@ def processar_efforts_aceleracao(efforts_data):
                 hora_str = datetime.fromtimestamp(start_time).strftime('%H:%M:%S')
             except:
                 hora_str = str(start_time)
-        
-        tipo = 'Aceleração' if acceleration >= 0 else 'Desaceleração'
         
         records.append({
             'Esforço': i,
