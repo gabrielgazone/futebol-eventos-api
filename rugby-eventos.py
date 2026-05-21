@@ -1367,20 +1367,19 @@ def main():
                         if acc_efforts:
                             dados_efforts_acc[atleta_nome] = acc_efforts
                     
-                    # Dados de posição
-                    lats = [p.get('lat', 0) for p in sensor_points if p.get('lat')]
-                    lons = [p.get('long', 0) for p in sensor_points if p.get('long')]
-                    velocidades = [p.get('v', 0) * 3.6 for p in sensor_points if p.get('v')]
-                    
-                    if lats and lons and velocidades:
-                        min_len = min(len(lats), len(lons), len(velocidades))
-                        lats = lats[:min_len]
-                        lons = lons[:min_len]
-                        velocidades = velocidades[:min_len]
-                        
-                        x, y = lat_lon_to_xy(lats, lons)
+                    # Dados de posição — filtra pontos que tenham lat, long E velocidade juntos
+                    pontos_pos = [
+                        (p['lat'], p['long'], p.get('v', 0) * 3.6)
+                        for p in sensor_points
+                        if p.get('lat') is not None and p.get('long') is not None
+                    ]
+                    if pontos_pos:
+                        lats = [pt[0] for pt in pontos_pos]
+                        lons = [pt[1] for pt in pontos_pos]
+                        velocidades = [pt[2] for pt in pontos_pos]
+
                         dados_posicao[atleta_nome] = {
-                            'x': x, 'y': y, 'vel': velocidades, 'lats': lats, 'lons': lons,
+                            'vel': velocidades, 'lats': lats, 'lons': lons,
                             'posicao': athlete_posicao, 'equipe': athlete_equipe
                         }
                     
