@@ -11,7 +11,6 @@ import json
 import base64
 import numpy as np
 from scipy.signal import savgol_filter
-from scipy import interpolate
 
 st.set_page_config(page_title="Rugby Eventos - Catapult", layout="wide")
 
@@ -23,16 +22,6 @@ SERVERS = {
 
 # ==================== REFERÊNCIAS BIBLIOGRÁFICAS ====================
 REFERENCIAS = {
-    "hrv": """
-    **Referências Bibliográficas:**
-
-    1. **Achten, J., & Jeukendrup, A.E. (2003).** "Heart rate monitoring: applications and limitations."
-    *Sports Medicine*, 33(7), 517–538. DOI: 10.2165/00007256-200333070-00004
-
-    2. **Plews, D.J., Laursen, P.B., Stanley, J., Buchheit, M., & Kilding, A.E. (2013).**
-    "Training adaptation and heart rate variability in elite endurance athletes: opening the door
-    to effective monitoring." *Sports Medicine*, 43(9), 773–781. DOI: 10.1007/s40279-013-0071-8
-    """,
     "janelas": """
     **Referência:** Aughey, R.J. (2011). "Applications of GPS technologies to field sports". 
     *International Journal of Sports Physiology and Performance*, 6(3), 295-310.
@@ -416,180 +405,7 @@ def calcular_metricas(sensor_points, athlete_name):
 
 # PARTE 3 - FUNÇÕES DE HRV, JANELAS E ESFORÇOS
 
-def calcular_hrv_avancado(sensor_points):
-    """
-    Calcula métricas avançadas de HRV com base em:
-    - Plews et al. (2013): Ln rMSSD como métrica primária; razão Ln rMSSD/R-R × 10³
-    - Achten & Jeukendrup (2003): bandas espectrais VLF/LF/HF (HF até 0,36 Hz),
-      unidades normalizadas LF e HF, interpretação fisiológica do LF/HF
-    """
-    if not sensor_points:
-        return None
 
-    frequencias = [p.get('hr', 0) for p in sensor_points if p.get('hr', 0) > 0]
-    if len(frequencias) < 10:
-        return None
-
-    rr_intervals = [60000 / hr for hr in frequencias if hr > 0]
-    if len(rr_intervals) < 2:
-        return None
-
-    rr_intervals = np.array(rr_intervals)
-    mean_rr = np.mean(rr_intervals)
-
-    diff_rr = np.diff(rr_intervals)
-    rmssd = np.sqrt(np.mean(diff_rr ** 2))
-    sdnn = np.std(rr_intervals)
-    pnn50 = np.sum(np.abs(diff_rr) > 50) / len(diff_rr) * 100 if len(diff_rr) > 0 else 0
-    sdsd = np.std(diff_rr) if len(diff_rr) > 0 else 0
-    nn50 = int(np.sum(np.abs(diff_rr) > 50)) if len(diff_rr) > 0 else 0
-
-    # Ln rMSSD — métrica primária de Plews et al. (2013)
-    # CV = 12,3% vs 18,4% do rMSSD bruto → maior estabilidade para monitoramento longitudinal
-    ln_rmssd = round(float(np.log(rmssd)), 4) if rmssd > 0 else 0.0
-
-    # Razão diagnóstica Ln rMSSD / R-R × 10³ (Plews et al., 2013)
-    ln_rmssd_rr_ratio = round((ln_rmssd / mean_rr) * 1000, 4) if mean_rr > 0 else 0.0
-
-    # Análise espectral — bandas conforme Achten & Jeukendrup (2003)
-    # HF: 0,15–0,36 Hz (não 0,4 Hz como em padrões de repouso)
-    try:
-        t = np.cumsum(rr_intervals) / 1000
-        t_uniform = np.linspace(0, t[-1], len(rr_intervals) * 10)
-        f_interp = interpolate.interp1d(t, rr_intervals, kind='cubic', fill_value="extrapolate")
-        rr_uniform = f_interp(t_uniform)
-        rr_uniform = rr_uniform - np.mean(rr_uniform)
-        freq = np.fft.rfftfreq(len(rr_uniform), d=(t_uniform[1] - t_uniform[0]))
-        fft_vals = np.abs(np.fft.rfft(rr_uniform))
-
-        vlf_mask = (freq >= 0.0033) & (freq < 0.04)
-        lf_mask  = (freq >= 0.04)   & (freq < 0.15)
-        hf_mask  = (freq >= 0.15)   & (freq < 0.36)   # Achten & Jeukendrup (2003)
-
-        vlf_power = float(np.trapz(fft_vals[vlf_mask] ** 2, freq[vlf_mask])) if np.any(vlf_mask) else 0.0
-        lf_power  = float(np.trapz(fft_vals[lf_mask]  ** 2, freq[lf_mask]))  if np.any(lf_mask)  else 0.0
-        hf_power  = float(np.trapz(fft_vals[hf_mask]  ** 2, freq[hf_mask]))  if np.any(hf_mask)  else 0.0
-        total_power = vlf_power + lf_power + hf_power
-        lf_hf_ratio = lf_power / hf_power if hf_power > 0 else 0.0
-
-        # Unidades normalizadas (removem influência da VLF)
-        denom_nu = total_power - vlf_power
-        lf_nu = round(lf_power / denom_nu * 100, 1) if denom_nu > 0 else 0.0
-        hf_nu = round(hf_power / denom_nu * 100, 1) if denom_nu > 0 else 0.0
-
-    except Exception:
-        vlf_power = 0.0
-        lf_power  = 0.0
-        hf_power  = 0.0
-        lf_hf_ratio = 0.0
-        total_power = 0.0
-        lf_nu = 0.0
-        hf_nu = 0.0
-
-    # Diagrama de Poincaré
-    sd1 = sdsd / np.sqrt(2) if sdsd > 0 else 0
-    sd2_arg = 2 * sdnn ** 2 - 0.5 * sdsd ** 2
-    sd2 = np.sqrt(sd2_arg) if sdnn > 0 and sd2_arg >= 0 else 0
-    sd_ratio = round(sd1 / sd2, 3) if sd2 > 0 else 0
-
-    # Status de adaptação baseado em Ln rMSSD (Plews et al., 2013)
-    # Referência: Ln rMSSD ≈ 3,9 → rMSSD ≈ 49 ms (atleta bem recuperado)
-    if ln_rmssd >= 3.9:
-        status_adaptacao = "Adaptação Positiva — Ln rMSSD elevado, atividade vagal alta"
-        cor_status = "success"
-    elif ln_rmssd >= 3.4:
-        status_adaptacao = "Recuperação Adequada — Ln rMSSD em faixa moderada"
-        cor_status = "info"
-    elif ln_rmssd >= 3.0:
-        status_adaptacao = "Fadiga Moderada — Ln rMSSD reduzido, monitoramento recomendado"
-        cor_status = "warning"
-    else:
-        status_adaptacao = "Sobrecarga / NFOR Potencial — Ln rMSSD muito baixo"
-        cor_status = "error"
-
-    return {
-        # Domínio do tempo
-        'rmssd':            round(float(rmssd), 1),
-        'sdnn':             round(float(sdnn), 1),
-        'sdsd':             round(float(sdsd), 1),
-        'pnn50':            round(float(pnn50), 1),
-        'nn50':             nn50,
-        'mean_rr':          round(float(mean_rr), 1),
-        # Ln rMSSD (Plews et al., 2013)
-        'ln_rmssd':         ln_rmssd,
-        'ln_rmssd_rr_ratio': ln_rmssd_rr_ratio,
-        # Domínio da frequência (Achten & Jeukendrup, 2003)
-        'vlf_power':        round(vlf_power, 1),
-        'lf_power':         round(lf_power, 1),
-        'hf_power':         round(hf_power, 1),
-        'lf_hf_ratio':      round(lf_hf_ratio, 2),
-        'total_power':      round(total_power, 1),
-        'lf_nu':            lf_nu,
-        'hf_nu':            hf_nu,
-        # Poincaré
-        'sd1':              round(float(sd1), 1),
-        'sd2':              round(float(sd2), 1),
-        'sd_ratio':         sd_ratio,
-        # Status (Plews et al., 2013)
-        'status_adaptacao': status_adaptacao,
-        'cor_status':       cor_status,
-        # FC
-        'frequencia_cardiaca_media': round(float(np.mean(frequencias)), 1),
-        'frequencia_cardiaca_min':   round(float(min(frequencias)), 1),
-        'frequencia_cardiaca_max':   round(float(max(frequencias)), 1),
-        'total_amostras':            len(frequencias),
-    }
-
-def criar_poincare_plot(rr_intervals, athlete_name, periodo_nome):
-    if len(rr_intervals) < 2:
-        return None
-    
-    rr_intervals = np.array(rr_intervals)
-    rr_n = rr_intervals[:-1]
-    rr_n1 = rr_intervals[1:]
-    
-    diff = rr_n1 - rr_n
-    sd1 = np.std(diff) / np.sqrt(2)
-    sd2 = np.sqrt(2 * np.std(rr_intervals) ** 2 - 0.5 * np.std(diff) ** 2)
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatter(
-        x=rr_n, y=rr_n1,
-        mode='markers',
-        name='Intervalos RR',
-        marker=dict(size=3, color='blue', opacity=0.5)
-    ))
-    
-    theta = np.linspace(0, 2 * np.pi, 100)
-    x_ellipse = np.mean(rr_n) + sd1 * np.cos(theta)
-    y_ellipse = np.mean(rr_n1) + sd2 * np.sin(theta)
-    
-    fig.add_trace(go.Scatter(
-        x=x_ellipse, y=y_ellipse,
-        mode='lines',
-        name=f'Elipse (SD1={sd1:.1f}, SD2={sd2:.1f})',
-        line=dict(color='red', width=2, dash='dash')
-    ))
-    
-    min_val = min(np.min(rr_n), np.min(rr_n1))
-    max_val = max(np.max(rr_n), np.max(rr_n1))
-    fig.add_trace(go.Scatter(
-        x=[min_val, max_val], y=[min_val, max_val],
-        mode='lines',
-        name='Linha de Identidade',
-        line=dict(color='gray', width=1, dash='dot')
-    ))
-    
-    fig.update_layout(
-        title=f"Poincaré Plot - {athlete_name} ({periodo_nome})",
-        xaxis_title="RRₙ (ms)",
-        yaxis_title="RRₙ₊₁ (ms)",
-        height=450,
-        template='plotly_white'
-    )
-    
-    return fig
 
 def calcular_janelas_discretas_10s(sensor_points, window_minutes, metric_name, band_filter=None):
     if not sensor_points or len(sensor_points) < 10:
@@ -1340,7 +1156,6 @@ def main():
         dados_efforts_vel_por_periodo = {}
         dados_efforts_acc_por_periodo = {}
         dados_posicao_por_periodo = {}
-        hrv_por_periodo = {}
         
         for periodo_nome in periodos_selecionados:
             period_id = period_ids.get(periodo_nome)
@@ -1382,12 +1197,6 @@ def main():
                         metricas['Posição'] = athlete_posicao
                         metricas['Equipe'] = athlete_equipe
                         resultados.append(metricas)
-                    
-                    hrv = calcular_hrv_avancado(sensor_points)
-                    if hrv:
-                        if periodo_nome not in hrv_por_periodo:
-                            hrv_por_periodo[periodo_nome] = {}
-                        hrv_por_periodo[periodo_nome][atleta_nome] = hrv
                     
                     if efforts_response:
                         vel_efforts, acc_efforts = extrair_efforts_data(efforts_response)
@@ -1456,7 +1265,6 @@ def main():
                 "🗺️ Campo de Rugby",
                 "⏱️ Esforços ao Longo do Tempo",
                 "📊 Janelas Temporais Móveis",
-                "💓 HRV - Análise Avançada"
             ])
             
             # ==================== ABA 1: GRÁFICOS COMPARATIVOS ====================
@@ -1740,220 +1548,6 @@ def main():
                 else:
                     st.info("Selecione um atleta para análise")
             
-            # ==================== ABA 5: HRV ====================
-            with abas[4]:
-                st.subheader("💓 Variabilidade da Frequência Cardíaca (HRV)")
-                st.markdown("### Análise baseada em Plews et al. (2013) e Achten & Jeukendrup (2003)")
-                st.warning(
-                    "⚠️ **Nota metodológica:** Esta análise é estimada a partir da série de FC "
-                    "amostrada pelo sensor Catapult (10 Hz), não de intervalos RR batimento a batimento "
-                    "obtidos por ECG. Os valores refletem tendências relativas. Conforme Plews et al. (2013), "
-                    "o monitoramento longitudinal individual é mais informativo do que valores isolados. "
-                    "Não utilizar para diagnóstico clínico."
-                )
-
-                if hrv_por_periodo:
-                    periodo_hrv = st.selectbox(
-                        "Selecione o período:", list(hrv_por_periodo.keys()), key="periodo_hrv"
-                    )
-                    if hrv_por_periodo[periodo_hrv]:
-                        atleta_hrv = st.selectbox(
-                            "Selecione o atleta:", list(hrv_por_periodo[periodo_hrv].keys()), key="atleta_hrv"
-                        )
-                        hrv_data = hrv_por_periodo[periodo_hrv][atleta_hrv]
-
-                        # ── SEÇÃO 1: STATUS DE ADAPTAÇÃO (Plews et al., 2013) ──────────────────
-                        st.markdown("---")
-                        st.markdown("## 🟢 Status de Adaptação")
-                        st.caption("Baseado em Ln rMSSD conforme Plews et al. (2013).")
-                        if hrv_data['cor_status'] == "success":
-                            st.success(f"✅ **{hrv_data['status_adaptacao']}**")
-                        elif hrv_data['cor_status'] == "info":
-                            st.info(f"ℹ️ **{hrv_data['status_adaptacao']}**")
-                        elif hrv_data['cor_status'] == "warning":
-                            st.warning(f"⚠️ **{hrv_data['status_adaptacao']}**")
-                        else:
-                            st.error(f"🔴 **{hrv_data['status_adaptacao']}**")
-
-                        # ── SEÇÃO 2: LN rMSSD — MÉTRICA PRINCIPAL (Plews et al., 2013) ─────────
-                        st.markdown("---")
-                        st.markdown("## 📊 Métrica Principal: Ln rMSSD")
-                        st.caption(
-                            "Plews et al. (2013): O Ln rMSSD apresenta coeficiente de variação de 12,3% "
-                            "(vs. 18,4% do rMSSD bruto), sendo a métrica mais robusta para monitoramento "
-                            "de carga de treinamento em atletas de elite."
-                        )
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric(
-                                "Ln rMSSD",
-                                f"{hrv_data['ln_rmssd']:.3f}",
-                                help="Logaritmo natural do rMSSD. Métrica primária recomendada por Plews et al. (2013)."
-                            )
-                        with col2:
-                            st.metric(
-                                "rMSSD (ms)",
-                                hrv_data['rmssd'],
-                                help="Root Mean Square of Successive Differences — base para o Ln rMSSD."
-                            )
-                        with col3:
-                            st.metric(
-                                "RR Médio (ms)",
-                                round(hrv_data['mean_rr'], 1),
-                                help="Intervalo RR médio. Utilizado na razão diagnóstica de Plews et al."
-                            )
-
-                        # ── SEÇÃO 3: RAZÃO DIAGNÓSTICA Ln rMSSD / R-R × 10³ (Plews et al.) ────
-                        st.markdown("---")
-                        st.markdown("## 🔬 Razão Diagnóstica: Ln rMSSD / R-R × 10³")
-                        st.caption(
-                            "Plews et al. (2013): A combinação do comportamento de Ln rMSSD com o R-R médio "
-                            "permite distinguir entre saturação de HRV (esperada em alta carga), "
-                            "fadiga excessiva/NFOR e adaptação positiva ao treinamento."
-                        )
-                        col1, col2 = st.columns([1, 2])
-                        with col1:
-                            st.metric(
-                                "Ln rMSSD / R-R × 10³",
-                                f"{hrv_data['ln_rmssd_rr_ratio']:.4f}",
-                                help="Razão entre Ln rMSSD e o intervalo RR médio × 1000. Diagnóstico de Plews et al. (2013)."
-                            )
-                        with col2:
-                            st.markdown("""
-| Ln rMSSD | RR Médio (FC) | Interpretação |
-|-----------|---------------|---------------|
-| ↓ Reduz | ↓ Reduz (FC ↑) | ⚡ **Saturação de HRV** — resposta fisiológica normal à alta carga de treino |
-| ↓ Reduz | ↑ Aumenta (FC ↓) | 🔴 **Fadiga / NFOR potencial** — desequilíbrio autonômico |
-| ↑ Aumenta | ↑ Aumenta (FC ↓) | ✅ **Adaptação positiva** ao treinamento |
-| Estável | Estável | ℹ️ **Manutenção** — carga de treinamento equilibrada |
-""")
-
-                        # ── SEÇÃO 4: DOMÍNIO DO TEMPO ──────────────────────────────────────────
-                        st.markdown("---")
-                        st.markdown("## ⏱️ Domínio do Tempo")
-                        col1, col2, col3, col4, col5 = st.columns(5)
-                        with col1:
-                            st.metric(
-                                "RMSSD (ms)", hrv_data['rmssd'],
-                                help="Raiz da média dos quadrados das diferenças sucessivas dos intervalos RR."
-                            )
-                        with col2:
-                            st.metric(
-                                "SDNN (ms)", hrv_data['sdnn'],
-                                help="Desvio padrão de todos os intervalos RR normais — variabilidade geral."
-                            )
-                        with col3:
-                            st.metric(
-                                "pNN50 (%)", hrv_data['pnn50'],
-                                help="Percentual de intervalos RR consecutivos com diferença > 50 ms."
-                            )
-                        with col4:
-                            st.metric(
-                                "SDSD (ms)", hrv_data['sdsd'],
-                                help="Desvio padrão das diferenças entre intervalos RR consecutivos."
-                            )
-                        with col5:
-                            st.metric(
-                                "NN50", hrv_data['nn50'],
-                                help="Número de pares de intervalos RR consecutivos com diferença > 50 ms."
-                            )
-
-                        # ── SEÇÃO 5: FREQUÊNCIA CARDÍACA ──────────────────────────────────────
-                        st.markdown("---")
-                        st.markdown("## ❤️ Estatísticas de Frequência Cardíaca")
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.metric("FC Média (bpm)", hrv_data['frequencia_cardiaca_media'])
-                        with col2:
-                            st.metric("FC Mínima (bpm)", hrv_data['frequencia_cardiaca_min'])
-                        with col3:
-                            st.metric("FC Máxima (bpm)", hrv_data['frequencia_cardiaca_max'])
-                        with col4:
-                            st.metric("Amostras FC", hrv_data['total_amostras'])
-
-                        # ── SEÇÃO 6: DOMÍNIO DA FREQUÊNCIA (Achten & Jeukendrup, 2003) ─────────
-                        st.markdown("---")
-                        st.markdown("## 🌊 Domínio da Frequência")
-                        st.caption(
-                            "Bandas espectrais conforme Achten & Jeukendrup (2003): "
-                            "VLF 0,0033–0,04 Hz | LF 0,04–0,15 Hz | HF 0,15–0,36 Hz. "
-                            "A HRV diminui progressivamente com o aumento da intensidade do exercício "
-                            "até ~50% do VO₂máx, refletindo retirada parassimpática."
-                        )
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric(
-                                "Potência VLF (ms²)", hrv_data['vlf_power'],
-                                help="Very Low Frequency (0,0033–0,04 Hz)"
-                            )
-                        with col2:
-                            st.metric(
-                                "Potência LF (ms²)", hrv_data['lf_power'],
-                                help="Low Frequency (0,04–0,15 Hz) — modulada pelo SNS e SNP."
-                            )
-                        with col3:
-                            st.metric(
-                                "Potência HF (ms²)", hrv_data['hf_power'],
-                                help="High Frequency (0,15–0,36 Hz, Achten & Jeukendrup 2003) — reflexo vagal."
-                            )
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric(
-                                "LF (u.n.)", f"{hrv_data['lf_nu']:.1f}",
-                                help="Unidades normalizadas LF = LF / (Total − VLF) × 100"
-                            )
-                        with col2:
-                            st.metric(
-                                "HF (u.n.)", f"{hrv_data['hf_nu']:.1f}",
-                                help="Unidades normalizadas HF = HF / (Total − VLF) × 100"
-                            )
-                        with col3:
-                            st.metric(
-                                "Razão LF/HF", hrv_data['lf_hf_ratio'],
-                                help="Equilíbrio simpato-vagal. Valores > 2,0 indicam predomínio simpático."
-                            )
-                        st.info(
-                            "**Interpretação espectral (Achten & Jeukendrup, 2003):**\n"
-                            "- **HF u.n. > 50%**: predomínio parassimpático — recuperação/repouso\n"
-                            "- **LF/HF > 2,0**: predomínio simpático — estresse ou alta intensidade de exercício\n"
-                            "- **Redução de HF com exercício**: esperada à medida que a intensidade aumenta até ~50% VO₂máx"
-                        )
-
-                        # ── SEÇÃO 7: DIAGRAMA DE POINCARÉ ─────────────────────────────────────
-                        st.markdown("---")
-                        st.markdown("## 📐 Análise Não-Linear: Diagrama de Poincaré")
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric(
-                                "SD1 (ms)", hrv_data['sd1'],
-                                help="Variabilidade de curto prazo — atividade vagal batimento a batimento."
-                            )
-                        with col2:
-                            st.metric(
-                                "SD2 (ms)", hrv_data['sd2'],
-                                help="Variabilidade de longo prazo — variabilidade geral dos intervalos RR."
-                            )
-                        with col3:
-                            st.metric(
-                                "Razão SD1/SD2", hrv_data['sd_ratio'],
-                                help="SD1/SD2 próximo de 1,0 indica predominância vagal."
-                            )
-                        sensor_points_hrv = dados_sensor_por_atleta_por_periodo.get(
-                            periodo_hrv, {}
-                        ).get(atleta_hrv, [])
-                        if sensor_points_hrv:
-                            freq_hrv = [p.get('hr', 0) for p in sensor_points_hrv if p.get('hr', 0) > 0]
-                            if len(freq_hrv) > 10:
-                                rr_plot = [60000 / hr for hr in freq_hrv if hr > 0]
-                                fig_poincare = criar_poincare_plot(rr_plot, atleta_hrv, periodo_hrv)
-                                if fig_poincare:
-                                    st.plotly_chart(fig_poincare, use_container_width=True)
-
-                        # ── REFERÊNCIAS ────────────────────────────────────────────────────────
-                        st.markdown("---")
-                        st.markdown(REFERENCIAS["hrv"])
-                else:
-                    st.info("Dados de frequência cardíaca insuficientes para cálculo de HRV")
         
         else:
             st.warning("Nenhum dado encontrado")
