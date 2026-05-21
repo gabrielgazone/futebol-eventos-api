@@ -1,4 +1,35 @@
+# Ambiente virtual
+venv/
+.venv/
+env/
+ENV/
+
+# Variáveis de ambiente e segredos
 .env
+.env.*
 .streamlit/secrets.toml
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDEs
+.vscode/
+.idea/
+*.code-workspace
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
