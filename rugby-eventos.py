@@ -79,7 +79,7 @@ class CatapultAPI:
     
     def get_sensor_data(self, activity_id, athlete_id):
         params = {
-            "parameters": "ts,lat,long,v,a,hr,pl",
+            "parameters": "ts,lat,long,v,a,hr,pl,xy",
             "nulls": "1"
         }
         r = requests.get(
@@ -94,7 +94,7 @@ class CatapultAPI:
     
     def get_period_sensor_data(self, period_id, athlete_id):
         params = {
-            "parameters": "ts,lat,long,v,a,hr,pl",
+            "parameters": "ts,lat,long,v,a,hr,pl,xy",
             "nulls": "1"
         }
         r = requests.get(
@@ -1205,20 +1205,25 @@ def main():
                         if acc_efforts:
                             dados_efforts_acc[atleta_nome] = acc_efforts
                     
-                    # Dados de posição — filtra pontos que tenham lat, long E velocidade juntos
+                    # Usa x,y da API diretamente — coordenadas relativas ao campo (m desde
+                    # o canto inferior esquerdo), calculadas pela Catapult a partir da
+                    # configuração do campo no OpenField. Filtra nulos e valores absurdos
+                    # (lat=0,long=0 sem nulls=1 produz x,y na casa dos milhões).
                     pontos_pos = [
-                        (p['lat'], p['long'], p.get('v', 0) * 3.6)
+                        (float(p['x']), float(p['y']), p.get('v', 0) * 3.6)
                         for p in sensor_points
-                        if p.get('lat') is not None and p.get('long') is not None
+                        if p.get('x') is not None and p.get('y') is not None
+                        and -50 < float(p['x']) < 250
+                        and -50 < float(p['y']) < 200
                     ]
                     if pontos_pos:
-                        lats = [pt[0] for pt in pontos_pos]
-                        lons = [pt[1] for pt in pontos_pos]
+                        xs = [pt[0] for pt in pontos_pos]
+                        ys = [pt[1] for pt in pontos_pos]
                         velocidades = [pt[2] for pt in pontos_pos]
-
                         dados_posicao[atleta_nome] = {
-                            'vel': velocidades, 'lats': lats, 'lons': lons,
-                            'posicao': athlete_posicao, 'equipe': athlete_equipe
+                            'vel': velocidades, 'xs': xs, 'ys': ys,
+                            'posicao': athlete_posicao, 'equipe': athlete_equipe,
+                            'n_pontos': len(pontos_pos)
                         }
                     
                     st.success(f"✅ {atleta_nome}: {len(sensor_points)} pontos")
@@ -1359,6 +1364,7 @@ def main():
                 st.subheader("🗺️ Trajetória no Campo de Rugby")
                 st.markdown("Visualize a movimentação do atleta no campo com medidas oficiais")
                 st.caption(REFERENCIAS["campo"])
+
                 
                 if dados_posicao_por_periodo:
                     col1, col2 = st.columns(2)
@@ -1371,26 +1377,28 @@ def main():
 
                     if atleta_mapa and dados_posicao_por_periodo.get(periodo_mapa, {}).get(atleta_mapa):
                         dados = dados_posicao_por_periodo[periodo_mapa][atleta_mapa]
-                        
-                        if dados['lats'] and dados['lons'] and dados['vel']:
-                            # Converter coordenadas para campo
-                            x_coords, y_coords = lat_lon_to_campo_coords(dados['lats'], dados['lons'])
-                            
+                        st.caption(f"📡 Pontos de campo (x/y) válidos: **{dados.get('n_pontos', len(dados.get('xs', [])))}**")
+
+                        if dados.get('xs') and dados.get('ys') and dados['vel']:
+                            # x,y já estão em metros relativos ao campo — uso direto, sem conversão
+                            x_coords = dados['xs']
+                            y_coords = dados['ys']
+
                             if len(x_coords) > 0:
                                 tipo_vis = st.radio(
                                     "Tipo de visualização:",
                                     ["🗺️ Trajetória", "🔥 Mapa de Calor", "📊 Ambos"],
                                     horizontal=True
                                 )
-                                
+
                                 if tipo_vis in ["🗺️ Trajetória", "📊 Ambos"]:
                                     fig_traj = plotar_trajetoria_campo(x_coords, y_coords, dados['vel'], atleta_mapa)
                                     st.plotly_chart(fig_traj, use_container_width=True)
-                                
+
                                 if tipo_vis in ["🔥 Mapa de Calor", "📊 Ambos"]:
                                     fig_heat = plotar_heatmap_campo(x_coords, y_coords, dados['vel'], atleta_mapa)
                                     st.plotly_chart(fig_heat, use_container_width=True)
-                                
+
                                 # Estatísticas
                                 st.markdown("#### 📊 Estatísticas de Movimentação")
                                 col1, col2, col3, col4 = st.columns(4)
@@ -1407,13 +1415,19 @@ def main():
                                     area = x_range * y_range
                                     st.metric("Área Percorrida", f"{area:.0f} m²")
                             else:
-                                st.warning("Não foi possível converter as coordenadas")
+                                st.error("❌ Não foi possível converter as coordenadas GPS")
                         else:
-                            st.warning("Dados de posição incompletos")
+                            st.error(
+                                "❌ Nenhum ponto de campo (x/y) válido encontrado para este atleta.\n\n"
+                                "**Causas prováveis:**\n"
+                                "- O campo não está configurado no OpenField para esta atividade\n"
+                                "- Sensor GPS sem lock (x/y retornados como nulos pela API)\n"
+                                "- Parâmetro `xy` não disponível neste perfil de sincronização"
+                            )
                     else:
                         st.info("Selecione um período e atleta")
                 else:
-                    st.info("Dados de posição não disponíveis")
+                    st.info("Dados de posição não disponíveis. Verifique se o sensor GPS estava ativo durante a sessão.")
             
             # ==================== ABA 3: ESFORÇOS AO LONGO DO TEMPO ====================
             with abas[2]:
