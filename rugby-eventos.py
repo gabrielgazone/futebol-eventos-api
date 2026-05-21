@@ -1380,9 +1380,11 @@ def main():
                         st.caption(f"📡 Pontos de campo (x/y) válidos: **{dados.get('n_pontos', len(dados.get('xs', [])))}**")
 
                         if dados.get('xs') and dados.get('ys') and dados['vel']:
-                            # x,y já estão em metros relativos ao campo — uso direto, sem conversão
-                            x_coords = dados['xs']
-                            y_coords = dados['ys']
+                            # Normaliza x,y para 0-100 × 0-70 (dimensões do campo desenhado).
+                            # Os valores brutos da API estão em metros relativos ao campo mas
+                            # podem ter range diferente dependendo da configuração do OpenField
+                            # (in-goal incluídos, campo rotacionado, origem deslocada, etc.).
+                            x_coords, y_coords = lat_lon_to_campo_coords(dados['xs'], dados['ys'])
 
                             if len(x_coords) > 0:
                                 tipo_vis = st.radio(
