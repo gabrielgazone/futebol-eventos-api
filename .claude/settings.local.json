@@ -15,7 +15,8 @@
       "Bash(dir \"C:\\\\Users\\\\User\\\\Desktop\\\\curso\\\\rugby-eventos\\\\_campo_component\\\\\")",
       "Bash(python -c \"import ast, sys; ast.parse\\(open\\('futebol-eventos.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK - sem erros de sintaxe'\\)\")",
       "Bash(python -c \"lines = open\\('futebol-eventos.py', encoding='utf-8'\\).readlines\\(\\); print\\(f'Total de linhas: {len\\(lines\\)}'\\)\")",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('futebol-eventos.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK - sem erros de sintaxe'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('futebol-eventos.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK - sem erros de sintaxe'\\)\")",
+      "Bash(venv\\\\Scripts\\\\python.exe -m py_compile futebol-eventos.py)"
     ]
   }
 }

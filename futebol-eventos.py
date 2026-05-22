@@ -438,6 +438,45 @@ class CatapultAPI:
 
     # PARTE 2 - FUNÇÕES DE EXTRAÇÃO, CONVERSÃO E CÁLCULO
 
+# ── Parâmetro global de duração mínima de esforço (segundos) ──────────────────
+# Catapult: 0.6 s | StatSports: 0.4 s | configurável pelo usuário na sidebar
+_DEFAULT_MIN_DUR_S = 0.6
+_SENSOR_HZ = 10  # frequência de amostragem Catapult (10 Hz)
+
+
+def detectar_eventos_acc(acc_arr, limiar, min_dur_s=0.6, acima=True, freq_hz=10):
+    """
+    Retorna máscara booleana onde True = primeiro frame que completou
+    a duração mínima (min_dur_s) dentro de uma zona de threshold contínua.
+    Isso conta cada evento UMA vez (entrada na zona sustentada).
+
+    acima=True → acc >= limiar (aceleração)
+    acima=False → acc <= -limiar (desaceleração)
+    """
+    min_frames = max(1, round(min_dur_s * freq_hz))
+    n = len(acc_arr)
+    eventos = np.zeros(n, dtype=bool)
+    run = 0
+    in_event = False
+    for i in range(n):
+        v = acc_arr[i]
+        cond = (v >= limiar) if acima else (v <= -limiar)
+        if cond:
+            run += 1
+            if run == min_frames and not in_event:
+                eventos[i] = True
+                in_event = True
+        else:
+            run = 0
+            in_event = False
+    return eventos
+
+
+def get_min_dur_s():
+    """Lê o slider de duração mínima do session_state (com fallback para padrão)."""
+    return float(st.session_state.get('min_dur_esforco', _DEFAULT_MIN_DUR_S))
+
+
 def extrair_dados_sensor(response_data):
     if not response_data:
         return []
@@ -464,7 +503,7 @@ def extrair_efforts_data(response_data):
     
     return velocity_efforts, acceleration_efforts
 
-# ==================== FUNÇÃO CORRIGIDA PARA CAMPO DE RUGBY ====================
+# ==================== CONVERSÃO DE COORDENADAS GPS → CAMPO ====================
 
 def lat_lon_to_campo_coords(latitudes, longitudes):
     """
@@ -1906,17 +1945,27 @@ def lat_lon_to_xy(latitudes, longitudes):
     
     return x, y
 
-def calcular_metricas(sensor_points, athlete_name):
+def calcular_metricas(sensor_points, athlete_name, min_dur_s=None):
     if not sensor_points:
         return None
-    
+
+    if min_dur_s is None:
+        min_dur_s = get_min_dur_s()
+
     distancia_total = 0
+    dist_hi = 0
+    dist_sprint = 0
     player_load = 0
     velocidades = []
     fcs = []
-    velocidade_anterior = 0
-    
+    acc_list = []
+
     prev_v = None
+    in_sprint = False
+    in_hi = False
+    sprints = 0
+    n_esforcos_hi = 0
+
     for ponto in sensor_points:
         if ponto.get('v') is not None:
             v_ms = float(ponto['v'])
@@ -1924,17 +1973,46 @@ def calcular_metricas(sensor_points, athlete_name):
             velocidades.append(v_kmh)
 
             if prev_v is not None:
-                distancia_total += ((prev_v + v_ms) / 2) * 0.1
+                dt = 0.1  # 10 Hz
+                dist_seg = ((prev_v + v_ms) / 2) * dt
+                distancia_total += dist_seg
+                if v_kmh > 19:
+                    dist_hi += dist_seg
+                if v_kmh > 24:
+                    dist_sprint += dist_seg
+
+            if v_kmh > 24 and not in_sprint:
+                sprints += 1
+                in_sprint = True
+            elif v_kmh <= 24:
+                in_sprint = False
+
+            if v_kmh > 19 and not in_hi:
+                n_esforcos_hi += 1
+                in_hi = True
+            elif v_kmh <= 19:
+                in_hi = False
+
             prev_v = v_ms
 
         if ponto.get('a') is not None:
             acc = float(ponto['a'])
             player_load += acc ** 2
+            acc_list.append(acc)
+        else:
+            acc_list.append(0.0)
 
         if ponto.get('hr') is not None:
             hr = float(ponto['hr'])
             if hr > 0:
                 fcs.append(hr)
+
+    # Conta eventos de acc/dec com duração mínima sustentada
+    acc_arr = np.array(acc_list)
+    mask_acel = detectar_eventos_acc(acc_arr, 3.0, min_dur_s=min_dur_s, acima=True)
+    mask_decel = detectar_eventos_acc(acc_arr, 3.0, min_dur_s=min_dur_s, acima=False)
+    acels_intensas = int(mask_acel.sum())
+    desacels_intensas = int(mask_decel.sum())
 
     duracao_min = len(sensor_points) * 0.1 / 60
 
@@ -1942,11 +2020,17 @@ def calcular_metricas(sensor_points, athlete_name):
         'Atleta': athlete_name,
         'Duração (min)': round(duracao_min, 1),
         'Distância (m)': round(distancia_total, 0),
+        'Dist. > 19 km/h (m)': round(dist_hi, 0),
+        'Dist. > 24 km/h (m)': round(dist_sprint, 0),
         'PlayerLoad': round(player_load, 0),
         'Velocidade Máx (km/h)': round(max(velocidades), 1) if velocidades else 0,
         'Velocidade Média (km/h)': round(np.mean(velocidades), 1) if velocidades else 0,
         'FC Máx (bpm)': round(max(fcs), 0) if fcs else 0,
         'FC Média (bpm)': round(np.mean(fcs), 0) if fcs else 0,
+        'Sprints (>24 km/h)': sprints,
+        'Esforços Alta Int.': n_esforcos_hi,
+        'Acelerações (>3 m/s²)': acels_intensas,
+        'Desacelerações (<-3 m/s²)': desacels_intensas,
         'Total Pontos': len(sensor_points)
     }
 
@@ -2604,10 +2688,15 @@ def calcular_voronoi_campo(posicoes_atletas, field_length=105, field_width=68, r
 
 # ==================== FEATURE 6: CARGA NEUROMUSCULAR ====================
 
-def calcular_carga_neuromuscular(sensor_points, limiar=2.0):
-    """Analisa esforços de acc/dec intensos como indicador de carga neuromuscular."""
+def calcular_carga_neuromuscular(sensor_points, limiar=2.0, min_dur_s=None):
+    """Analisa esforços de acc/dec intensos como indicador de carga neuromuscular.
+    Conta EVENTOS (entradas na zona sustentadas por min_dur_s), não amostras.
+    """
     if not sensor_points:
         return None
+
+    if min_dur_s is None:
+        min_dur_s = get_min_dur_s()
 
     ts_l, acc_l, vel_l = [], [], []
     for p in sensor_points:
@@ -2625,16 +2714,19 @@ def calcular_carga_neuromuscular(sensor_points, limiar=2.0):
     ts_rel  = ts_arr - ts_arr.min()
     duracao = float(ts_rel.max())
 
-    lm = limiar * 0.65
-    mask_hi_acc  = acc_arr >= limiar
-    mask_med_acc = (acc_arr >= lm) & (acc_arr < limiar)
-    mask_hi_dec  = acc_arr <= -limiar
-    mask_med_dec = (acc_arr <= -lm) & (acc_arr > -limiar)
+    lm = limiar * 0.65  # limiar médio
+
+    # Máscaras de EVENTOS (um True por evento, no frame que completa a duração mínima)
+    mask_hi_acc  = detectar_eventos_acc(acc_arr,  limiar, min_dur_s=min_dur_s, acima=True)
+    mask_hi_dec  = detectar_eventos_acc(acc_arr,  limiar, min_dur_s=min_dur_s, acima=False)
+    mask_med_acc = detectar_eventos_acc(acc_arr,  lm,    min_dur_s=min_dur_s, acima=True)  & ~mask_hi_acc
+    mask_med_dec = detectar_eventos_acc(acc_arr,  lm,    min_dur_s=min_dur_s, acima=False) & ~mask_hi_dec
 
     t_bins = np.arange(0, duracao + 60, 60)
     n_bins = max(1, len(t_bins) - 1)
 
-    def _cpm(mask):
+    def _epm(mask):
+        """Eventos por minuto em cada bin."""
         return np.array([
             mask[(ts_rel >= t_bins[i]) & (ts_rel < t_bins[i + 1])].sum()
             for i in range(n_bins)
@@ -2643,18 +2735,20 @@ def calcular_carga_neuromuscular(sensor_points, limiar=2.0):
     t_mid = [(t_bins[i] + t_bins[i + 1]) / 2 / 60 for i in range(n_bins)]
     return {
         'ts_rel': ts_rel, 'acc': acc_arr, 'vel': vel_arr, 't_mid': t_mid,
-        'hi_acc_min':  _cpm(mask_hi_acc),  'hi_dec_min':  _cpm(mask_hi_dec),
-        'med_acc_min': _cpm(mask_med_acc), 'med_dec_min': _cpm(mask_med_dec),
+        'hi_acc_min':  _epm(mask_hi_acc),  'hi_dec_min':  _epm(mask_hi_dec),
+        'med_acc_min': _epm(mask_med_acc), 'med_dec_min': _epm(mask_med_dec),
         'total_hi_acc':  int(mask_hi_acc.sum()),  'total_hi_dec':  int(mask_hi_dec.sum()),
         'total_med_acc': int(mask_med_acc.sum()), 'total_med_dec': int(mask_med_dec.sum()),
         'limiar': limiar,
+        'min_dur_s': min_dur_s,
     }
 
 
 def plotar_carga_neuromuscular(dados, atleta_nome):
     """Painel Plotly 2×2 com análise de carga neuromuscular."""
-    lim = dados['limiar']
-    t   = dados['t_mid']
+    lim      = dados['limiar']
+    t        = dados['t_mid']
+    _dur_lbl = f"{dados.get('min_dur_s', _DEFAULT_MIN_DUR_S):.1f}s"
 
     fig = make_subplots(
         rows=2, cols=2,
@@ -2701,7 +2795,7 @@ def plotar_carga_neuromuscular(dados, atleta_nome):
     ), row=2, col=2)
 
     fig.update_layout(
-        title=dict(text=f'💪 Carga Neuromuscular — {atleta_nome}',
+        title=dict(text=f'💪 Carga Neuromuscular — {atleta_nome}  (dur. mín. {_dur_lbl})',
                    font=dict(size=16, color='white')),
         height=620, paper_bgcolor='#0a0a1e', plot_bgcolor='#1a1a2e',
         font=dict(color='white'), barmode='stack',
@@ -3020,8 +3114,8 @@ def main():
                 teams_raw = api.get_teams()
                 if teams_raw:
                     teams_data = []
-                    for t in teams_raw:
-                        teams_data.append({'id': t.get('id'), 'nome': t.get('name'), 'slug': t.get('slug')})
+                    for team in teams_raw:
+                        teams_data.append({'id': team.get('id'), 'nome': team.get('name'), 'slug': team.get('slug')})
                     st.session_state.df_teams = pd.DataFrame(teams_data)
                     st.success(f"✅ {len(teams_data)} equipes carregadas")
                     
@@ -3101,7 +3195,8 @@ def main():
             
             st.subheader("📅 Atividade")
             atividade_sel = st.selectbox("Selecione a atividade:", st.session_state.df_activities['nome'].tolist())
-            
+            st.session_state['_atividade_sel_cached'] = atividade_sel
+
             if atividade_sel:
                 activity_id = st.session_state.df_activities[st.session_state.df_activities['nome'] == atividade_sel]['id'].values[0]
                 st.session_state.activity_id = activity_id
@@ -3185,6 +3280,29 @@ def main():
                     atletas_sel = st.multiselect("Selecione os atletas para análise:", st.session_state.atletas_filtrados['nome'].tolist())
                     st.session_state.atletas_sel = atletas_sel
 
+        # ── Parâmetros de análise de esforço ─────────────────────────
+        if not st.session_state.get('df_activities', pd.DataFrame()).empty and token:
+            st.markdown("---")
+            st.header("⚙️ Parâmetros de Esforço")
+            st.slider(
+                "⏱️ Duração mínima de acc/dec (s):",
+                min_value=0.1, max_value=1.5,
+                value=float(st.session_state.get('min_dur_esforco', _DEFAULT_MIN_DUR_S)),
+                step=0.1,
+                key="min_dur_esforco",
+                help=(
+                    "Tempo mínimo contínuo na zona de threshold para contar um evento.\n\n"
+                    "🔵 Catapult OpenField: 0.6 s\n"
+                    "🟢 StatSports: 0.4 s\n"
+                    "Ajuste conforme o sistema de referência da sua análise."
+                )
+            )
+            _dur_atual = st.session_state.get('min_dur_esforco', _DEFAULT_MIN_DUR_S)
+            st.caption(
+                f"Mínimo: **{_dur_atual:.1f} s** = "
+                f"**{max(1, round(_dur_atual * _SENSOR_HZ))} frames** a 10 Hz"
+            )
+
         # ── Seletor de Eventos Futebol ────────────────────────────────
         if not st.session_state.get('df_activities', pd.DataFrame()).empty and token:
             st.markdown("---")
@@ -3207,15 +3325,20 @@ def main():
                            "Os eventos serão carregados junto com os dados.")
     
     # Área principal
-    if ('api' in st.session_state and 'atletas_sel' in st.session_state and 
+    if ('api' in st.session_state and 'atletas_sel' in st.session_state and
         st.session_state.atletas_sel and 'activity_id' in st.session_state):
-        
+
         api = st.session_state.api
         activity_id = st.session_state.activity_id
         periodos_selecionados = st.session_state.get('periodos_selecionados', ['Atividade Completa'])
         period_ids = st.session_state.get('period_ids', {})
-        
-        st.info(f"📌 Atividade: {atividade_sel}")
+        _atividade_nome = locals().get('atividade_sel', st.session_state.get('_atividade_sel_cached', ''))
+        if _atividade_nome:
+            st.session_state['_atividade_sel_cached'] = _atividade_nome
+        else:
+            _atividade_nome = st.session_state.get('_atividade_sel_cached', '')
+
+        st.info(f"📌 Atividade: {_atividade_nome}")
         st.info(f"📌 Períodos selecionados: {', '.join(periodos_selecionados)}")
         
         # Dicionários para armazenar dados por período
@@ -3326,7 +3449,7 @@ def main():
                         gps_sub = pontos_gps[::step_gps]
                         if atleta_nome not in dados_posicao:
                             dados_posicao[atleta_nome] = {
-                                'vel': [], 'xs': [], 'ys': [],
+                                'vel': [], 'xs': [], 'ys': [], 'acc': [], 'ts_pos': [],
                                 'posicao': athlete_posicao, 'equipe': athlete_equipe,
                                 'n_pontos': 0
                             }
@@ -3426,7 +3549,10 @@ def main():
                         
                         if atletas_selecionados_comp:
                             df_filtrado = df_comp[df_comp['Atleta'].isin(atletas_selecionados_comp)]
-                            metricas_comp = ['Distância (m)', 'PlayerLoad', 'Velocidade Máx (km/h)', 'Velocidade Média (km/h)', 'FC Média (bpm)']
+                            _todas_metricas = ['Distância (m)', 'Dist. > 19 km/h (m)', 'Dist. > 24 km/h (m)',
+                                               'PlayerLoad', 'Velocidade Máx (km/h)', 'Velocidade Média (km/h)',
+                                               'FC Média (bpm)', 'Sprints (>24 km/h)', 'Acelerações (>3 m/s²)']
+                            metricas_comp = [m for m in _todas_metricas if m in df_filtrado.columns]
                             
                             col1, col2 = st.columns(2)
                             with col1:
@@ -3437,17 +3563,26 @@ def main():
                             with col2:
                                 if len(atletas_selecionados_comp) <= 5:
                                     fig_radar = go.Figure()
+                                    # Normaliza cada métrica para 0-1 para comparação justa
+                                    _radar_df = df_filtrado[df_filtrado['Atleta'].isin(atletas_selecionados_comp[:5])][['Atleta'] + metricas_comp].copy()
+                                    _radar_max = _radar_df[metricas_comp].max()
+                                    _radar_max = _radar_max.replace(0, 1)  # evita divisão por zero
                                     for atleta in atletas_selecionados_comp[:5]:
-                                        valores = df_filtrado[df_filtrado['Atleta'] == atleta][metricas_comp].iloc[0].tolist()
+                                        _row = _radar_df[_radar_df['Atleta'] == atleta][metricas_comp].iloc[0]
+                                        valores_norm = (_row / _radar_max).tolist()
                                         fig_radar.add_trace(go.Scatterpolar(
-                                            r=valores,
+                                            r=valores_norm,
                                             theta=metricas_comp,
                                             fill='toself',
                                             name=atleta
                                         ))
-                                    fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True)), title="Comparação Radial (Normalizado)")
+                                    fig_radar.update_layout(
+                                        polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
+                                        title="Comparação Radial (Normalizado 0–1)"
+                                    )
                                     st.plotly_chart(fig_radar, use_container_width=True)
-                            st.dataframe(df_filtrado[['Atleta', 'Equipe', 'Posição'] + metricas_comp], use_container_width=True)
+                            _cols_show = [c for c in ['Atleta', 'Equipe', 'Posição'] + metricas_comp if c in df_filtrado.columns]
+                            st.dataframe(df_filtrado[_cols_show], use_container_width=True)
                 
                 else:
                     primeiro_periodo = list(resultados_por_periodo.keys())[0]
@@ -3464,7 +3599,11 @@ def main():
                                     dados_atleta[periodo] = atleta_data.iloc[0]
                         
                         if dados_atleta:
-                            metricas_comp = ['Distância (m)', 'PlayerLoad', 'Velocidade Máx (km/h)', 'Velocidade Média (km/h)', 'FC Média (bpm)']
+                            _primeiro_periodo_dados = list(dados_atleta.values())[0]
+                            _todas_metricas_p = ['Distância (m)', 'Dist. > 19 km/h (m)', 'Dist. > 24 km/h (m)',
+                                                 'PlayerLoad', 'Velocidade Máx (km/h)', 'Velocidade Média (km/h)',
+                                                 'FC Média (bpm)', 'Sprints (>24 km/h)', 'Acelerações (>3 m/s²)']
+                            metricas_comp = [m for m in _todas_metricas_p if m in _primeiro_periodo_dados.index]
                             df_comparativo = pd.DataFrame({
                                 periodo: [dados_atleta[periodo].get(m, 0) for m in metricas_comp]
                                 for periodo in dados_atleta.keys()
@@ -3488,35 +3627,57 @@ def main():
                                 st.plotly_chart(fig_line, use_container_width=True)
                             st.dataframe(df_comparativo, use_container_width=True)
             
-            # ==================== ABA 2: CAMPO DE RUGBY ====================
+            # ==================== ABA 2: CAMPO DE FUTEBOL ====================
             with abas[1]:
                 st.subheader("🗺️ Campo de Futebol — Análise de Movimentação")
                 st.caption(REFERENCIAS["campo"])
 
                 if dados_posicao_por_periodo:
+                    _todos_periodos = list(dados_posicao_por_periodo.keys())
                     col1, col2 = st.columns(2)
                     with col1:
-                        periodo_mapa = st.selectbox("Selecione o período:", list(dados_posicao_por_periodo.keys()), key="periodo_mapa")
+                        periodos_mapa_sel = st.multiselect(
+                            "Selecione o(s) período(s):",
+                            options=_todos_periodos,
+                            default=_todos_periodos[:1],
+                            key="periodos_mapa_sel"
+                        )
                     atleta_mapa = None
+                    # Período de referência (primeiro selecionado) — usado para config do campo
+                    periodo_mapa = periodos_mapa_sel[0] if periodos_mapa_sel else _todos_periodos[0]
                     with col2:
-                        if dados_posicao_por_periodo[periodo_mapa]:
-                            atleta_mapa = st.selectbox("Selecione o atleta:", list(dados_posicao_por_periodo[periodo_mapa].keys()), key="atleta_mapa")
+                        # União de atletas disponíveis em todos os períodos selecionados
+                        _ats_disponiveis = []
+                        for _pm in (periodos_mapa_sel or [periodo_mapa]):
+                            for _a in dados_posicao_por_periodo.get(_pm, {}).keys():
+                                if _a not in _ats_disponiveis:
+                                    _ats_disponiveis.append(_a)
+                        if _ats_disponiveis:
+                            atleta_mapa = st.selectbox("Selecione o atleta:", _ats_disponiveis, key="atleta_mapa")
 
-                    if atleta_mapa and dados_posicao_por_periodo.get(periodo_mapa, {}).get(atleta_mapa):
-                        dados = dados_posicao_por_periodo[periodo_mapa][atleta_mapa]
+                    if not periodos_mapa_sel:
+                        st.info("Selecione pelo menos um período.")
+                    elif atleta_mapa:
+                        # Combina dados de todos os períodos selecionados
+                        dados = dados_posicao_por_periodo.get(periodo_mapa, {}).get(atleta_mapa, {})
 
-                        n_xy  = dados.get('n_pontos', len(dados.get('xs', [])))
-                        n_gps = len(dados.get('lats', []))
-                        st.caption(f"📡 Pontos campo (x/y): **{n_xy}** &nbsp;|&nbsp; 🌍 Pontos GPS reais (lat/lon): **{n_gps}**")
+                        # GPS combinado (todos os períodos)
+                        lats_gps, lons_gps, vels_gps, ts_gps = [], [], [], []
+                        for _pm in periodos_mapa_sel:
+                            _d = dados_posicao_por_periodo.get(_pm, {}).get(atleta_mapa, {})
+                            lats_gps  += _d.get('lats', [])
+                            lons_gps  += _d.get('lons', [])
+                            vels_gps  += _d.get('vels_gps', [])
+                            ts_gps    += _d.get('ts_gps', [])
+
+                        n_xy  = sum(dados_posicao_por_periodo.get(_pm, {}).get(atleta_mapa, {}).get('n_pontos', 0) for _pm in periodos_mapa_sel)
+                        n_gps = len(lats_gps)
+                        _label_periodos = " + ".join(periodos_mapa_sel)
+                        st.caption(f"📡 Pontos campo (x/y): **{n_xy}** &nbsp;|&nbsp; 🌍 Pontos GPS: **{n_gps}** &nbsp;|&nbsp; 📅 **{_label_periodos}**")
 
                         # Chave por atleta (campo físico não muda entre períodos)
                         campo_key = f"campo_cfg__{atleta_mapa}"
                         campo_aplicado = campo_key in st.session_state
-
-                        lats_gps  = dados.get('lats', [])
-                        lons_gps  = dados.get('lons', [])
-                        vels_gps  = dados.get('vels_gps', [])
-                        ts_gps    = dados.get('ts_gps', [])
 
                         # ══════════════════════════════════════════════════════
                         # FASE 1 — POSICIONAMENTO INTERATIVO NO SATÉLITE
@@ -3554,7 +3715,7 @@ def main():
                                     pts=_pts,
                                     lat_c=_lat_c,
                                     lon_c=_lon_c,
-                                    key=f"campo_mapa_{periodo_mapa}_{atleta_mapa}",
+                                    key=f"campo_mapa_{atleta_mapa}",
                                     default=None
                                 )
 
@@ -3607,9 +3768,11 @@ def main():
                             # ── ETAPA 2: Análise de esforços ─────────────────────
                             st.markdown("### 2️⃣ Análise de Esforços no Campo")
 
-                            # Dados de esforços deste atleta/período
-                            vel_raw = dados_efforts_vel_por_periodo.get(periodo_mapa, {}).get(atleta_mapa, [])
-                            acc_raw = dados_efforts_acc_por_periodo.get(periodo_mapa, {}).get(atleta_mapa, [])
+                            # Esforços combinados de todos os períodos selecionados
+                            vel_raw, acc_raw = [], []
+                            for _pm in periodos_mapa_sel:
+                                vel_raw += dados_efforts_vel_por_periodo.get(_pm, {}).get(atleta_mapa, [])
+                                acc_raw += dados_efforts_acc_por_periodo.get(_pm, {}).get(atleta_mapa, [])
 
                             tipo_esf = st.radio(
                                 "Tipo de esforço:",
@@ -3697,7 +3860,7 @@ def main():
                                     st.download_button(
                                         "📥 Exportar esforços",
                                         efforts_df_show.to_csv(index=False),
-                                        file_name=f"esforcos_{atleta_mapa}_{periodo_mapa}.csv"
+                                        file_name=f"esforcos_{atleta_mapa}_{_label_periodos.replace(' + ','_')}.csv"
                                     )
                                 else:
                                     st.info("Nenhum esforço encontrado após aplicar os filtros.")
@@ -3725,24 +3888,39 @@ def main():
                             # ── ETAPA 3: Campo bonito + análise avançada ─────────
                             st.markdown("### 3️⃣ Análise de Movimentação no Campo")
 
-                            # Fonte: Catapult x/y (prioritário) ou GPS derivado via campo aplicado
-                            _has_xy  = bool(dados.get('xs') and dados.get('ys') and dados.get('vel'))
+                            # Combina coordenadas de todos os períodos selecionados
+                            xn, yn, vel_raw_campo, acc_raw_campo = [], [], [], []
+                            _fonte_xy = False
+                            for _pm in periodos_mapa_sel:
+                                _dc = dados_posicao_por_periodo.get(_pm, {}).get(atleta_mapa, {})
+                                if _dc.get('xs') and _dc.get('ys') and _dc.get('vel'):
+                                    xn  += list(_dc['xs'])
+                                    yn  += list(_dc['ys'])
+                                    vel_raw_campo += list(_dc['vel'])
+                                    acc_raw_campo += list(_dc.get('acc', [0.0]*len(_dc['xs'])))
+                                    _fonte_xy = True
+                                elif lats_gps and cfg:
+                                    _lats_pm = _dc.get('lats', [])
+                                    _lons_pm = _dc.get('lons', [])
+                                    if _lats_pm:
+                                        _gx, _gy = gps_para_campo_coords(_lats_pm, _lons_pm, cfg)
+                                        xn  += _gx
+                                        yn  += _gy
+                                        vel_raw_campo += _dc.get('vels_gps', [0.0]*len(_gx))
+                                        acc_raw_campo += [0.0]*len(_gx)
+
+                            _has_xy  = bool(xn and yn)
                             _has_gps = bool(lats_gps and lons_gps and cfg)
 
-                            if not _has_xy and _has_gps:
-                                st.caption("🌍 Coordenadas derivadas do GPS + campo aplicado.")
-                            elif _has_xy:
+                            if _fonte_xy:
                                 st.caption("📡 Coordenadas x/y Catapult OpenField")
+                            elif not _fonte_xy and _has_gps:
+                                st.caption("🌍 Coordenadas derivadas do GPS + campo aplicado.")
+
+                            vel_raw = vel_raw_campo
+                            acc_raw = acc_raw_campo
 
                             if _has_xy or _has_gps:
-                                if _has_xy:
-                                    xn, yn  = lat_lon_to_campo_coords(dados['xs'], dados['ys'])
-                                    vel_raw = dados['vel']
-                                    acc_raw = dados.get('acc', [0.0]*len(xn))
-                                else:
-                                    xn, yn  = gps_para_campo_coords(lats_gps, lons_gps, cfg)
-                                    vel_raw = vels_gps if vels_gps else [0.0]*len(xn)
-                                    acc_raw = [0.0]*len(xn)
 
                                 if len(xn) > 0:
                                     # ── Linha 1: modo de visualização ────────────────
@@ -3792,8 +3970,13 @@ def main():
                                     _dados_ev_campo = {}
                                     _ev_tipos_sel   = []
                                     if ov_eventos:
-                                        _ev_raw = dados_eventos_por_periodo.get(
-                                            periodo_mapa, {}).get(atleta_mapa, {})
+                                        # Combina eventos de todos os períodos selecionados
+                                        _ev_raw = {}
+                                        for _pm in periodos_mapa_sel:
+                                            _ev_pm = dados_eventos_por_periodo.get(_pm, {}).get(atleta_mapa, {})
+                                            for _et, _evlist in _ev_pm.items():
+                                                _ev_raw.setdefault(_et, [])
+                                                _ev_raw[_et] += _evlist
                                         if _ev_raw:
                                             # Enriquecer com posição no campo agora que temos cfg
                                             _ev_rich = enriquecer_eventos_com_posicao(
@@ -3840,7 +4023,7 @@ def main():
 
                                     # ── Construir figura ──────────────────────────────
                                     fig_campo = desenhar_campo_futebol_bonito(
-                                        title=f"📍 {atleta_mapa} — {periodo_mapa}")
+                                        title=f"📍 {atleta_mapa} — {_label_periodos}")
 
                                     if modo_viz == "🗺️ Trajetória":
                                         adicionar_trajetoria_campo(fig_campo, xn, yn, vel_raw, atleta_mapa)
@@ -3927,8 +4110,8 @@ def main():
                                                 f"campo_cfg__{atleta_mapa}", cfg)
                                             cfg2 = cfg1  # mesmo campo físico para todos os períodos
                                             if d1c.get('xs') and d2c.get('xs'):
-                                                x1c, y1c = lat_lon_to_campo_coords(d1c['xs'], d1c['ys'])
-                                                x2c, y2c = lat_lon_to_campo_coords(d2c['xs'], d2c['ys'])
+                                                x1c, y1c = list(d1c['xs']), list(d1c['ys'])
+                                                x2c, y2c = list(d2c['xs']), list(d2c['ys'])
                                             elif d1c.get('lats') and d2c.get('lats') and cfg1 and cfg2:
                                                 x1c, y1c = gps_para_campo_coords(
                                                     d1c['lats'], d1c['lons'], cfg1)
@@ -3961,8 +4144,8 @@ def main():
                                     "- Verifique se o sensor GPS estava ativo durante a sessão"
                                 )
 
-                    else:
-                        st.info("Selecione um período e atleta")
+                    elif periodos_mapa_sel:
+                        st.info("Selecione um atleta para continuar.")
 
                     # ══════════════════════════════════════════════════════
                     # FEATURE 1 — HEATMAP TEMPORAL SEGMENTADO
@@ -4084,6 +4267,12 @@ def main():
                             else:
                                 intensidade_min = None
                         
+                        _dur_s_aba3 = get_min_dur_s()
+                        st.caption(
+                            f"⚙️ Duração mínima de acc/dec: **{_dur_s_aba3:.1f} s** "
+                            f"({max(1, round(_dur_s_aba3 * _SENSOR_HZ))} frames) — "
+                            "ajuste na sidebar."
+                        )
                         st.markdown("### 🏃‍♂️ Velocidade ao Longo do Tempo")
                         fig_vel = criar_grafico_velocidade_tempo(sensor_points, atleta_escolhido, window_size, mostrar_tendencia, intensidade_min)
                         if fig_vel:
@@ -4239,6 +4428,12 @@ def main():
                         sensor_points = dados_sensor_por_atleta_por_periodo[periodo_janela][atleta_janela]
                         
                         if sensor_points:
+                            _dur_s_aba4 = get_min_dur_s()
+                            st.caption(
+                                f"⚙️ Duração mínima de acc/dec: **{_dur_s_aba4:.1f} s** "
+                                f"({max(1, round(_dur_s_aba4 * _SENSOR_HZ))} frames) — "
+                                "ajuste na sidebar."
+                            )
                             bandas_vel = [3, 4, 5, 6, 7, 8]
                             bandas_acc = [1, 2, 3]
 
@@ -4312,8 +4507,14 @@ def main():
                                             key="nm_limiar",
                                             help="Acelerações/desacelerações acima deste valor são classificadas como intensas.")
 
+                        _nm_dur_s = get_min_dur_s()
+                        st.caption(
+                            f"⚙️ Duração mínima de acc/dec: **{_nm_dur_s:.1f} s** "
+                            f"({max(1, round(_nm_dur_s * _SENSOR_HZ))} frames a 10 Hz) — "
+                            "ajuste na sidebar."
+                        )
                         _nm_sp = dados_sensor_por_atleta_por_periodo[_nm_per][_nm_atl]
-                        _nm_dados = calcular_carga_neuromuscular(_nm_sp, limiar=_nm_lim)
+                        _nm_dados = calcular_carga_neuromuscular(_nm_sp, limiar=_nm_lim, min_dur_s=_nm_dur_s)
 
                         if _nm_dados:
                             # Métricas resumo
@@ -4500,5 +4701,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
     
