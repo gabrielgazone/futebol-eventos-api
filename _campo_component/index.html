@@ -39,15 +39,9 @@
   <div id='panel'>
     <button class='btn' id='btnC' onclick='toggleCampo()'>⚽ Mostrar Campo</button>
 
-    <!-- Seletor de mapa base -->
+    <!-- Mapa fixo: Google Satellite -->
     <div class='ctrl'>
-      <label>🗺️ Mapa base:</label>
-      <select id='mapSelect' onchange='switchTiles(this.value)'>
-        <option value='google_satellite'>🛰️ Google Satélite</option>
-        <option value='google_hybrid'>🛰️ Google Híbrido</option>
-        <option value='esri'>🌍 Esri Imagery</option>
-        <option value='osm'>🗺️ OpenStreetMap</option>
-      </select>
+      <span style='color:#4CAF50;font-size:12px;font-weight:bold'>🛰️ Google Satellite</span>
     </div>
 
     <div class='ctrl'>
@@ -186,8 +180,13 @@
 
     map = L.map('map', {maxZoom: 21}).setView([cLat, cLon], 18);
 
-    // Inicia com Google Satellite (melhor cobertura global)
-    switchTiles('google_satellite');
+    // Google Satellite — maior cobertura global e no Brasil
+    L.tileLayer('https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
+      subdomains: ['mt0','mt1','mt2','mt3'],
+      attribution: '© Google Satellite',
+      maxZoom: 21,
+      maxNativeZoom: 21
+    }).addTo(map);
 
     // Trajetória GPS colorida
     function vc(v){

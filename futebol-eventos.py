@@ -2592,8 +2592,10 @@ def gerar_heatmap_segmentado(xs, ys, ts_list, bloco_min, bloco_idx, field_length
 
     xb = xs_arr[mascara]
     yb = ys_arr[mascara]
-    xb = xb[(xb >= 0) & (xb <= field_length)]
-    yb = yb[(yb >= 0) & (yb <= field_width)]
+    # Filtra ambos com a mesma máscara para garantir mesmo comprimento
+    _valido = (xb >= 0) & (xb <= field_length) & (yb >= 0) & (yb <= field_width)
+    xb = xb[_valido]
+    yb = yb[_valido]
 
     if len(xb) < 5:
         return None, int(mascara.sum()), label
