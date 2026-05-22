@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='utf-8'>
+  <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>
+  <script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#111;font-family:Arial,sans-serif;color:#eee;overflow:hidden}
+    #map{width:100%;height:585px}
+    #panel{background:rgba(10,10,25,.95);padding:7px 12px;
+      display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+      border-top:1px solid #333;min-height:55px}
+    .ctrl{display:flex;align-items:center;gap:6px;font-size:12px}
+    .ctrl label{color:#aaa;white-space:nowrap;min-width:110px}
+    .ctrl input[type=range]{width:100px;accent-color:#2196F3;cursor:pointer}
+    .val{color:#FFD700;font-weight:bold;min-width:32px;display:inline-block}
+    .btn{background:#2196F3;color:#fff;border:none;padding:5px 13px;
+      border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;white-space:nowrap}
+    .btn:hover{background:#1565C0}
+    .btn.on{background:#4CAF50}.btn.on:hover{background:#2E7D32}
+    #btnApply{background:#4CAF50;font-size:13px;padding:7px 22px;margin-left:auto;
+      border-radius:5px;letter-spacing:.3px}
+    #btnApply:hover{background:#2E7D32}
+    #btnApply.done{background:#1565C0;cursor:default}
+    #status{color:#90CAF9;font-size:11px;max-width:240px;text-align:right}
+    .leaflet-overlay-pane{pointer-events:none!important}
+    .leaflet-overlay-pane *{pointer-events:none!important}
+  </style>
+</head>
+<body>
+  <div id='map'></div>
+  <div id='panel'>
+    <button class='btn' id='btnC' onclick='toggleCampo()'>🏉 Mostrar Campo</button>
+
+    <div class='ctrl'>
+      <label>📍 Lat centro:</label>
+      <input type='number' id='inLat' value='0' step='0.00005'
+        style='width:105px;background:#1a1a2e;color:#FFD700;border:1px solid #555;
+               padding:3px 5px;border-radius:3px;font-size:12px' oninput='onCenter()'>
+    </div>
+    <div class='ctrl'>
+      <label>📍 Lon centro:</label>
+      <input type='number' id='inLon' value='0' step='0.00005'
+        style='width:105px;background:#1a1a2e;color:#FFD700;border:1px solid #555;
+               padding:3px 5px;border-radius:3px;font-size:12px' oninput='onCenter()'>
+    </div>
+    <div class='ctrl'>
+      <label>🧭 Rotação: <span class='val' id='rv'>0</span>°</label>
+      <input type='range' id='rot' min='0' max='359' value='0' oninput='onRot(this.value)'>
+    </div>
+    <div class='ctrl'>
+      <label>📏 Comprimento: <span class='val' id='flv'>100</span>m</label>
+      <input type='range' id='fl' min='90' max='110' value='100' oninput='onDim()'>
+    </div>
+    <div class='ctrl'>
+      <label>📏 Largura: <span class='val' id='fwv'>70</span>m</label>
+      <input type='range' id='fw' min='60' max='80' value='70' oninput='onDim()'>
+    </div>
+    <div class='ctrl'>
+      <label>🔚 In-goal: <span class='val' id='igv'>10</span>m</label>
+      <input type='range' id='ig' min='5' max='15' value='10' oninput='onDim()'>
+    </div>
+
+    <button id='btnApply' onclick='aplicar()'>✅ Aplicar Campo</button>
+    <span id='status'>📍 Ajuste Lat/Lon acima · ↑↓ teclado ≈ 5m</span>
+  </div>
+
+  <script>
+  // ── Estado global ──────────────────────────────────────────────────
+  var cLat=0, cLon=0, rotD=0, fL=100, fW=70, fI=10;
+  var campoOn=false;
+  var map=null, cm=null, cl=null;
+  var initialized=false;
+
+  // ── Protocolo Streamlit ─────────────────────────────────────────────
+  // 1. Avisar que o componente está pronto
+  window.parent.postMessage({
+    isStreamlitMessage:true, type:'streamlit:componentReady', apiVersion:1
+  }, '*');
+
+  // 2. Receber os dados do Python (streamlit:render)
+  window.addEventListener('message', function(e){
+    if(!e.data || typeof e.data !== 'object') return;
+    if(e.data.type === 'streamlit:render' && !initialized){
+      var a = e.data.args || {};
+      initMap(a.pts||[], a.lat_c||0, a.lon_c||0);
+      initialized = true;
+    }
+  });
+
+  // 3. Enviar valor de volta quando o usuário clicar "Aplicar"
+  function aplicar(){
+    window.parent.postMessage({
+      isStreamlitMessage:true,
+      type:'streamlit:setComponentValue',
+      value:{lat:cLat, lon:cLon, rot:rotD, fl:fL, fw:fW, ig:fI},
+      dataType:'json'
+    }, '*');
+    var b = document.getElementById('btnApply');
+    b.textContent = '✅ Campo Aplicado!';
+    b.classList.add('done');
+    b.onclick = null;
+    document.getElementById('status').textContent =
+      '🔒 '+cLat.toFixed(5)+', '+cLon.toFixed(5)+' · rot '+rotD+'°';
+  }
+
+  // ── Inicialização do mapa ────────────────────────────────────────────
+  function initMap(pts, lat_c, lon_c){
+    cLat = lat_c; cLon = lon_c;
+    document.getElementById('inLat').value = cLat.toFixed(6);
+    document.getElementById('inLon').value = cLon.toFixed(6);
+
+    map = L.map('map').setView([cLat, cLon], 17);
+
+    L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      {attribution:'Esri World Imagery', maxZoom:19}
+    ).addTo(map);
+    L.tileLayer(
+      'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+      {attribution:'Esri Labels', opacity:0.6, maxZoom:19}
+    ).addTo(map);
+
+    // Trajetória GPS colorida
+    function vc(v){
+      if(v<7)  return '#2196F3';
+      if(v<14) return '#4CAF50';
+      if(v<19) return '#FFEB3B';
+      if(v<24) return '#FF9800';
+      return '#F44336';
+    }
+    var seg=[], sc=null;
+    for(var i=0; i<pts.length; i++){
+      var c=vc(pts[i].v);
+      if(c===sc){ seg.push([pts[i].lat,pts[i].lon]); }
+      else{
+        if(seg.length>1) L.polyline(seg,{color:sc,weight:3,opacity:.85,interactive:false}).addTo(map);
+        seg = i>0 ? [[pts[i-1].lat,pts[i-1].lon],[pts[i].lat,pts[i].lon]] : [[pts[i].lat,pts[i].lon]];
+        sc=c;
+      }
+    }
+    if(seg.length>1) L.polyline(seg,{color:sc,weight:3,opacity:.85,interactive:false}).addTo(map);
+    if(pts.length>0){
+      L.circleMarker([pts[0].lat,pts[0].lon],
+        {radius:7,color:'white',fillColor:'#00E676',fillOpacity:1,weight:2,interactive:false}).addTo(map);
+      L.circleMarker([pts[pts.length-1].lat,pts[pts.length-1].lon],
+        {radius:7,color:'white',fillColor:'#F44336',fillOpacity:1,weight:2,interactive:false}).addTo(map);
+    }
+
+    // Marcador arrastável (centro do campo)
+    var cmIcon = L.divIcon({
+      className:'',
+      html:'<div style="width:24px;height:24px;background:#FFEB3B;border:3px solid white;'+
+           'border-radius:50%;cursor:grab;box-shadow:0 2px 8px rgba(0,0,0,.7);'+
+           'margin:-12px 0 0 -12px;"></div>',
+      iconSize:[24,24], iconAnchor:[12,12]
+    });
+    cm = L.marker([cLat,cLon],{draggable:true,icon:cmIcon,zIndexOffset:1000}).addTo(map);
+
+    cm.on('drag', function(e){
+      var ll=e.target.getLatLng();
+      cLat=ll.lat; cLon=ll.lng;
+      syncInputs();
+      if(campoOn) drawField();
+      document.getElementById('status').textContent='⟳ '+cLat.toFixed(5)+', '+cLon.toFixed(5);
+    });
+    cm.on('dragend', function(e){
+      var ll=e.target.getLatLng();
+      cLat=ll.lat; cLon=ll.lng;
+      syncInputs();
+      drawField();
+      document.getElementById('status').textContent='🎯 '+cLat.toFixed(5)+', '+cLon.toFixed(5);
+    });
+
+    // Grupo de camadas do campo
+    cl = L.layerGroup().addTo(map);
+
+    // Legenda de velocidade
+    var leg = L.control({position:'bottomleft'});
+    leg.onAdd = function(){
+      var d = L.DomUtil.create('div');
+      d.style='background:rgba(0,0,0,.78);padding:8px 11px;border-radius:6px;'+
+              'color:#fff;font-size:11px;line-height:1.9';
+      d.innerHTML='<b>Velocidade</b><br>'
+        +'<span style="color:#2196F3">■</span> &lt;7 km/h Caminhada<br>'
+        +'<span style="color:#4CAF50">■</span> 7-14 km/h Trote<br>'
+        +'<span style="color:#FFEB3B">■</span> 14-19 km/h Corrida<br>'
+        +'<span style="color:#FF9800">■</span> 19-24 km/h Intensa<br>'
+        +'<span style="color:#F44336">■</span> &gt;24 km/h Sprint';
+      L.DomEvent.disableClickPropagation(d);
+      return d;
+    };
+    leg.addTo(map);
+
+    // Ajustar altura do frame
+    window.parent.postMessage({
+      isStreamlitMessage:true, type:'streamlit:setFrameHeight', height:700
+    }, '*');
+  }
+
+  // ── Controles do painel ──────────────────────────────────────────────
+  function syncInputs(){
+    document.getElementById('inLat').value = cLat.toFixed(6);
+    document.getElementById('inLon').value = cLon.toFixed(6);
+  }
+
+  function onCenter(){
+    var v1=parseFloat(document.getElementById('inLat').value);
+    var v2=parseFloat(document.getElementById('inLon').value);
+    if(isNaN(v1)||isNaN(v2)) return;
+    cLat=v1; cLon=v2;
+    if(cm) cm.setLatLng([cLat,cLon]);
+    if(map) map.panTo([cLat,cLon]);
+    drawField();
+    document.getElementById('status').textContent='🎯 '+cLat.toFixed(5)+', '+cLon.toFixed(5);
+  }
+
+  function onRot(v){
+    rotD=+v;
+    document.getElementById('rv').textContent=v;
+    drawField();
+  }
+
+  function onDim(){
+    fL=+document.getElementById('fl').value;
+    fW=+document.getElementById('fw').value;
+    fI=+document.getElementById('ig').value;
+    document.getElementById('flv').textContent=fL;
+    document.getElementById('fwv').textContent=fW;
+    document.getElementById('igv').textContent=fI;
+    drawField();
+  }
+
+  function toggleCampo(){
+    campoOn=!campoOn;
+    var b=document.getElementById('btnC');
+    b.textContent=campoOn?'🏉 Ocultar Campo':'🏉 Mostrar Campo';
+    b.className=campoOn?'btn on':'btn';
+    drawField();
+    document.getElementById('status').textContent=campoOn
+      ?'✅ Arraste ⊙ para mover · sliders para ajustar em tempo real'
+      :'📍 Ajuste Lat/Lon acima · ↑↓ teclado ≈ 5m';
+  }
+
+  // ── Geometria do campo ───────────────────────────────────────────────
+  function toR(d){ return d*Math.PI/180; }
+  function geo(xO,yO){
+    var r=toR(rotD);
+    var nM=yO*Math.cos(r)-xO*Math.sin(r);
+    var eM=yO*Math.sin(r)+xO*Math.cos(r);
+    return [cLat+nM/111320, cLon+eM/(111320*Math.cos(toR(cLat)))];
+  }
+  function lc(pts){ return pts.map(function(p){ return geo(p[0]-fL/2,p[1]-fW/2); }); }
+  function pl(pts,opt){
+    if(!cl) return;
+    L.polyline(lc(pts), Object.assign({interactive:false},opt)).addTo(cl);
+  }
+
+  function drawField(){
+    if(!cl) return;
+    cl.clearLayers();
+    if(!campoOn) return;
+    var w={color:'white',weight:2,opacity:.9};
+    var wb={color:'white',weight:3,opacity:.9};
+    var gd={color:'#FFD700',weight:3,opacity:1,interactive:false};
+    pl([[-fI,0],[fL+fI,0],[fL+fI,fW],[-fI,fW],[-fI,0]], w);
+    pl([[0,0],[0,fW]], wb);
+    pl([[fL,0],[fL,fW]], wb);
+    pl([[fL/2,0],[fL/2,fW]], w);
+    pl([[22,0],[22,fW]], Object.assign({},w,{dashArray:'6 4'}));
+    pl([[fL-22,0],[fL-22,fW]], Object.assign({},w,{dashArray:'6 4'}));
+    pl([[10,0],[10,fW]], Object.assign({},w,{dashArray:'2 4'}));
+    pl([[fL-10,0],[fL-10,fW]], Object.assign({},w,{dashArray:'2 4'}));
+    pl([[15,0],[15,fW]], Object.assign({},w,{weight:1,dashArray:'2 2'}));
+    pl([[fL-15,0],[fL-15,fW]], Object.assign({},w,{weight:1,dashArray:'2 2'}));
+    var cy1=fW/2-3.4, cy2=fW/2+3.4;
+    L.polyline([geo(-fL/2,cy1-fW/2),geo(-fL/2,cy2-fW/2)],gd).addTo(cl);
+    L.polyline([geo(-fL/2,0),geo(-5-fL/2,0)],gd).addTo(cl);
+    L.polyline([geo(fL/2,cy1-fW/2),geo(fL/2,cy2-fW/2)],gd).addTo(cl);
+    L.polyline([geo(fL/2,0),geo(fL/2+5,0)],gd).addTo(cl);
+  }
+  </script>
+</body>
+</html>

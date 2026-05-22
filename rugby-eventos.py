@@ -11,8 +11,15 @@ import json
 import base64
 import numpy as np
 from scipy.signal import savgol_filter
+import folium
+from streamlit_folium import st_folium
+import os as _os
 
 st.set_page_config(page_title="Rugby Eventos - Catapult", layout="wide")
+
+# Componente bidirecional para o mapa interativo de posicionamento de campo
+_CAMPO_COMP_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "_campo_component")
+_campo_component = st.components.v1.declare_component("campo_interativo_v1", path=_CAMPO_COMP_DIR)
 
 SERVERS = {
     "Américas (US)": "https://connect-us.catapultsports.com/api/v6",
@@ -130,7 +137,31 @@ class CatapultAPI:
         if r.status_code == 200:
             return r.json()
         return None
-    
+
+    def get_activity_events(self, activity_id, athlete_id, event_types):
+        params = {"event_types": event_types}
+        r = requests.get(
+            f"{self.base_url}/activities/{activity_id}/athletes/{athlete_id}/events",
+            headers=self.headers,
+            params=params,
+            timeout=60
+        )
+        if r.status_code == 200:
+            return r.json()
+        return None
+
+    def get_period_events(self, period_id, athlete_id, event_types):
+        params = {"event_types": event_types}
+        r = requests.get(
+            f"{self.base_url}/periods/{period_id}/athletes/{athlete_id}/events",
+            headers=self.headers,
+            params=params,
+            timeout=60
+        )
+        if r.status_code == 200:
+            return r.json()
+        return None
+
     # PARTE 2 - FUNÇÕES DE EXTRAÇÃO, CONVERSÃO E CÁLCULO
 
 def extrair_dados_sensor(response_data):
@@ -341,14 +372,1224 @@ def plotar_heatmap_campo(x_coords, y_coords, velocidades, athlete_name):
     
     return fig
 
+def plotar_heatmap_presenca_campo(x_coords, y_coords, athlete_name):
+    """Plota mapa de calor de presença (frequência de posições) no campo"""
+    fig = desenhar_campo_rugby()
+
+    if len(x_coords) == 0 or len(y_coords) == 0:
+        return fig
+
+    x_edges = np.linspace(0, 100, 40)
+    y_edges = np.linspace(0, 70, 40)
+
+    counts, xedges, yedges = np.histogram2d(x_coords, y_coords, bins=[x_edges, y_edges])
+
+    fig.add_trace(go.Heatmap(
+        z=counts.T,
+        x=xedges[:-1],
+        y=yedges[:-1],
+        colorscale='YlOrRd',
+        opacity=0.65,
+        name='Presença',
+        colorbar=dict(title="Frequência", x=1.05, len=0.5),
+        hovertemplate='X: %{x:.0f}m<br>Y: %{y:.0f}m<br>Frequência: %{z:.0f}<extra></extra>'
+    ))
+
+    fig.update_layout(title=f"🔥 Mapa de Calor de Presença — {athlete_name}")
+    return fig
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BANDAS DE VELOCIDADE E ACELERAÇÃO (referências Catapult Rugby)
+# ══════════════════════════════════════════════════════════════════════════════
+BANDAS_VEL = {
+    1: {'label': 'B1 — < 8 km/h (Caminhada)',          'min': 0,    'max': 8,    'color': '#2196F3'},
+    2: {'label': 'B2 — 8-14 km/h (Trote)',             'min': 8,    'max': 14,   'color': '#4CAF50'},
+    3: {'label': 'B3 — 14-19 km/h (Corrida)',          'min': 14,   'max': 19,   'color': '#CDDC39'},
+    4: {'label': 'B4 — 19-23 km/h (Corrida Intensa)',  'min': 19,   'max': 23,   'color': '#FF9800'},
+    5: {'label': 'B5 — 23-25 km/h (Alta Velocidade)',  'min': 23,   'max': 25,   'color': '#FF5722'},
+    6: {'label': 'B6 — > 25 km/h (Sprint)',            'min': 25,   'max': 9999, 'color': '#F44336'},
+}
+BANDAS_ACC = {
+    'A3': {'label': 'Acc +3 — > 2 m/s² (Alta Aceleração)',   'min': 2,     'max': 9999, 'color': '#00C853'},
+    'A2': {'label': 'Acc +2 — 1-2 m/s²',                    'min': 1,     'max': 2,    'color': '#69F0AE'},
+    'A1': {'label': 'Acc +1 — 0.1-1 m/s²',                  'min': 0.1,   'max': 1,    'color': '#B9F6CA'},
+    'D1': {'label': 'Dec -1 — 0 a -1 m/s²',                 'min': -1,    'max': -0.1, 'color': '#FFD180'},
+    'D2': {'label': 'Dec -2 — -1 a -2 m/s²',                'min': -2,    'max': -1,   'color': '#FF6D00'},
+    'D3': {'label': 'Dec -3 — < -2 m/s² (Alta Desacel.)',   'min': -9999, 'max': -2,   'color': '#DD2C00'},
+}
+
+# ── Configuração dos tipos de eventos rugby ────────────────────────────────
+RUGBY_EVENTS_CONFIG = {
+    'rugby_union_scrum': {
+        'label': '🟠 Scrum',
+        'color': '#FF9800', 'marker': 'circle', 'size': 14,
+        'attrs': ['confidence', 'duration', 'post_event_load', 'post_event_active'],
+    },
+    'rugby_union_contact_involvement': {
+        'label': '🔴 Contato/Tackle',
+        'color': '#F44336', 'marker': 'x', 'size': 12,
+        'attrs': ['confidence', 'duration', 'active_percentage',
+                  'post_event_load', 'post_event_back_in_game_time'],
+    },
+    'rugby_union_kick': {
+        'label': '🟡 Chute',
+        'color': '#FFEB3B', 'marker': 'star', 'size': 13,
+        'attrs': ['confidence', 'class'],
+    },
+    'rugby_union_lineout': {
+        'label': '🟢 Line-out',
+        'color': '#4CAF50', 'marker': 'triangle-up', 'size': 13,
+        'attrs': ['confidence'],
+    },
+    'ima_impact': {
+        'label': '⚪ Impacto (IMA)',
+        'color': '#90CAF9', 'marker': 'diamond', 'size': 11,
+        'attrs': ['impact', 'direction'],
+    },
+    'ima_jump': {
+        'label': '🔵 Salto (IMA)',
+        'color': '#2196F3', 'marker': 'triangle-up', 'size': 11,
+        'attrs': ['height'],
+    },
+}
+
+def extrair_eventos_rugby(response_data):
+    """Extrai eventos rugby da resposta da API /events."""
+    if not response_data or not isinstance(response_data, list):
+        return {}
+    item = response_data[0] if response_data else {}
+    data = item.get('data', {}) if isinstance(item, dict) else {}
+    return {k: v for k, v in data.items() if v and k in RUGBY_EVENTS_CONFIG}
+
+def enriquecer_eventos_com_posicao(eventos_dict, ts_gps, lats_gps, lons_gps, vels_gps, campo_config=None):
+    """Associa cada evento ao ponto GPS (e posição no campo) mais próximo no tempo."""
+    if not ts_gps:
+        return eventos_dict
+    ts_arr = np.array(ts_gps, dtype=float)
+    result = {}
+    for event_type, events in eventos_dict.items():
+        enriched = []
+        for ev in events:
+            ev2 = dict(ev)
+            t = float(ev.get('start_time', 0))
+            idx = int(np.argmin(np.abs(ts_arr - t)))
+            ev2['_lat'] = lats_gps[idx]
+            ev2['_lon'] = lons_gps[idx]
+            ev2['_vel'] = vels_gps[idx]
+            if campo_config:
+                fx, fy = gps_para_campo_coords(
+                    [lats_gps[idx]], [lons_gps[idx]], campo_config)
+                ev2['_fx'] = fx[0]
+                ev2['_fy'] = fy[0]
+            enriched.append(ev2)
+        result[event_type] = enriched
+    return result
+
+def adicionar_eventos_campo(fig, eventos_dict, tipos_sel):
+    """Plota marcadores de eventos rugby sobre o campo esquemático."""
+    for event_type in tipos_sel:
+        events = eventos_dict.get(event_type, [])
+        if not events:
+            continue
+        cfg_ev = RUGBY_EVENTS_CONFIG[event_type]
+        xs_ev = [ev.get('_fx') for ev in events if ev.get('_fx') is not None]
+        ys_ev = [ev.get('_fy') for ev in events if ev.get('_fy') is not None]
+        if not xs_ev:
+            continue
+        # Texto de hover
+        texts = []
+        for ev in events:
+            if ev.get('_fx') is None:
+                continue
+            partes = [f"<b>{cfg_ev['label']}</b>"]
+            for attr in cfg_ev['attrs']:
+                val = ev.get(attr)
+                if val is not None:
+                    partes.append(f"{attr}: {val}")
+            partes.append(f"vel: {ev.get('_vel', 0):.1f} km/h")
+            texts.append('<br>'.join(partes))
+        fig.add_trace(go.Scatter(
+            x=xs_ev, y=ys_ev,
+            mode='markers',
+            name=cfg_ev['label'],
+            marker=dict(
+                symbol=cfg_ev['marker'],
+                size=cfg_ev['size'],
+                color=cfg_ev['color'],
+                line=dict(color='white', width=1.5),
+            ),
+            text=texts,
+            hovertemplate='%{text}<extra></extra>',
+            showlegend=True,
+        ))
+
+def criar_timeline_eventos(sensor_points, eventos_dict, atleta_nome, tipos_sel):
+    """
+    Gráfico de velocidade ao longo do tempo com pins verticais dos eventos rugby.
+    """
+    if not sensor_points:
+        return None
+
+    ts0 = float(sensor_points[0].get('ts') or 0)
+    ts_rel = [(float(p.get('ts') or 0) - ts0) for p in sensor_points]
+    vels   = [(p.get('v') or 0) * 3.6 for p in sensor_points]
+
+    fig = go.Figure()
+
+    # Linha de velocidade
+    fig.add_trace(go.Scatter(
+        x=ts_rel, y=vels,
+        mode='lines',
+        name='Velocidade (km/h)',
+        line=dict(color='#2196F3', width=1.5),
+        hovertemplate='%{x:.0f}s — %{y:.1f} km/h<extra></extra>',
+    ))
+
+    # Pins de eventos
+    for event_type in tipos_sel:
+        events = eventos_dict.get(event_type, [])
+        if not events:
+            continue
+        cfg_ev = RUGBY_EVENTS_CONFIG[event_type]
+        for ev in events:
+            t_ev  = float(ev.get('start_time', 0)) - ts0
+            v_ev  = ev.get('_vel', 0)
+            label = cfg_ev['label']
+            partes = [f"<b>{label}</b>", f"t={t_ev:.0f}s", f"vel={v_ev:.1f} km/h"]
+            for attr in cfg_ev['attrs']:
+                val = ev.get(attr)
+                if val is not None:
+                    partes.append(f"{attr}: {val}")
+            fig.add_vline(
+                x=t_ev,
+                line=dict(color=cfg_ev['color'], width=1.5, dash='dot'),
+            )
+            fig.add_trace(go.Scatter(
+                x=[t_ev], y=[v_ev],
+                mode='markers',
+                name=label,
+                showlegend=False,
+                marker=dict(
+                    symbol=cfg_ev['marker'],
+                    size=cfg_ev['size'],
+                    color=cfg_ev['color'],
+                    line=dict(color='white', width=1),
+                ),
+                text=['<br>'.join(partes)],
+                hovertemplate='%{text}<extra></extra>',
+            ))
+
+    fig.update_layout(
+        title=f"🏉 Timeline Técnico-Físico — {atleta_nome}",
+        xaxis_title='Tempo (s)',
+        yaxis_title='Velocidade (km/h)',
+        plot_bgcolor='#0e1117',
+        paper_bgcolor='#0e1117',
+        font=dict(color='white'),
+        height=420,
+        legend=dict(
+            orientation='h', yanchor='bottom', y=1.02,
+            xanchor='left', x=0,
+            font=dict(size=11),
+        ),
+        hovermode='x unified',
+    )
+    return fig
+
+def analisar_fadiga_eventos(sensor_points, eventos_dict, tipos_sel, janela_s=10):
+    """
+    Para eventos de contato, computa velocidade média antes e depois do evento.
+    Retorna DataFrame com: tipo, tempo, vel_antes, vel_depois, variacao.
+    """
+    if not sensor_points:
+        return pd.DataFrame()
+
+    ts_arr  = np.array([float(p.get('ts') or 0) for p in sensor_points])
+    vel_arr = np.array([(p.get('v') or 0) * 3.6 for p in sensor_points])
+    ts0     = ts_arr[0] if len(ts_arr) else 0
+
+    rows = []
+    for event_type in tipos_sel:
+        events = eventos_dict.get(event_type, [])
+        cfg_ev = RUGBY_EVENTS_CONFIG[event_type]
+        for ev in events:
+            t = float(ev.get('start_time', 0))
+            mask_before = (ts_arr >= t - janela_s) & (ts_arr < t)
+            mask_after  = (ts_arr >  t) & (ts_arr <= t + janela_s)
+            vel_antes   = float(vel_arr[mask_before].mean()) if mask_before.any() else None
+            vel_depois  = float(vel_arr[mask_after].mean())  if mask_after.any()  else None
+            variacao    = round(vel_depois - vel_antes, 2) if (vel_antes is not None and vel_depois is not None) else None
+            row = {
+                'Tipo': cfg_ev['label'],
+                'Tempo (s)': round(t - ts0, 1),
+                'Vel. Antes (km/h)': round(vel_antes, 2) if vel_antes is not None else None,
+                'Vel. Depois (km/h)': round(vel_depois, 2) if vel_depois is not None else None,
+                'Variação (km/h)': variacao,
+                'post_event_load': ev.get('post_event_load'),
+                'duration': ev.get('duration'),
+                'confidence': ev.get('confidence'),
+            }
+            rows.append(row)
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows).sort_values('Tempo (s)').reset_index(drop=True)
+    return df
+
+
+def desenhar_campo_rugby_bonito(field_length=100, field_width=70, in_goal_depth=10, title=""):
+    """Campo de rugby com faixas verdes alternadas, linhas oficiais e traves douradas (top-down)."""
+    FL, FW, IG = field_length, field_width, in_goal_depth
+    fig = go.Figure()
+
+    # Fundo externo
+    fig.add_shape(type="rect", x0=-IG-4, y0=-4, x1=FL+IG+4, y1=FW+4,
+                  fillcolor="#1a3a18", line_width=0, layer="below")
+
+    # Faixas verdes alternadas no campo de jogo
+    n_st, sw = 10, FL / 10
+    cores_faixa = ["#2d7828", "#257022"]
+    for i in range(n_st):
+        fig.add_shape(type="rect", x0=i*sw, y0=0, x1=(i+1)*sw, y1=FW,
+                      fillcolor=cores_faixa[i % 2], line_width=0, layer="below")
+
+    # In-goal (faixas mais escuras)
+    ig_cores = ["#246620", "#1e5a1a"]
+    for i in range(int(IG)):
+        fig.add_shape(type="rect", x0=-(i+1), y0=0, x1=-i, y1=FW,
+                      fillcolor=ig_cores[i % 2], line_width=0, layer="below")
+        fig.add_shape(type="rect", x0=FL+i, y0=0, x1=FL+i+1, y1=FW,
+                      fillcolor=ig_cores[i % 2], line_width=0, layer="below")
+
+    # Bordas in-goal
+    fig.add_shape(type="rect", x0=-IG, y0=0, x1=FL+IG, y1=FW,
+                  line=dict(color="white", width=2), fillcolor="rgba(0,0,0,0)")
+
+    # Goal lines
+    fig.add_shape(type="line", x0=0,  y0=0, x1=0,  y1=FW, line=dict(color="white", width=3))
+    fig.add_shape(type="line", x0=FL, y0=0, x1=FL, y1=FW, line=dict(color="white", width=3))
+
+    # Linha central
+    fig.add_shape(type="line", x0=FL/2, y0=0, x1=FL/2, y1=FW, line=dict(color="white", width=2))
+
+    # 22m lines
+    for x22 in [22, FL-22]:
+        fig.add_shape(type="line", x0=x22, y0=0, x1=x22, y1=FW,
+                      line=dict(color="white", width=1.5, dash="dash"))
+    # 10m lines
+    for x10 in [10, FL-10]:
+        fig.add_shape(type="line", x0=x10, y0=0, x1=x10, y1=FW,
+                      line=dict(color="white", width=1, dash="dot"))
+    # 15m lines
+    for x15 in [15, FL-15]:
+        fig.add_shape(type="line", x0=x15, y0=0, x1=x15, y1=FW,
+                      line=dict(color="white", width=0.8, dash="dot"))
+
+    # Hash marks a cada 5m nas linhas de 5m e 15m
+    for x_h in [5, FL-5]:
+        for y_h in np.arange(5, FW, 5):
+            fig.add_shape(type="line", x0=x_h-1, y0=y_h, x1=x_h+1, y1=y_h,
+                          line=dict(color="white", width=1))
+
+    # Círculo central
+    th = np.linspace(0, 2*np.pi, 80)
+    fig.add_trace(go.Scatter(x=FL/2 + 5*np.cos(th), y=FW/2 + 5*np.sin(th),
+                             mode='lines', line=dict(color='white', width=1.5),
+                             showlegend=False, hoverinfo='skip', name='_circ'))
+    fig.add_trace(go.Scatter(x=[FL/2], y=[FW/2], mode='markers',
+                             marker=dict(size=5, color='white'),
+                             showlegend=False, hoverinfo='skip', name='_ctr'))
+
+    # Traves (H deitado — vista aérea)
+    cy, post, ext = FW/2, 2.8, 6
+    gd, gdt, gdc = (dict(color="#FFD700", width=3),
+                    dict(color="#FFD700", width=2),
+                    dict(color="#FFD700", width=4))
+    # Esquerda
+    fig.add_shape(type="line", x0=0,    y0=cy-post, x1=0,    y1=cy+post, line=dict(**gdc))
+    fig.add_shape(type="line", x0=-ext, y0=cy-post, x1=0,    y1=cy-post, line=dict(**gd))
+    fig.add_shape(type="line", x0=-ext, y0=cy+post, x1=0,    y1=cy+post, line=dict(**gd))
+    fig.add_shape(type="line", x0=-ext, y0=cy-post, x1=-ext, y1=cy+post, line=dict(**gdt))
+    # Direita
+    fig.add_shape(type="line", x0=FL,     y0=cy-post, x1=FL,     y1=cy+post, line=dict(**gdc))
+    fig.add_shape(type="line", x0=FL,     y0=cy-post, x1=FL+ext, y1=cy-post, line=dict(**gd))
+    fig.add_shape(type="line", x0=FL,     y0=cy+post, x1=FL+ext, y1=cy+post, line=dict(**gd))
+    fig.add_shape(type="line", x0=FL+ext, y0=cy-post, x1=FL+ext, y1=cy+post, line=dict(**gdt))
+
+    # Labels das linhas
+    lkw = dict(showarrow=False, font=dict(color='rgba(255,255,255,0.55)', size=9))
+    for xl, txt in [(0,"GL"), (22,"22m"), (FL/2,"50m"), (FL-22,"22m"), (FL,"GL")]:
+        fig.add_annotation(x=xl, y=-2.8, text=txt, **lkw)
+
+    fig.update_layout(
+        title=dict(text=title, font=dict(color='white', size=13)) if title else {},
+        xaxis=dict(range=[-IG-4, FL+IG+4], showgrid=False, zeroline=False,
+                   tickfont=dict(color='white', size=9),
+                   title=dict(text="metros (comprimento)", font=dict(color='#aaa', size=10))),
+        yaxis=dict(range=[-4, FW+4], showgrid=False, zeroline=False,
+                   scaleanchor='x', scaleratio=1,
+                   tickfont=dict(color='white', size=9),
+                   title=dict(text="metros (largura)", font=dict(color='#aaa', size=10))),
+        plot_bgcolor='#1a3a18',
+        paper_bgcolor='#0e1117',
+        height=530,
+        margin=dict(l=50, r=160, t=40 if title else 20, b=50),
+        hovermode='closest',
+        legend=dict(bgcolor='rgba(0,0,0,0.7)', font=dict(color='white'),
+                    x=1.01, y=1, bordercolor='rgba(255,255,255,0.2)', borderwidth=1)
+    )
+    return fig
+
+
+def adicionar_trajetoria_campo(fig, x_coords, y_coords, velocidades, nome=""):
+    """Trajetória colorida por velocidade sobre o campo bonito."""
+    if not x_coords:
+        return
+    xs = list(x_coords)
+    ys = list(y_coords)
+    vs = list(velocidades) if velocidades else [0]*len(xs)
+
+    def _vc(v):
+        for k, b in BANDAS_VEL.items():
+            if v < b['max']:
+                return b['color']
+        return BANDAS_VEL[6]['color']
+
+    # Segmentos coloridos
+    seg_x, seg_y = [xs[0]], [ys[0]]
+    seg_c = _vc(vs[0])
+    for i in range(1, len(xs)):
+        c = _vc(vs[i] if i < len(vs) else 0)
+        if c == seg_c:
+            seg_x.append(xs[i]); seg_y.append(ys[i])
+        else:
+            if len(seg_x) > 1:
+                fig.add_trace(go.Scatter(x=seg_x, y=seg_y, mode='lines',
+                    line=dict(color=seg_c, width=2.5),
+                    showlegend=False, hoverinfo='skip', name='_traj'))
+            seg_x, seg_y = [xs[i-1], xs[i]], [ys[i-1], ys[i]]
+            seg_c = c
+    if len(seg_x) > 1:
+        fig.add_trace(go.Scatter(x=seg_x, y=seg_y, mode='lines',
+            line=dict(color=seg_c, width=2.5),
+            showlegend=False, hoverinfo='skip', name='_traj'))
+
+    # Início e fim
+    fig.add_trace(go.Scatter(x=[xs[0]], y=[ys[0]], mode='markers', name='Início',
+        marker=dict(size=12, color='#00E676', symbol='circle',
+                    line=dict(color='white', width=2))))
+    fig.add_trace(go.Scatter(x=[xs[-1]], y=[ys[-1]], mode='markers', name='Fim',
+        marker=dict(size=12, color='#F44336', symbol='x',
+                    line=dict(color='white', width=2))))
+
+    # Legenda de bandas
+    for b in BANDAS_VEL.values():
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers',
+            name=b['label'], marker=dict(size=9, color=b['color'])))
+
+
+def adicionar_pontos_velocidade_bandas(fig, x_coords, y_coords, velocidades, bandas_sel):
+    """Pontos coloridos por bandas de velocidade selecionadas."""
+    if not x_coords or not bandas_sel:
+        return
+    xs = np.array(x_coords)
+    ys = np.array(y_coords)
+    vs = np.array(velocidades) if velocidades else np.zeros(len(xs))
+    for k in bandas_sel:
+        b = BANDAS_VEL[k]
+        mask = (vs >= b['min']) & (vs < b['max'])
+        if mask.sum() > 0:
+            fig.add_trace(go.Scatter(
+                x=xs[mask], y=ys[mask], mode='markers', name=b['label'],
+                marker=dict(size=3, color=b['color'], opacity=0.8),
+                hovertemplate='x=%{x:.1f}m y=%{y:.1f}m<extra>' + b['label'] + '</extra>'))
+
+
+def adicionar_pontos_aceleracao_bandas(fig, x_coords, y_coords, aceleracoes, bandas_sel):
+    """Pontos coloridos por bandas de aceleração selecionadas."""
+    if not x_coords or not bandas_sel:
+        return
+    xs  = np.array(x_coords)
+    ys  = np.array(y_coords)
+    acc = np.array(aceleracoes) if aceleracoes else np.zeros(len(xs))
+    for k in bandas_sel:
+        b = BANDAS_ACC[k]
+        mask = (acc >= b['min']) & (acc < b['max'])
+        if mask.sum() > 0:
+            fig.add_trace(go.Scatter(
+                x=xs[mask], y=ys[mask], mode='markers', name=b['label'],
+                marker=dict(size=3, color=b['color'], opacity=0.8),
+                hovertemplate='x=%{x:.1f}m y=%{y:.1f}m<extra>' + b['label'] + '</extra>'))
+
+
+def adicionar_setas_direcao(fig, x_coords, y_coords, sample=40):
+    """Setas de direção do movimento ao longo da trajetória."""
+    xs = np.array(x_coords)
+    ys = np.array(y_coords)
+    if len(xs) < 2:
+        return
+    for i in range(0, len(xs)-1, sample):
+        j = min(i + sample, len(xs)-1)
+        dx, dy = xs[j]-xs[i], ys[j]-ys[i]
+        norm = np.hypot(dx, dy)
+        if norm < 0.5:
+            continue
+        dx /= norm; dy /= norm
+        fig.add_annotation(
+            x=float(xs[i]+dx*2), y=float(ys[i]+dy*2),
+            ax=float(xs[i]),     ay=float(ys[i]),
+            xref='x', yref='y', axref='x', ayref='y',
+            showarrow=True, arrowhead=2, arrowsize=1.4,
+            arrowwidth=1.5, arrowcolor='rgba(255,255,255,0.55)')
+
+
+def adicionar_convex_hull(fig, x_coords, y_coords):
+    """Polígono de área de atuação (Convex Hull) sobre o campo."""
+    if len(x_coords) < 3:
+        return
+    try:
+        from scipy.spatial import ConvexHull
+        pts  = np.column_stack([x_coords, y_coords])
+        hull = ConvexHull(pts)
+        hx   = list(pts[hull.vertices, 0]) + [pts[hull.vertices[0], 0]]
+        hy   = list(pts[hull.vertices, 1]) + [pts[hull.vertices[0], 1]]
+        area = hull.volume   # em 2D 'volume' = área
+        fig.add_trace(go.Scatter(x=hx, y=hy, mode='lines',
+            name=f'Área de Atuação ({area:.0f} m²)',
+            line=dict(color='#FFD700', width=2, dash='dash'),
+            fill='toself', fillcolor='rgba(255,215,0,0.10)'))
+    except Exception:
+        pass
+
+
+def adicionar_tercos_campo(fig, x_coords, y_coords, field_length=100, field_width=70):
+    """Overlay dos terços do campo (defensivo / meio / ataque) com % de tempo."""
+    if not x_coords:
+        return
+    xs = np.array(x_coords)
+    n  = len(xs)
+    tercos = [
+        ("Defensivo", 0,            field_length/3,    'rgba(244,67,54,0.13)',  '#F44336'),
+        ("Meio",      field_length/3,  2*field_length/3, 'rgba(255,235,59,0.10)', '#FFEB3B'),
+        ("Ataque",    2*field_length/3, field_length,    'rgba(76,175,80,0.13)',  '#4CAF50'),
+    ]
+    for nome, x0, x1, fill, cor in tercos:
+        pct = 100 * ((xs >= x0) & (xs < x1)).sum() / n if n > 0 else 0
+        fig.add_shape(type="rect", x0=x0, y0=0, x1=x1, y1=field_width,
+                      line=dict(color=cor, width=1.5, dash="dot"),
+                      fillcolor=fill, layer="above")
+        fig.add_annotation(x=(x0+x1)/2, y=field_width-3.5,
+                           text=f"<b>{nome}</b><br>{pct:.1f}%",
+                           showarrow=False, font=dict(color=cor, size=11),
+                           bgcolor='rgba(0,0,0,0.55)', borderpad=3)
+
+
+def adicionar_grade_quadrantes(fig, x_coords, y_coords, n_cols, n_rows,
+                               field_length=100, field_width=70):
+    """Grade de quadrantes com % de tempo em cada zona."""
+    if not x_coords:
+        return
+    xs  = np.array(x_coords)
+    ys  = np.array(y_coords)
+    n   = len(xs)
+    cw  = field_length / n_cols
+    rh  = field_width  / n_rows
+
+    # Pré-calcular todas as % para escalar a opacidade
+    pcts = np.zeros((n_rows, n_cols))
+    for r in range(n_rows):
+        for c in range(n_cols):
+            mask = ((xs >= c*cw) & (xs < (c+1)*cw) &
+                    (ys >= r*rh) & (ys < (r+1)*rh))
+            pcts[r, c] = 100 * mask.sum() / n if n > 0 else 0
+    mx = pcts.max() if pcts.max() > 0 else 1
+
+    for r in range(n_rows):
+        for c in range(n_cols):
+            x0, x1 = c*cw, (c+1)*cw
+            y0, y1 = r*rh, (r+1)*rh
+            pct   = pcts[r, c]
+            alpha = 0.07 + 0.43 * (pct / mx)
+            zid   = f"{chr(65+r)}{c+1}"
+            fig.add_shape(type="rect", x0=x0, y0=y0, x1=x1, y1=y1,
+                          line=dict(color="rgba(255,255,255,0.35)", width=1),
+                          fillcolor=f"rgba(255,165,0,{alpha:.2f})", layer="above")
+            fig.add_annotation(x=(x0+x1)/2, y=(y0+y1)/2,
+                               text=f"<b>{zid}</b><br>{pct:.1f}%",
+                               showarrow=False,
+                               font=dict(color='white', size=9),
+                               bgcolor='rgba(0,0,0,0.45)', borderpad=2)
+
+
+def stats_quadrante(x_coords, y_coords, velocidades, aceleracoes, x0, x1, y0, y1):
+    """Estatísticas detalhadas de um quadrante."""
+    xs  = np.array(x_coords)
+    ys  = np.array(y_coords)
+    vs  = np.array(velocidades)  if velocidades  else np.zeros(len(xs))
+    acc = np.array(aceleracoes)  if aceleracoes  else np.zeros(len(xs))
+    mask = (xs >= x0) & (xs < x1) & (ys >= y0) & (ys < y1)
+    nz   = int(mask.sum())
+    n    = len(xs)
+    return {
+        'n_pontos':  nz,
+        'pct':       round(100 * nz / n,  2) if n > 0 else 0.0,
+        'vel_media': round(float(vs[mask].mean()),  2) if nz > 0 else 0.0,
+        'vel_max':   round(float(vs[mask].max()),   2) if nz > 0 else 0.0,
+        'acc_media': round(float(acc[mask].mean()), 3) if nz > 0 else 0.0,
+        'acc_max':   round(float(np.abs(acc[mask]).max()), 3) if nz > 0 else 0.0,
+    }
+
+
+def gps_para_campo_coords(lats, lons, campo_config):
+    """
+    Converte pontos GPS (lat/lon) para coordenadas relativas ao campo (x/y em metros,
+    origem no canto inferior esquerdo) usando a configuração aplicada.
+
+    É a operação inversa de campo_para_latlon:
+      north_m = (lat - c_lat) * 111320
+      east_m  = (lon - c_lon) * 111320 * cos(c_lat)
+      [x_m, y_m] = R^{-T} * [north_m, east_m]    (rotação inversa)
+      field_x = x_m + fl/2  (deslocar para canto inferior esquerdo)
+      field_y = y_m + fw/2
+    """
+    c_lat = float(campo_config['lat'])
+    c_lon = float(campo_config['lon'])
+    rot   = np.radians(float(campo_config['rot']))
+    fl    = float(campo_config['fl'])
+    fw    = float(campo_config['fw'])
+
+    lats_a = np.array(lats, dtype=float)
+    lons_a = np.array(lons, dtype=float)
+
+    north_m = (lats_a - c_lat) * 111320.0
+    east_m  = (lons_a - c_lon) * 111320.0 * np.cos(np.radians(c_lat))
+
+    # Rotação inversa correta (derivada da função JS campo_para_latlon)
+    # JS: nM = yO*cos(r) - xO*sin(r) ; eM = yO*sin(r) + xO*cos(r)
+    # Inversa: xO = eM*cos(r) - nM*sin(r) ; yO = nM*cos(r) + eM*sin(r)
+    x_m = east_m  * np.cos(rot) - north_m * np.sin(rot)   # comprimento do campo
+    y_m = north_m * np.cos(rot) + east_m  * np.sin(rot)   # largura do campo
+
+    # Deslocar: centro do campo → canto inferior esquerdo
+    field_x = np.clip(x_m + fl / 2, -5, fl + 5)
+    field_y = np.clip(y_m + fw / 2, -5, fw + 5)
+
+    return field_x.tolist(), field_y.tolist()
+
+
+def campo_para_latlon(centro_lat, centro_lon, x_m, y_m, rotacao_deg):
+    """
+    Converte um ponto em metros relativos ao centro do campo (x para leste, y para norte)
+    em coordenadas geográficas (lat, lon), aplicando rotação pelo bearing do campo.
+    rotacao_deg: graus clockwise a partir do norte (ex: 90 = campo alinhado leste-oeste).
+    """
+    rot = np.radians(rotacao_deg)
+    # Rotacionar o vetor (x_m, y_m) pelo bearing
+    north_m = x_m * np.cos(rot) - y_m * np.sin(rot)
+    east_m  = x_m * np.sin(rot) + y_m * np.cos(rot)
+    d_lat = float(north_m / 111320.0)
+    d_lon = float(east_m / (111320.0 * np.cos(np.radians(float(centro_lat)))))
+    return (float(centro_lat) + d_lat, float(centro_lon) + d_lon)
+
+
+def criar_mapa_satelite_rugby(
+    lats, lons, vels, atleta_nome,
+    centro_lat, centro_lon, rotacao_deg,
+    field_length=100, field_width=70, in_goal=10,
+    mostrar_campo=True
+):
+    """
+    Cria um mapa Folium com:
+    - Tiles de satélite Esri World Imagery (gratuito, sem chave de API)
+    - Trajetória GPS do atleta colorida por faixa de velocidade
+    - Overlay do campo de rugby (linhas brancas + traves douradas) — opcional via mostrar_campo
+    """
+    if not lats or not lons:
+        return None
+
+    # ---- Mapa base ----
+    m = folium.Map(
+        location=[centro_lat, centro_lon],
+        zoom_start=17,
+        tiles=None
+    )
+
+    # Satélite Esri (gratuito, sem chave)
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri World Imagery",
+        name="🛰️ Satélite",
+        overlay=False,
+        control=True
+    ).add_to(m)
+
+    # Labels sobre o satélite (opcional)
+    folium.TileLayer(
+        tiles="https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri Labels",
+        name="🏷️ Rótulos",
+        overlay=True,
+        control=True,
+        opacity=0.7
+    ).add_to(m)
+
+    # ---- Overlay do campo de rugby (só quando pedido) ----
+    if mostrar_campo:
+        cx = field_length / 2
+        cy = field_width / 2
+
+        def pt(x_offset, y_offset):
+            return campo_para_latlon(centro_lat, centro_lon, y_offset, x_offset, rotacao_deg)
+
+        def linha(pontos_xy):
+            return [pt(x - cx, y - cy) for x, y in pontos_xy]
+
+        campo_group = folium.FeatureGroup(name="🏉 Campo de Rugby", show=True)
+
+        def add_line(pts_xy, color="white", weight=2, dash=None):
+            latlon_pts = linha(pts_xy)
+            kwargs = dict(color=color, weight=weight, opacity=0.9)
+            if dash:
+                kwargs["dash_array"] = dash
+            folium.PolyLine(latlon_pts, **kwargs).add_to(campo_group)
+
+        add_line([
+            (-in_goal, 0), (field_length + in_goal, 0),
+            (field_length + in_goal, field_width), (-in_goal, field_width),
+            (-in_goal, 0)
+        ], weight=2)
+        add_line([(0, 0), (0, field_width)], weight=3)
+        add_line([(field_length, 0), (field_length, field_width)], weight=3)
+        add_line([(field_length / 2, 0), (field_length / 2, field_width)], weight=2)
+        add_line([(22, 0), (22, field_width)], dash="6 4")
+        add_line([(field_length - 22, 0), (field_length - 22, field_width)], dash="6 4")
+        add_line([(10, 0), (10, field_width)], dash="2 4")
+        add_line([(field_length - 10, 0), (field_length - 10, field_width)], dash="2 4")
+        add_line([(15, 0), (15, field_width)], dash="2 2", weight=1)
+        add_line([(field_length - 15, 0), (field_length - 15, field_width)], dash="2 2", weight=1)
+
+        crossbar_y1 = field_width / 2 - 3.4
+        crossbar_y2 = field_width / 2 + 3.4
+        folium.PolyLine(
+            [pt(0 - cx, crossbar_y1 - cy), pt(0 - cx, crossbar_y2 - cy)],
+            color="#FFD700", weight=3, opacity=1
+        ).add_to(campo_group)
+        folium.PolyLine(
+            [pt(0 - cx, field_width / 2 - cy), pt(-5 - cx, field_width / 2 - cy)],
+            color="#FFD700", weight=3, opacity=1
+        ).add_to(campo_group)
+        folium.PolyLine(
+            [pt(field_length - cx, crossbar_y1 - cy), pt(field_length - cx, crossbar_y2 - cy)],
+            color="#FFD700", weight=3, opacity=1
+        ).add_to(campo_group)
+        folium.PolyLine(
+            [pt(field_length - cx, field_width / 2 - cy), pt(field_length + 5 - cx, field_width / 2 - cy)],
+            color="#FFD700", weight=3, opacity=1
+        ).add_to(campo_group)
+        campo_group.add_to(m)
+
+    # ---- Trajetória GPS colorida por velocidade ----
+    BANDAS_VEL = [
+        (0,   7,   "#2196F3", "Caminhada / Trote (<7 km/h)"),
+        (7,   14,  "#4CAF50", "Corrida Leve (7-14 km/h)"),
+        (14,  19,  "#FFEB3B", "Corrida Moderada (14-19 km/h)"),
+        (19,  24,  "#FF9800", "Corrida Intensa (19-24 km/h)"),
+        (24,  999, "#F44336", "Sprint (>24 km/h)"),
+    ]
+
+    # Subsample para performance (máx 8000 pontos)
+    n = len(lats)
+    step = max(1, n // 8000)
+    lats_s = lats[::step]
+    lons_s = lons[::step]
+    vels_s = vels[::step]
+
+    traj_group = folium.FeatureGroup(name="🏃 Trajetória GPS", show=True)
+
+    # Desenha segmentos contíguos agrupados por banda
+    def cor_banda(v):
+        for vmin, vmax, cor, _ in BANDAS_VEL:
+            if v < vmax:
+                return cor
+        return "#F44336"
+
+    seg_lats, seg_lons, seg_cor = [lats_s[0]], [lons_s[0]], cor_banda(vels_s[0])
+    for i in range(1, len(lats_s)):
+        c = cor_banda(vels_s[i])
+        if c == seg_cor:
+            seg_lats.append(lats_s[i])
+            seg_lons.append(lons_s[i])
+        else:
+            if len(seg_lats) > 1:
+                folium.PolyLine(
+                    list(zip(seg_lats, seg_lons)),
+                    color=seg_cor, weight=3, opacity=0.85
+                ).add_to(traj_group)
+            seg_lats = [lats_s[i - 1], lats_s[i]]
+            seg_lons = [lons_s[i - 1], lons_s[i]]
+            seg_cor = c
+    if len(seg_lats) > 1:
+        folium.PolyLine(
+            list(zip(seg_lats, seg_lons)),
+            color=seg_cor, weight=3, opacity=0.85
+        ).add_to(traj_group)
+
+    # Marcador de início
+    folium.CircleMarker(
+        location=[lats_s[0], lons_s[0]],
+        radius=7, color="white", fill=True, fill_color="#00E676",
+        fill_opacity=1, tooltip="▶ Início"
+    ).add_to(traj_group)
+
+    # Marcador de fim
+    folium.Marker(
+        location=[lats_s[-1], lons_s[-1]],
+        icon=folium.Icon(color="red", icon="flag"),
+        tooltip="⏹ Fim"
+    ).add_to(traj_group)
+
+    traj_group.add_to(m)
+
+    # ---- Marcador do centro do campo (sempre visível) ----
+    folium.CircleMarker(
+        location=[float(centro_lat), float(centro_lon)],
+        radius=7, color="white", weight=2,
+        fill=True, fill_color="#FFEB3B", fill_opacity=0.95,
+        tooltip=f"🎯 Centro do campo — clique no mapa para mover<br>{float(centro_lat):.6f}, {float(centro_lon):.6f}"
+    ).add_to(m)
+
+    # ---- Legenda HTML ----
+    legenda_html = """
+    <div style="position:fixed;bottom:30px;left:30px;z-index:9999;background:rgba(0,0,0,0.75);
+                padding:10px 14px;border-radius:8px;color:white;font-size:12px;line-height:1.7;">
+      <b>Velocidade</b><br>
+      <span style="color:#2196F3">&#9632;</span> &lt;7 km/h — Caminhada<br>
+      <span style="color:#4CAF50">&#9632;</span> 7-14 km/h — Trote<br>
+      <span style="color:#FFEB3B">&#9632;</span> 14-19 km/h — Corrida<br>
+      <span style="color:#FF9800">&#9632;</span> 19-24 km/h — Corrida intensa<br>
+      <span style="color:#F44336">&#9632;</span> &gt;24 km/h — Sprint
+    </div>
+    """
+    m.get_root().html.add_child(folium.Element(legenda_html))
+
+    folium.LayerControl(collapsed=False).add_to(m)
+
+    return m
+
+
+def criar_html_campo_interativo(lats_gps, lons_gps, vels_gps, atleta_nome, height=700):
+    """
+    Gera HTML auto-contido com Leaflet.js:
+    - Satélite Esri (gratuito, sem API key)
+    - Trajetória GPS colorida por velocidade
+    - Campo de rugby interativo: clique para posicionar centro,
+      sliders para rotação/tamanho em tempo real
+    - Zero re-renders do Streamlit (toda interação é client-side em JavaScript)
+    """
+    n = len(lats_gps)
+    step = max(1, n // 3000)
+    pontos = [
+        {"lat": round(lats_gps[i], 7),
+         "lon": round(lons_gps[i], 7),
+         "v":   round(float(vels_gps[i]) if i < len(vels_gps) else 0.0, 1)}
+        for i in range(0, n, step)
+    ]
+    import json as _json
+    lat_c  = round(float(np.median(lats_gps)), 7)
+    lon_c  = round(float(np.median(lons_gps)), 7)
+    pts_js = _json.dumps(pontos)
+    aesc   = atleta_nome.replace('"', '\\"').replace("'", "\\'")
+    map_h  = height - 115
+
+    html = (
+        "<!DOCTYPE html>\n<html>\n<head>\n"
+        "  <meta charset='utf-8'>\n"
+        "  <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>\n"
+        "  <script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>\n"
+        "  <style>\n"
+        "    *{box-sizing:border-box;margin:0;padding:0}\n"
+        "    body{background:#111;font-family:Arial,sans-serif;color:#eee}\n"
+        f"    #map{{width:100%;height:{map_h}px}}\n"
+        "    #panel{background:rgba(10,10,25,.95);padding:7px 12px;"
+        "display:flex;flex-wrap:wrap;gap:12px;align-items:center;"
+        "border-top:1px solid #333;min-height:55px}\n"
+        "    .ctrl{display:flex;align-items:center;gap:6px;font-size:12px}\n"
+        "    .ctrl label{color:#aaa;white-space:nowrap;min-width:110px}\n"
+        "    .ctrl input[type=range]{width:100px;accent-color:#2196F3;cursor:pointer}\n"
+        "    .val{color:#FFD700;font-weight:bold;min-width:32px;display:inline-block}\n"
+        "    .btn{background:#2196F3;color:#fff;border:none;padding:5px 13px;"
+        "border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;white-space:nowrap}\n"
+        "    .btn:hover{background:#1565C0}\n"
+        "    .btn.on{background:#4CAF50}\n"
+        "    .btn.on:hover{background:#2E7D32}\n"
+        "    #status{margin-left:auto;color:#90CAF9;font-size:11px;"
+        "max-width:260px;text-align:right}\n"
+        "    /* Overlay pane totalmente transparente a cliques — map.on('click') sempre dispara */\n"
+        "    .leaflet-overlay-pane{pointer-events:none!important}\n"
+        "    .leaflet-overlay-pane *{pointer-events:none!important}\n"
+        "  </style>\n</head>\n<body>\n"
+        "  <div id='map'></div>\n"
+        "  <div id='panel'>\n"
+        "    <button class='btn' id='btnC' onclick='toggleCampo()'>🏉 Mostrar Campo</button>\n"
+        "    <div class='ctrl'>\n"
+        f"      <label>📍 Lat centro:</label>\n"
+        f"      <input type='number' id='inLat' value='{lat_c}' step='0.00005'\n"
+        "        style='width:105px;background:#1a1a2e;color:#FFD700;border:1px solid #555;"
+        "padding:3px 5px;border-radius:3px;font-size:12px' oninput='onCenter()'>\n"
+        "    </div>\n"
+        "    <div class='ctrl'>\n"
+        f"      <label>📍 Lon centro:</label>\n"
+        f"      <input type='number' id='inLon' value='{lon_c}' step='0.00005'\n"
+        "        style='width:105px;background:#1a1a2e;color:#FFD700;border:1px solid #555;"
+        "padding:3px 5px;border-radius:3px;font-size:12px' oninput='onCenter()'>\n"
+        "    </div>\n"
+        "    <div class='ctrl'>\n"
+        "      <label>🧭 Rotação: <span class='val' id='rv'>0</span>°</label>\n"
+        "      <input type='range' id='rot' min='0' max='359' value='0' oninput='onRot(this.value)'>\n"
+        "    </div>\n"
+        "    <div class='ctrl'>\n"
+        "      <label>📏 Comprimento: <span class='val' id='flv'>100</span>m</label>\n"
+        "      <input type='range' id='fl' min='90' max='110' value='100' oninput='onDim()'>\n"
+        "    </div>\n"
+        "    <div class='ctrl'>\n"
+        "      <label>📏 Largura: <span class='val' id='fwv'>70</span>m</label>\n"
+        "      <input type='range' id='fw' min='60' max='80' value='70' oninput='onDim()'>\n"
+        "    </div>\n"
+        "    <div class='ctrl'>\n"
+        "      <label>🔚 In-goal: <span class='val' id='igv'>10</span>m</label>\n"
+        "      <input type='range' id='ig' min='5' max='15' value='10' oninput='onDim()'>\n"
+        "    </div>\n"
+        "    <span id='status'>📍 Ajuste Lat/Lon acima para mover o centro · ↑↓ no teclado = ~5m</span>\n"
+        "  </div>\n"
+        "  <script>\n"
+        f"  const PTS={pts_js};\n"
+        f"  const map=L.map('map').setView([{lat_c},{lon_c}],17);\n"
+        "  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',\n"
+        "    {attribution:'Esri World Imagery',maxZoom:19}).addTo(map);\n"
+        "  L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',\n"
+        "    {attribution:'Esri Labels',opacity:0.6,maxZoom:19}).addTo(map);\n"
+        "  // ---- Trajetória GPS ----\n"
+        "  function vc(v){\n"
+        "    if(v<7)return '#2196F3';\n"
+        "    if(v<14)return '#4CAF50';\n"
+        "    if(v<19)return '#FFEB3B';\n"
+        "    if(v<24)return '#FF9800';\n"
+        "    return '#F44336';\n"
+        "  }\n"
+        "  let seg=[],sc=null;\n"
+        "  for(let i=0;i<PTS.length;i++){\n"
+        "    const c=vc(PTS[i].v);\n"
+        "    if(c===sc){seg.push([PTS[i].lat,PTS[i].lon]);}\n"
+        "    else{\n"
+        "      if(seg.length>1)L.polyline(seg,{color:sc,weight:3,opacity:.85,interactive:false}).addTo(map);\n"
+        "      seg=i>0?[[PTS[i-1].lat,PTS[i-1].lon],[PTS[i].lat,PTS[i].lon]]:[[PTS[i].lat,PTS[i].lon]];\n"
+        "      sc=c;\n"
+        "    }\n"
+        "  }\n"
+        "  if(seg.length>1)L.polyline(seg,{color:sc,weight:3,opacity:.85,interactive:false}).addTo(map);\n"
+        "  if(PTS.length>0){\n"
+        "    L.circleMarker([PTS[0].lat,PTS[0].lon],\n"
+        "      {radius:7,color:'white',fillColor:'#00E676',fillOpacity:1,weight:2,interactive:false}).addTo(map);\n"
+        "    L.circleMarker([PTS[PTS.length-1].lat,PTS[PTS.length-1].lon],\n"
+        "      {radius:7,color:'white',fillColor:'#F44336',fillOpacity:1,weight:2,interactive:false}).addTo(map);\n"
+        "  }\n"
+        "  // ---- Estado do campo ----\n"
+        "  let campoOn=false;\n"
+        f"  let cLat={lat_c},cLon={lon_c};\n"
+        "  let rotD=0,fL=100,fW=70,fI=10;\n"
+        "  const cl=L.layerGroup().addTo(map);\n"
+        "  // ---- Marcador arrastável (L.Marker com divIcon — não depende de map.on click) ----\n"
+        "  const cmIcon=L.divIcon({\n"
+        "    className:'',\n"
+        "    html:'<div id=\"cmDiv\" style=\"width:24px;height:24px;background:#FFEB3B;"\
+        "border:3px solid white;border-radius:50%;cursor:grab;"\
+        "box-shadow:0 2px 8px rgba(0,0,0,.7);margin:-12px 0 0 -12px;\"></div>',\n"
+        "    iconSize:[24,24],iconAnchor:[12,12]\n"
+        "  });\n"
+        "  const cm=L.marker([cLat,cLon],{draggable:true,icon:cmIcon,zIndexOffset:1000}).addTo(map);\n"
+        "  // Atualiza centro a partir dos inputs numéricos (sempre funciona)\n"
+        "  function onCenter(){\n"
+        "    const v1=parseFloat(document.getElementById('inLat').value);\n"
+        "    const v2=parseFloat(document.getElementById('inLon').value);\n"
+        "    if(isNaN(v1)||isNaN(v2))return;\n"
+        "    cLat=v1;cLon=v2;\n"
+        "    cm.setLatLng([cLat,cLon]);\n"
+        "    map.panTo([cLat,cLon]);\n"
+        "    drawField();\n"
+        "    document.getElementById('status').textContent='🎯 '+cLat.toFixed(5)+', '+cLon.toFixed(5);\n"
+        "  }\n"
+        "  // Sincroniza inputs quando marcador é arrastado (bônus se funcionar no browser)\n"
+        "  function syncInputs(){\n"
+        "    document.getElementById('inLat').value=cLat.toFixed(6);\n"
+        "    document.getElementById('inLon').value=cLon.toFixed(6);\n"
+        "  }\n"
+        "  cm.on('drag',function(e){\n"
+        "    const ll=e.target.getLatLng();\n"
+        "    cLat=ll.lat;cLon=ll.lng;\n"
+        "    syncInputs();\n"
+        "    if(campoOn)drawField();\n"
+        "    document.getElementById('status').textContent='⟳ '+cLat.toFixed(5)+', '+cLon.toFixed(5);\n"
+        "  });\n"
+        "  cm.on('dragend',function(e){\n"
+        "    const ll=e.target.getLatLng();\n"
+        "    cLat=ll.lat;cLon=ll.lng;\n"
+        "    syncInputs();\n"
+        "    drawField();\n"
+        "    document.getElementById('status').textContent='🎯 Centro: '+cLat.toFixed(5)+', '+cLon.toFixed(5);\n"
+        "  });\n"
+        "  // ---- Geometria do campo ----\n"
+        "  function toR(d){return d*Math.PI/180;}\n"
+        "  function geo(xO,yO){\n"
+        "    const r=toR(rotD);\n"
+        "    const nM=yO*Math.cos(r)-xO*Math.sin(r);\n"
+        "    const eM=yO*Math.sin(r)+xO*Math.cos(r);\n"
+        "    return[cLat+nM/111320,cLon+eM/(111320*Math.cos(toR(cLat)))];\n"
+        "  }\n"
+        "  function lc(pts){return pts.map(p=>geo(p[0]-fL/2,p[1]-fW/2));}\n"
+        "  function pl(pts,opt){L.polyline(lc(pts),Object.assign({interactive:false},opt)).addTo(cl);}\n"
+        "  function drawField(){\n"
+        "    cl.clearLayers();\n"
+        "    if(!campoOn)return;\n"
+        "    const L_=fL,W=fW,ig=fI;\n"
+        "    const w={color:'white',weight:2,opacity:.9};\n"
+        "    const wb={color:'white',weight:3,opacity:.9};\n"
+        "    const gd={color:'#FFD700',weight:3,opacity:1,interactive:false};\n"
+        "    pl([[-ig,0],[L_+ig,0],[L_+ig,W],[-ig,W],[-ig,0]],w);\n"
+        "    pl([[0,0],[0,W]],wb);\n"
+        "    pl([[L_,0],[L_,W]],wb);\n"
+        "    pl([[L_/2,0],[L_/2,W]],w);\n"
+        "    pl([[22,0],[22,W]],Object.assign({},w,{dashArray:'6 4'}));\n"
+        "    pl([[L_-22,0],[L_-22,W]],Object.assign({},w,{dashArray:'6 4'}));\n"
+        "    pl([[10,0],[10,W]],Object.assign({},w,{dashArray:'2 4'}));\n"
+        "    pl([[L_-10,0],[L_-10,W]],Object.assign({},w,{dashArray:'2 4'}));\n"
+        "    pl([[15,0],[15,W]],Object.assign({},w,{weight:1,dashArray:'2 2'}));\n"
+        "    pl([[L_-15,0],[L_-15,W]],Object.assign({},w,{weight:1,dashArray:'2 2'}));\n"
+        "    const cy1=W/2-3.4,cy2=W/2+3.4;\n"
+        "    L.polyline([geo(-L_/2,cy1-W/2),geo(-L_/2,cy2-W/2)],gd).addTo(cl);\n"
+        "    L.polyline([geo(-L_/2,0),geo(-5-L_/2,0)],gd).addTo(cl);\n"
+        "    L.polyline([geo(L_/2,cy1-W/2),geo(L_/2,cy2-W/2)],gd).addTo(cl);\n"
+        "    L.polyline([geo(L_/2,0),geo(L_/2+5,0)],gd).addTo(cl);\n"
+        "  }\n"
+        "  function onRot(v){rotD=+v;document.getElementById('rv').textContent=v;drawField();}\n"
+        "  function onDim(){\n"
+        "    fL=+document.getElementById('fl').value;\n"
+        "    fW=+document.getElementById('fw').value;\n"
+        "    fI=+document.getElementById('ig').value;\n"
+        "    document.getElementById('flv').textContent=fL;\n"
+        "    document.getElementById('fwv').textContent=fW;\n"
+        "    document.getElementById('igv').textContent=fI;\n"
+        "    drawField();\n"
+        "  }\n"
+        "  function toggleCampo(){\n"
+        "    campoOn=!campoOn;\n"
+        "    const b=document.getElementById('btnC');\n"
+        "    b.textContent=campoOn?'🏉 Ocultar Campo':'🏉 Mostrar Campo';\n"
+        "    b.className=campoOn?'btn on':'btn';\n"
+        "    drawField();\n"
+        "    document.getElementById('status').textContent=campoOn\n"
+        "      ?'✅ Arraste ⊙ para mover · sliders para ajustar em tempo real'\n"
+        "      :'⊙ Arraste o marcador amarelo para o centro do campo';\n"
+        "  }\n"
+        "  const leg=L.control({position:'bottomleft'});\n"
+        "  leg.onAdd=function(){\n"
+        "    const d=L.DomUtil.create('div');\n"
+        "    d.style='background:rgba(0,0,0,.78);padding:8px 11px;border-radius:6px;color:#fff;font-size:11px;line-height:1.9';\n"
+        "    d.innerHTML='<b>Velocidade</b><br>'\n"
+        "      +'<span style=\"color:#2196F3\">■</span> &lt;7 km/h Caminhada<br>'\n"
+        "      +'<span style=\"color:#4CAF50\">■</span> 7-14 km/h Trote<br>'\n"
+        "      +'<span style=\"color:#FFEB3B\">■</span> 14-19 km/h Corrida<br>'\n"
+        "      +'<span style=\"color:#FF9800\">■</span> 19-24 km/h Intensa<br>'\n"
+        "      +'<span style=\"color:#F44336\">■</span> &gt;24 km/h Sprint';\n"
+        "    L.DomEvent.disableClickPropagation(d);\n"
+        "    return d;\n"
+        "  };\n"
+        "  leg.addTo(map);\n"
+        "  </script>\n</body>\n</html>"
+    )
+    return html
+
+
+def criar_html_campo_fixo(lats_gps, lons_gps, vels_gps, campo_config,
+                          lats_eff=None, lons_eff=None, vels_eff=None,
+                          atleta_nome="", esforco_desc="", height=580):
+    """
+    Mapa satélite com campo de rugby FIXO (já configurado e aplicado).
+    - Trajetória GPS completa como fundo (opacidade baixa)
+    - Campo de rugby desenhado na posição salva
+    - Se lats_eff fornecido: destaca os pontos do esforço selecionado (linha grossa)
+    """
+    import json as _json
+
+    # Sub-amostra o trace de fundo (máx 3000 pontos)
+    n = len(lats_gps)
+    step = max(1, n // 3000)
+    pontos = [
+        {"lat": round(lats_gps[i], 7),
+         "lon": round(lons_gps[i], 7),
+         "v":   round(float(vels_gps[i]) if i < len(vels_gps) else 0.0, 1)}
+        for i in range(0, n, step)
+    ]
+
+    # Pontos do esforço destacado
+    eff_pontos = []
+    if lats_eff and lons_eff:
+        eff_pontos = [
+            {"lat": round(lats_eff[i], 7),
+             "lon": round(lons_eff[i], 7),
+             "v":   round(float(vels_eff[i]) if vels_eff and i < len(vels_eff) else 0.0, 1)}
+            for i in range(len(lats_eff))
+        ]
+
+    cLat = campo_config['lat']
+    cLon = campo_config['lon']
+    rotD = campo_config['rot']
+    fL   = campo_config['fl']
+    fW   = campo_config['fw']
+    fI   = campo_config['ig']
+
+    pts_js   = _json.dumps(pontos)
+    eff_js   = _json.dumps(eff_pontos)
+    aesc     = atleta_nome.replace('"', '\\"').replace("'", "\\'")
+    desc_esc = esforco_desc.replace('"', '\\"').replace("'", "\\'")
+    map_h    = height - 44
+
+    html = (
+        "<!DOCTYPE html>\n<html>\n<head>\n"
+        "  <meta charset='utf-8'>\n"
+        "  <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>\n"
+        "  <script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>\n"
+        "  <style>\n"
+        "    *{box-sizing:border-box;margin:0;padding:0}\n"
+        "    body{background:#111;font-family:Arial,sans-serif;color:#eee}\n"
+        f"    #map{{width:100%;height:{map_h}px}}\n"
+        "    #infobar{background:rgba(10,10,25,.93);padding:6px 14px;display:flex;"
+        "align-items:center;gap:14px;border-top:1px solid #2a2a3a;min-height:44px;font-size:12px}\n"
+        "    .lk{color:#4CAF50;font-weight:bold;font-size:13px}\n"
+        "    .leaflet-overlay-pane{pointer-events:none!important}\n"
+        "    .leaflet-overlay-pane *{pointer-events:none!important}\n"
+        "  </style>\n</head>\n<body>\n"
+        "  <div id='map'></div>\n"
+        "  <div id='infobar'>\n"
+        "    <span class='lk'>🔒 Campo Aplicado</span>\n"
+        f"    <span style='color:#90CAF9'>📍 {cLat:.5f}, {cLon:.5f}</span>\n"
+        f"    <span style='color:#aaa'>🧭 {rotD}°</span>\n"
+        f"    <span style='color:#aaa'>📏 {fL}×{fW}m + in-goal {fI}m</span>\n"
+        "    <span id='effinfo' style='color:#FFD700;margin-left:auto;font-weight:bold'></span>\n"
+        "  </div>\n"
+        "  <script>\n"
+        f"  const PTS={pts_js};\n"
+        f"  const EFF={eff_js};\n"
+        f"  const cLat={cLat},cLon={cLon},rotD={rotD},fL={fL},fW={fW},fI={fI};\n"
+        f"  const map=L.map('map').setView([cLat,cLon],17);\n"
+        "  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',\n"
+        "    {attribution:'Esri World Imagery',maxZoom:19}).addTo(map);\n"
+        "  L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',\n"
+        "    {attribution:'Esri Labels',opacity:0.6,maxZoom:19}).addTo(map);\n"
+        "  function vc(v){\n"
+        "    if(v<7)return '#2196F3';if(v<14)return '#4CAF50';\n"
+        "    if(v<19)return '#FFEB3B';if(v<24)return '#FF9800';return '#F44336';\n"
+        "  }\n"
+        "  // ---- Trace de fundo (opacidade baixa) ----\n"
+        "  let seg=[],sc=null;\n"
+        "  for(let i=0;i<PTS.length;i++){\n"
+        "    const c=vc(PTS[i].v);\n"
+        "    if(c===sc){seg.push([PTS[i].lat,PTS[i].lon]);}\n"
+        "    else{\n"
+        "      if(seg.length>1)L.polyline(seg,{color:sc,weight:2,opacity:.28,interactive:false}).addTo(map);\n"
+        "      seg=i>0?[[PTS[i-1].lat,PTS[i-1].lon],[PTS[i].lat,PTS[i].lon]]:[[PTS[i].lat,PTS[i].lon]];\n"
+        "      sc=c;\n"
+        "    }\n"
+        "  }\n"
+        "  if(seg.length>1)L.polyline(seg,{color:sc,weight:2,opacity:.28,interactive:false}).addTo(map);\n"
+        "  // ---- Esforço destacado (linha grossa) ----\n"
+        f"  const effDesc='{desc_esc}';\n"
+        "  if(EFF.length>0){\n"
+        "    let es=[],ec=null;\n"
+        "    for(let i=0;i<EFF.length;i++){\n"
+        "      const c=vc(EFF[i].v);\n"
+        "      if(c===ec){es.push([EFF[i].lat,EFF[i].lon]);}\n"
+        "      else{\n"
+        "        if(es.length>1)L.polyline(es,{color:ec,weight:7,opacity:1,interactive:false}).addTo(map);\n"
+        "        es=i>0?[[EFF[i-1].lat,EFF[i-1].lon],[EFF[i].lat,EFF[i].lon]]:[[EFF[i].lat,EFF[i].lon]];\n"
+        "        ec=c;\n"
+        "      }\n"
+        "    }\n"
+        "    if(es.length>1)L.polyline(es,{color:ec,weight:7,opacity:1,interactive:false}).addTo(map);\n"
+        "    L.circleMarker([EFF[0].lat,EFF[0].lon],\n"
+        "      {radius:9,color:'white',fillColor:'#00E676',fillOpacity:1,weight:2,interactive:false}).addTo(map);\n"
+        "    L.circleMarker([EFF[EFF.length-1].lat,EFF[EFF.length-1].lon],\n"
+        "      {radius:9,color:'white',fillColor:'#F44336',fillOpacity:1,weight:2,interactive:false}).addTo(map);\n"
+        "    const midIdx=Math.floor(EFF.length/2);\n"
+        "    map.setView([EFF[midIdx].lat,EFF[midIdx].lon],18);\n"
+        "    document.getElementById('effinfo').textContent='⚡ '+effDesc;\n"
+        "  } else {\n"
+        "    if(PTS.length>0){\n"
+        "      L.circleMarker([PTS[0].lat,PTS[0].lon],\n"
+        "        {radius:6,color:'white',fillColor:'#00E676',fillOpacity:1,weight:2,interactive:false}).addTo(map);\n"
+        "      L.circleMarker([PTS[PTS.length-1].lat,PTS[PTS.length-1].lon],\n"
+        "        {radius:6,color:'white',fillColor:'#F44336',fillOpacity:1,weight:2,interactive:false}).addTo(map);\n"
+        "    }\n"
+        "  }\n"
+        "  // ---- Campo fixo ----\n"
+        "  const cl=L.layerGroup().addTo(map);\n"
+        "  function toR(d){return d*Math.PI/180;}\n"
+        "  function geo(xO,yO){\n"
+        "    const r=toR(rotD);\n"
+        "    const nM=yO*Math.cos(r)-xO*Math.sin(r);\n"
+        "    const eM=yO*Math.sin(r)+xO*Math.cos(r);\n"
+        "    return[cLat+nM/111320,cLon+eM/(111320*Math.cos(toR(cLat)))];\n"
+        "  }\n"
+        "  function lc(pts){return pts.map(p=>geo(p[0]-fL/2,p[1]-fW/2));}\n"
+        "  function pl(pts,opt){L.polyline(lc(pts),Object.assign({interactive:false},opt)).addTo(cl);}\n"
+        "  (function(){\n"
+        "    const w={color:'white',weight:2,opacity:.9};\n"
+        "    const wb={color:'white',weight:3,opacity:.9};\n"
+        "    const gd={color:'#FFD700',weight:3,opacity:1,interactive:false};\n"
+        "    pl([[-fI,0],[fL+fI,0],[fL+fI,fW],[-fI,fW],[-fI,0]],w);\n"
+        "    pl([[0,0],[0,fW]],wb);\n"
+        "    pl([[fL,0],[fL,fW]],wb);\n"
+        "    pl([[fL/2,0],[fL/2,fW]],w);\n"
+        "    pl([[22,0],[22,fW]],Object.assign({},w,{dashArray:'6 4'}));\n"
+        "    pl([[fL-22,0],[fL-22,fW]],Object.assign({},w,{dashArray:'6 4'}));\n"
+        "    pl([[10,0],[10,fW]],Object.assign({},w,{dashArray:'2 4'}));\n"
+        "    pl([[fL-10,0],[fL-10,fW]],Object.assign({},w,{dashArray:'2 4'}));\n"
+        "    pl([[15,0],[15,fW]],Object.assign({},w,{weight:1,dashArray:'2 2'}));\n"
+        "    pl([[fL-15,0],[fL-15,fW]],Object.assign({},w,{weight:1,dashArray:'2 2'}));\n"
+        "    const cy1=fW/2-3.4,cy2=fW/2+3.4;\n"
+        "    L.polyline([geo(-fL/2,cy1-fW/2),geo(-fL/2,cy2-fW/2)],gd).addTo(cl);\n"
+        "    L.polyline([geo(-fL/2,0),geo(-5-fL/2,0)],gd).addTo(cl);\n"
+        "    L.polyline([geo(fL/2,cy1-fW/2),geo(fL/2,cy2-fW/2)],gd).addTo(cl);\n"
+        "    L.polyline([geo(fL/2,0),geo(fL/2+5,0)],gd).addTo(cl);\n"
+        "  })();\n"
+        "  // ---- Legenda ----\n"
+        "  const leg=L.control({position:'bottomleft'});\n"
+        "  leg.onAdd=function(){\n"
+        "    const d=L.DomUtil.create('div');\n"
+        "    d.style='background:rgba(0,0,0,.78);padding:8px 11px;border-radius:6px;color:#fff;font-size:11px;line-height:1.9';\n"
+        "    d.innerHTML='<b>Velocidade</b><br>'\n"
+        "      +'<span style=\"color:#2196F3\">■</span> &lt;7 km/h Caminhada<br>'\n"
+        "      +'<span style=\"color:#4CAF50\">■</span> 7-14 km/h Trote<br>'\n"
+        "      +'<span style=\"color:#FFEB3B\">■</span> 14-19 km/h Corrida<br>'\n"
+        "      +'<span style=\"color:#FF9800\">■</span> 19-24 km/h Intensa<br>'\n"
+        "      +'<span style=\"color:#F44336\">■</span> &gt;24 km/h Sprint';\n"
+        "    L.DomEvent.disableClickPropagation(d);\n"
+        "    return d;\n"
+        "  };\n"
+        "  leg.addTo(map);\n"
+        "  </script>\n</body>\n</html>"
+    )
+    return html
+
+
 def lat_lon_to_xy(latitudes, longitudes):
     if len(latitudes) == 0:
         return [], []
-    
+
     lat_ref = latitudes[0]
     lon_ref = longitudes[0]
     R = 6371000
-    
+
     lat_rad = np.radians(latitudes)
     lon_rad = np.radians(longitudes)
     ref_lat_rad = np.radians(lat_ref)
@@ -627,7 +1868,9 @@ def processar_efforts_velocidade(efforts_data):
             'Vel. Máx (km/h)': round(max_vel * 3.6, 1) if max_vel else 0,
             'Distância (m)': round(distance, 1),
             '% do Máximo': round(percent_of_max, 1),
-            'Banda': band
+            'Banda': band,
+            '_start_ts': start_time,
+            '_end_ts': end_time
         })
     
     return pd.DataFrame(records)
@@ -681,7 +1924,9 @@ def processar_efforts_aceleracao(efforts_data):
             'Distância (m)': round(distance, 1),
             '% do Máximo': round(percent_of_max, 1),
             'Tipo': tipo,
-            'Banda': band
+            'Banda': band,
+            '_start_ts': start_time,
+            '_end_ts': end_time
         })
     
     return pd.DataFrame(records)
@@ -1137,6 +2382,27 @@ def main():
                     st.subheader("🏃 Selecionar Atletas")
                     atletas_sel = st.multiselect("Selecione os atletas para análise:", st.session_state.atletas_filtrados['nome'].tolist())
                     st.session_state.atletas_sel = atletas_sel
+
+        # ── Seletor de Eventos Rugby ───────────────────────────────────
+        if not st.session_state.get('df_activities', pd.DataFrame()).empty and token:
+            st.markdown("---")
+            st.header("🏉 Eventos Rugby")
+            _todos_ev = list(RUGBY_EVENTS_CONFIG.keys())
+            _sel_all  = st.checkbox("Selecionar todos", value=True, key="eventos_sel_all")
+            if _sel_all:
+                eventos_rugby_sel = _todos_ev
+            else:
+                eventos_rugby_sel = st.multiselect(
+                    "Tipos de evento:",
+                    options=_todos_ev,
+                    default=_todos_ev[:4],
+                    format_func=lambda k: RUGBY_EVENTS_CONFIG[k]['label'],
+                    key="eventos_rugby_ms"
+                )
+            st.session_state.eventos_rugby_sel = eventos_rugby_sel
+            if eventos_rugby_sel:
+                st.caption(f"{len(eventos_rugby_sel)} tipo(s) selecionado(s). "
+                           "Os eventos serão carregados junto com os dados.")
     
     # Área principal
     if ('api' in st.session_state and 'atletas_sel' in st.session_state and 
@@ -1156,15 +2422,21 @@ def main():
         dados_efforts_vel_por_periodo = {}
         dados_efforts_acc_por_periodo = {}
         dados_posicao_por_periodo = {}
-        
+        dados_eventos_por_periodo = {}   # ← eventos rugby
+
+        # Tipos de eventos rugby selecionados na sidebar
+        eventos_rugby_sel = st.session_state.get('eventos_rugby_sel', list(RUGBY_EVENTS_CONFIG.keys()))
+        eventos_rugby_str = ','.join(eventos_rugby_sel) if eventos_rugby_sel else ''
+
         for periodo_nome in periodos_selecionados:
             period_id = period_ids.get(periodo_nome)
-            
+
             resultados = []
             dados_sensor_por_atleta = {}
             dados_efforts_vel = {}
             dados_efforts_acc = {}
             dados_posicao = {}
+            dados_eventos = {}   # ← eventos rugby deste período
             
             progresso = st.progress(0)
             status_text = st.empty()
@@ -1181,11 +2453,13 @@ def main():
                 athlete_equipe = athlete_row['equipe'].values[0] if 'equipe' in athlete_row.columns else ''
                 
                 if period_id:
-                    response = api.get_period_sensor_data(period_id, athlete_id)
+                    response         = api.get_period_sensor_data(period_id, athlete_id)
                     efforts_response = api.get_period_efforts(period_id, athlete_id, "velocity,acceleration")
+                    events_response  = api.get_period_events(period_id, athlete_id, eventos_rugby_str) if eventos_rugby_str else None
                 else:
-                    response = api.get_sensor_data(activity_id, athlete_id)
+                    response         = api.get_sensor_data(activity_id, athlete_id)
                     efforts_response = api.get_activity_efforts(activity_id, athlete_id, "velocity,acceleration")
+                    events_response  = api.get_activity_events(activity_id, athlete_id, eventos_rugby_str) if eventos_rugby_str else None
                 
                 sensor_points = extrair_dados_sensor(response)
                 
@@ -1210,23 +2484,71 @@ def main():
                     # configuração do campo no OpenField. Filtra nulos e valores absurdos
                     # (lat=0,long=0 sem nulls=1 produz x,y na casa dos milhões).
                     pontos_pos = [
-                        (float(p['x']), float(p['y']), p.get('v', 0) * 3.6)
+                        (float(p['x']), float(p['y']),
+                         (p.get('v') or 0) * 3.6,
+                         float(p.get('a') or 0))
                         for p in sensor_points
                         if p.get('x') is not None and p.get('y') is not None
                         and -50 < float(p['x']) < 250
                         and -50 < float(p['y']) < 200
                     ]
                     if pontos_pos:
-                        xs = [pt[0] for pt in pontos_pos]
-                        ys = [pt[1] for pt in pontos_pos]
+                        xs          = [pt[0] for pt in pontos_pos]
+                        ys          = [pt[1] for pt in pontos_pos]
                         velocidades = [pt[2] for pt in pontos_pos]
+                        aceleracoes = [pt[3] for pt in pontos_pos]
                         dados_posicao[atleta_nome] = {
                             'vel': velocidades, 'xs': xs, 'ys': ys,
+                            'acc': aceleracoes,
                             'posicao': athlete_posicao, 'equipe': athlete_equipe,
                             'n_pontos': len(pontos_pos)
                         }
-                    
-                    st.success(f"✅ {atleta_nome}: {len(sensor_points)} pontos")
+
+                    # Coleta lat/lon reais (GPS) para o mapa satélite.
+                    # Filtra zeros (sem lock de GPS) e valores geograficamente inválidos.
+                    # Armazena ts (Unix timestamp) para filtrar pontos por esforço.
+                    pontos_gps = [
+                        (float(p['lat']), float(p['long']),
+                         (p.get('v') or 0) * 3.6,
+                         float(p.get('ts') or 0))
+                        for p in sensor_points
+                        if p.get('lat') is not None and p.get('long') is not None
+                        and abs(float(p['lat'])) > 1e-6 and abs(float(p['long'])) > 1e-6
+                        and -90 < float(p['lat']) < 90
+                        and -180 < float(p['long']) < 180
+                    ]
+                    if pontos_gps:
+                        step_gps = max(1, len(pontos_gps) // 30000)
+                        gps_sub = pontos_gps[::step_gps]
+                        if atleta_nome not in dados_posicao:
+                            dados_posicao[atleta_nome] = {
+                                'vel': [], 'xs': [], 'ys': [],
+                                'posicao': athlete_posicao, 'equipe': athlete_equipe,
+                                'n_pontos': 0
+                            }
+                        dados_posicao[atleta_nome]['lats'] = [pt[0] for pt in gps_sub]
+                        dados_posicao[atleta_nome]['lons'] = [pt[1] for pt in gps_sub]
+                        dados_posicao[atleta_nome]['vels_gps'] = [pt[2] for pt in gps_sub]
+                        dados_posicao[atleta_nome]['ts_gps']  = [pt[3] for pt in gps_sub]
+
+                    # ── Processar eventos rugby ────────────────────────────────
+                    if events_response:
+                        ev_raw = extrair_eventos_rugby(events_response)
+                        if ev_raw:
+                            ts_g   = dados_posicao.get(atleta_nome, {}).get('ts_gps', [])
+                            lats_g = dados_posicao.get(atleta_nome, {}).get('lats', [])
+                            lons_g = dados_posicao.get(atleta_nome, {}).get('lons', [])
+                            vels_g = dados_posicao.get(atleta_nome, {}).get('vels_gps', [])
+                            dados_eventos[atleta_nome] = enriquecer_eventos_com_posicao(
+                                ev_raw, ts_g, lats_g, lons_g, vels_g
+                                # campo_config será enriquecido depois, no momento da visualização
+                            )
+                            n_ev = sum(len(v) for v in ev_raw.values())
+                            st.success(f"✅ {atleta_nome}: {len(sensor_points)} pontos · {n_ev} eventos rugby")
+                        else:
+                            st.success(f"✅ {atleta_nome}: {len(sensor_points)} pontos · 0 eventos rugby")
+                    else:
+                        st.success(f"✅ {atleta_nome}: {len(sensor_points)} pontos")
                 
                 progresso.progress((i + 1) / len(st.session_state.atletas_sel))
             
@@ -1238,6 +2560,7 @@ def main():
             dados_efforts_vel_por_periodo[periodo_nome] = dados_efforts_vel
             dados_efforts_acc_por_periodo[periodo_nome] = dados_efforts_acc
             dados_posicao_por_periodo[periodo_nome] = dados_posicao
+            dados_eventos_por_periodo[periodo_nome] = dados_eventos
         
         if resultados_por_periodo:
             st.subheader("📊 Métricas Biométricas")
@@ -1361,11 +2684,9 @@ def main():
             
             # ==================== ABA 2: CAMPO DE RUGBY ====================
             with abas[1]:
-                st.subheader("🗺️ Trajetória no Campo de Rugby")
-                st.markdown("Visualize a movimentação do atleta no campo com medidas oficiais")
+                st.subheader("🗺️ Campo de Rugby — Análise de Movimentação")
                 st.caption(REFERENCIAS["campo"])
 
-                
                 if dados_posicao_por_periodo:
                     col1, col2 = st.columns(2)
                     with col1:
@@ -1377,55 +2698,463 @@ def main():
 
                     if atleta_mapa and dados_posicao_por_periodo.get(periodo_mapa, {}).get(atleta_mapa):
                         dados = dados_posicao_por_periodo[periodo_mapa][atleta_mapa]
-                        st.caption(f"📡 Pontos de campo (x/y) válidos: **{dados.get('n_pontos', len(dados.get('xs', [])))}**")
 
-                        if dados.get('xs') and dados.get('ys') and dados['vel']:
-                            # Normaliza x,y para 0-100 × 0-70 (dimensões do campo desenhado).
-                            # Os valores brutos da API estão em metros relativos ao campo mas
-                            # podem ter range diferente dependendo da configuração do OpenField
-                            # (in-goal incluídos, campo rotacionado, origem deslocada, etc.).
-                            x_coords, y_coords = lat_lon_to_campo_coords(dados['xs'], dados['ys'])
+                        n_xy  = dados.get('n_pontos', len(dados.get('xs', [])))
+                        n_gps = len(dados.get('lats', []))
+                        st.caption(f"📡 Pontos campo (x/y): **{n_xy}** &nbsp;|&nbsp; 🌍 Pontos GPS reais (lat/lon): **{n_gps}**")
 
-                            if len(x_coords) > 0:
-                                tipo_vis = st.radio(
-                                    "Tipo de visualização:",
-                                    ["🗺️ Trajetória", "🔥 Mapa de Calor", "📊 Ambos"],
-                                    horizontal=True
+                        # Chave por atleta (campo físico não muda entre períodos)
+                        campo_key = f"campo_cfg__{atleta_mapa}"
+                        campo_aplicado = campo_key in st.session_state
+
+                        lats_gps  = dados.get('lats', [])
+                        lons_gps  = dados.get('lons', [])
+                        vels_gps  = dados.get('vels_gps', [])
+                        ts_gps    = dados.get('ts_gps', [])
+
+                        # ══════════════════════════════════════════════════════
+                        # FASE 1 — POSICIONAMENTO INTERATIVO NO SATÉLITE
+                        # ══════════════════════════════════════════════════════
+                        if not campo_aplicado:
+                            st.markdown("### 1️⃣ Posicionamento no Campo Físico")
+                            st.markdown(
+                                "Ajuste o campo de rugby sobre a imagem de satélite e clique "
+                                "**✅ Aplicar Campo** no painel inferior do mapa."
+                            )
+
+                            if lats_gps and lons_gps:
+                                st.info(
+                                    "📌 **Edite Lat/Lon** (ou use ↑↓) para mover o ⊙ amarelo · "
+                                    "🏉 **Mostrar Campo** para ativar o overlay · "
+                                    "Sliders ajustam rotação e dimensões **em tempo real** · "
+                                    "**✅ Aplicar Campo** quando estiver satisfeito"
                                 )
 
-                                if tipo_vis in ["🗺️ Trajetória", "📊 Ambos"]:
-                                    fig_traj = plotar_trajetoria_campo(x_coords, y_coords, dados['vel'], atleta_mapa)
-                                    st.plotly_chart(fig_traj, use_container_width=True)
+                                # Subamostrar GPS para o componente (máx 3000 pts)
+                                _n = len(lats_gps)
+                                _step = max(1, _n // 3000)
+                                _pts = [
+                                    {"lat": round(lats_gps[i], 7),
+                                     "lon": round(lons_gps[i], 7),
+                                     "v":   round(float(vels_gps[i]) if i < len(vels_gps) else 0.0, 1)}
+                                    for i in range(0, _n, _step)
+                                ]
+                                _lat_c = round(float(np.median(lats_gps)), 7)
+                                _lon_c = round(float(np.median(lons_gps)), 7)
 
-                                if tipo_vis in ["🔥 Mapa de Calor", "📊 Ambos"]:
-                                    fig_heat = plotar_heatmap_campo(x_coords, y_coords, dados['vel'], atleta_mapa)
-                                    st.plotly_chart(fig_heat, use_container_width=True)
+                                # Componente bidirecional: retorna {lat,lon,rot,fl,fw,ig}
+                                # quando o usuário clica "✅ Aplicar Campo" no painel do mapa
+                                resultado_campo = _campo_component(
+                                    pts=_pts,
+                                    lat_c=_lat_c,
+                                    lon_c=_lon_c,
+                                    key=f"campo_mapa_{periodo_mapa}_{atleta_mapa}",
+                                    default=None
+                                )
 
-                                # Estatísticas
-                                st.markdown("#### 📊 Estatísticas de Movimentação")
-                                col1, col2, col3, col4 = st.columns(4)
-                                with col1:
-                                    dist_km = sum(dados['vel']) * 0.1 / 3600
-                                    st.metric("Distância Total", f"{dist_km:.2f} km")
-                                with col2:
-                                    x_range = max(x_coords) - min(x_coords)
-                                    st.metric("Largura Atuação", f"{x_range:.0f} m")
-                                with col3:
-                                    y_range = max(y_coords) - min(y_coords)
-                                    st.metric("Profundidade", f"{y_range:.0f} m")
-                                with col4:
-                                    area = x_range * y_range
-                                    st.metric("Área Percorrida", f"{area:.0f} m²")
+                                if resultado_campo is not None:
+                                    st.session_state[campo_key] = {
+                                        'lat': float(resultado_campo['lat']),
+                                        'lon': float(resultado_campo['lon']),
+                                        'rot': int(resultado_campo['rot']),
+                                        'fl':  int(resultado_campo['fl']),
+                                        'fw':  int(resultado_campo['fw']),
+                                        'ig':  int(resultado_campo['ig'])
+                                    }
+                                    st.rerun()
                             else:
-                                st.error("❌ Não foi possível converter as coordenadas GPS")
+                                st.warning(
+                                    "⚠️ Nenhum ponto GPS real (lat/lon) encontrado para este atleta.\n\n"
+                                    "Isso pode ocorrer se o sensor não obteve lock GPS durante a sessão."
+                                )
+
+                        # ══════════════════════════════════════════════════════
+                        # FASE 2 — CAMPO APLICADO + ANÁLISE DE ESFORÇOS
+                        # ══════════════════════════════════════════════════════
                         else:
-                            st.error(
-                                "❌ Nenhum ponto de campo (x/y) válido encontrado para este atleta.\n\n"
-                                "**Causas prováveis:**\n"
-                                "- O campo não está configurado no OpenField para esta atividade\n"
-                                "- Sensor GPS sem lock (x/y retornados como nulos pela API)\n"
-                                "- Parâmetro `xy` não disponível neste perfil de sincronização"
+                            cfg = st.session_state[campo_key]
+
+                            # Botão para reajustar (volta à Fase 1)
+                            col_hdr, col_btn = st.columns([5, 1])
+                            with col_hdr:
+                                st.markdown(
+                                    f"### 1️⃣ Campo Aplicado  "
+                                    f"<span style='font-size:13px;color:#90CAF9'>"
+                                    f"📍 {cfg['lat']:.5f}, {cfg['lon']:.5f} &nbsp; "
+                                    f"🧭 {cfg['rot']}° &nbsp; "
+                                    f"📏 {cfg['fl']}×{cfg['fw']}m</span>",
+                                    unsafe_allow_html=True
+                                )
+                            with col_btn:
+                                if st.button("🔄 Reajustar", key="btn_reajustar"):
+                                    del st.session_state[campo_key]
+                                    st.rerun()
+
+                            # ── Esforço selecionado (para filtrar GPS no mapa) ──
+                            lats_eff, lons_eff, vels_eff, eff_desc = [], [], [], ""
+
+                            # Mapa fixo (atualizado abaixo se houver esforço selecionado)
+                            mapa_placeholder = st.empty()
+
+                            st.divider()
+
+                            # ── ETAPA 2: Análise de esforços ─────────────────────
+                            st.markdown("### 2️⃣ Análise de Esforços no Campo")
+
+                            # Dados de esforços deste atleta/período
+                            vel_raw = dados_efforts_vel_por_periodo.get(periodo_mapa, {}).get(atleta_mapa, [])
+                            acc_raw = dados_efforts_acc_por_periodo.get(periodo_mapa, {}).get(atleta_mapa, [])
+
+                            tipo_esf = st.radio(
+                                "Tipo de esforço:",
+                                ["⚡ Velocidade", "🔁 Aceleração"],
+                                horizontal=True, key="tipo_esf_campo"
                             )
+
+                            raw_list = vel_raw if tipo_esf == "⚡ Velocidade" else acc_raw
+
+                            if raw_list:
+                                efforts_df_full = (processar_efforts_velocidade(raw_list)
+                                                   if tipo_esf == "⚡ Velocidade"
+                                                   else processar_efforts_aceleracao(raw_list))
+
+                                if not efforts_df_full.empty:
+                                    # Filtro de bandas
+                                    if 'Banda' in efforts_df_full.columns:
+                                        bandas_disp = sorted(efforts_df_full['Banda'].dropna().unique())
+                                        if bandas_disp:
+                                            bandas_sel = st.multiselect(
+                                                "Filtrar por bandas:", bandas_disp,
+                                                default=bandas_disp, key="bandas_campo"
+                                            )
+                                            efforts_df_full = efforts_df_full[
+                                                efforts_df_full['Banda'].isin(bandas_sel)
+                                            ] if bandas_sel else efforts_df_full
+
+                                    # Colunas visíveis (esconde _start_ts / _end_ts)
+                                    cols_show = [c for c in efforts_df_full.columns
+                                                 if not c.startswith('_')]
+                                    efforts_df_show = efforts_df_full[cols_show]
+
+                                    # Métricas resumidas
+                                    mc1, mc2, mc3, mc4 = st.columns(4)
+                                    with mc1: st.metric("Total de esforços", len(efforts_df_full))
+                                    with mc2: st.metric("Duração total (s)", round(efforts_df_full['Duração (s)'].sum(), 1))
+                                    with mc3:
+                                        if 'Distância (m)' in efforts_df_full.columns:
+                                            st.metric("Distância total (m)", round(efforts_df_full['Distância (m)'].sum(), 1))
+                                    with mc4: st.metric("Média % máximo", round(efforts_df_full['% do Máximo'].mean(), 1))
+
+                                    st.markdown(
+                                        "**Selecione uma linha** para visualizar esse esforço no mapa de satélite acima. "
+                                        "Clique novamente na linha selecionada para desfazer a seleção."
+                                    )
+
+                                    # Tabela interativa com seleção de linha
+                                    evt = st.dataframe(
+                                        efforts_df_show,
+                                        use_container_width=True,
+                                        height=360,
+                                        on_select="rerun",
+                                        selection_mode="single-row",
+                                        key="tbl_esforcos_campo"
+                                    )
+
+                                    sel_rows = evt.selection.rows if evt.selection else []
+
+                                    if sel_rows and ts_gps:
+                                        sel_idx = sel_rows[0]
+                                        # Recupera os timestamps brutos da linha selecionada
+                                        row_full = efforts_df_full.iloc[sel_idx]
+                                        start_ts = row_full.get('_start_ts', 0)
+                                        end_ts   = row_full.get('_end_ts', 0)
+
+                                        if start_ts and end_ts and len(ts_gps) == len(lats_gps):
+                                            filtered = [
+                                                (la, lo, ve)
+                                                for la, lo, ve, ts in zip(lats_gps, lons_gps, vels_gps, ts_gps)
+                                                if start_ts <= ts <= end_ts
+                                            ]
+                                            if filtered:
+                                                lats_eff = [p[0] for p in filtered]
+                                                lons_eff = [p[1] for p in filtered]
+                                                vels_eff = [p[2] for p in filtered]
+                                                inicio_str = row_full.get('Início', '')
+                                                dur_str    = row_full.get('Duração (s)', '')
+                                                eff_desc   = f"Esforço #{row_full['Esforço']} — {inicio_str} — {dur_str}s"
+                                            else:
+                                                st.warning("⚠️ Nenhum ponto GPS encontrado na janela de tempo deste esforço.")
+                                        elif not ts_gps:
+                                            st.info("ℹ️ Timestamps GPS não disponíveis. Recarregue os dados para ativar o filtro de esforço no mapa.")
+
+                                    # Download da tabela
+                                    st.download_button(
+                                        "📥 Exportar esforços",
+                                        efforts_df_show.to_csv(index=False),
+                                        file_name=f"esforcos_{atleta_mapa}_{periodo_mapa}.csv"
+                                    )
+                                else:
+                                    st.info("Nenhum esforço encontrado após aplicar os filtros.")
+                            else:
+                                st.info("Nenhum dado de esforço disponível para este atleta neste período.")
+
+                            # Renderiza o mapa fixo (com ou sem esforço destacado)
+                            with mapa_placeholder:
+                                if lats_gps and lons_gps:
+                                    html_fixo = criar_html_campo_fixo(
+                                        lats_gps, lons_gps, vels_gps, cfg,
+                                        lats_eff=lats_eff or None,
+                                        lons_eff=lons_eff or None,
+                                        vels_eff=vels_eff or None,
+                                        atleta_nome=atleta_mapa,
+                                        esforco_desc=eff_desc,
+                                        height=580
+                                    )
+                                    st.components.v1.html(html_fixo, height=580, scrolling=False)
+                                else:
+                                    st.warning("⚠️ Dados GPS não disponíveis para exibição do mapa.")
+
+                            st.divider()
+
+                            # ── ETAPA 3: Campo bonito + análise avançada ─────────
+                            st.markdown("### 3️⃣ Análise de Movimentação no Campo")
+
+                            # Fonte: Catapult x/y (prioritário) ou GPS derivado via campo aplicado
+                            _has_xy  = bool(dados.get('xs') and dados.get('ys') and dados.get('vel'))
+                            _has_gps = bool(lats_gps and lons_gps and cfg)
+
+                            if not _has_xy and _has_gps:
+                                st.caption("🌍 Coordenadas derivadas do GPS + campo aplicado.")
+                            elif _has_xy:
+                                st.caption("📡 Coordenadas x/y Catapult OpenField")
+
+                            if _has_xy or _has_gps:
+                                if _has_xy:
+                                    xn, yn  = lat_lon_to_campo_coords(dados['xs'], dados['ys'])
+                                    vel_raw = dados['vel']
+                                    acc_raw = dados.get('acc', [0.0]*len(xn))
+                                else:
+                                    xn, yn  = gps_para_campo_coords(lats_gps, lons_gps, cfg)
+                                    vel_raw = vels_gps if vels_gps else [0.0]*len(xn)
+                                    acc_raw = [0.0]*len(xn)
+
+                                if len(xn) > 0:
+                                    # ── Linha 1: modo de visualização ────────────────
+                                    col_modo, col_ov = st.columns([2, 3])
+                                    with col_modo:
+                                        modo_viz = st.radio(
+                                            "🎨 Modo de visualização",
+                                            ["🗺️ Trajetória",
+                                             "⚡ Bandas de Velocidade",
+                                             "🔁 Bandas de Aceleração"],
+                                            key="modo_campo_v3"
+                                        )
+                                    with col_ov:
+                                        st.markdown("**Overlays opcionais:**")
+                                        oa, ob = st.columns(2)
+                                        with oa:
+                                            ov_setas   = st.checkbox("🏹 Setas de direção",    key="ov_setas")
+                                            ov_hull    = st.checkbox("📐 Área de atuação",     key="ov_hull")
+                                            ov_eventos = st.checkbox("🏉 Eventos Rugby",        key="ov_eventos")
+                                        with ob:
+                                            ov_tercos  = st.checkbox("📊 Terços do campo",     key="ov_tercos")
+                                            ov_grade   = st.checkbox("🔲 Grade de quadrantes", key="ov_grade")
+
+                                    # ── Seletores de bandas (dependem do modo) ────────
+                                    bandas_vel_sel = list(BANDAS_VEL.keys())
+                                    bandas_acc_sel = list(BANDAS_ACC.keys())
+
+                                    if modo_viz == "⚡ Bandas de Velocidade":
+                                        bandas_vel_sel = st.multiselect(
+                                            "Bandas de velocidade a exibir:",
+                                            options=list(BANDAS_VEL.keys()),
+                                            default=list(BANDAS_VEL.keys()),
+                                            format_func=lambda k: BANDAS_VEL[k]['label'],
+                                            key="ms_bv"
+                                        )
+                                    elif modo_viz == "🔁 Bandas de Aceleração":
+                                        bandas_acc_sel = st.multiselect(
+                                            "Bandas de aceleração a exibir:",
+                                            options=list(BANDAS_ACC.keys()),
+                                            default=list(BANDAS_ACC.keys()),
+                                            format_func=lambda k: BANDAS_ACC[k]['label'],
+                                            key="ms_ba"
+                                        )
+
+                                    # ── Configuração da grade ─────────────────────────
+                                    # ── Seletor de eventos para o campo ──────────────
+                                    _dados_ev_campo = {}
+                                    _ev_tipos_sel   = []
+                                    if ov_eventos:
+                                        _ev_raw = dados_eventos_por_periodo.get(
+                                            periodo_mapa, {}).get(atleta_mapa, {})
+                                        if _ev_raw:
+                                            # Enriquecer com posição no campo agora que temos cfg
+                                            _ev_rich = enriquecer_eventos_com_posicao(
+                                                _ev_raw,
+                                                dados.get('ts_gps', []),
+                                                dados.get('lats', []),
+                                                dados.get('lons', []),
+                                                dados.get('vels_gps', []),
+                                                campo_config=cfg,
+                                            )
+                                            _ev_tipos_disp = [
+                                                k for k in _ev_rich if _ev_rich[k]]
+                                            if _ev_tipos_disp:
+                                                _ev_tipos_sel = st.multiselect(
+                                                    "Tipos de evento no campo:",
+                                                    options=_ev_tipos_disp,
+                                                    default=_ev_tipos_disp,
+                                                    format_func=lambda k: RUGBY_EVENTS_CONFIG[k]['label'],
+                                                    key="ev_campo_tipos"
+                                                )
+                                                _dados_ev_campo = _ev_rich
+                                            else:
+                                                st.info("Nenhum evento rugby carregado para este atleta/período.")
+                                        else:
+                                            st.info("Nenhum evento rugby carregado. Recarregue os dados com eventos ativados na sidebar.")
+
+                                    n_cols_g, n_rows_g, zona_sel = 4, 3, None
+                                    if ov_grade:
+                                        gc1, gc2, gc3 = st.columns(3)
+                                        with gc1:
+                                            n_cols_g = st.slider("Colunas", 2, 10, 4, key="g_cols")
+                                        with gc2:
+                                            n_rows_g = st.slider("Linhas",  2, 8,  3, key="g_rows")
+                                        with gc3:
+                                            zonas_disp = ["— Nenhuma —"] + [
+                                                f"{chr(65+r)}{c+1}"
+                                                for r in range(n_rows_g)
+                                                for c in range(n_cols_g)
+                                            ]
+                                            zona_sel = st.selectbox(
+                                                "🔍 Detalhar zona:", zonas_disp, key="zona_det")
+                                            if zona_sel == "— Nenhuma —":
+                                                zona_sel = None
+
+                                    # ── Construir figura ──────────────────────────────
+                                    fig_campo = desenhar_campo_rugby_bonito(
+                                        title=f"📍 {atleta_mapa} — {periodo_mapa}")
+
+                                    if modo_viz == "🗺️ Trajetória":
+                                        adicionar_trajetoria_campo(fig_campo, xn, yn, vel_raw, atleta_mapa)
+                                    elif modo_viz == "⚡ Bandas de Velocidade" and bandas_vel_sel:
+                                        adicionar_pontos_velocidade_bandas(
+                                            fig_campo, xn, yn, vel_raw, bandas_vel_sel)
+                                    elif modo_viz == "🔁 Bandas de Aceleração" and bandas_acc_sel:
+                                        adicionar_pontos_aceleracao_bandas(
+                                            fig_campo, xn, yn, acc_raw, bandas_acc_sel)
+
+                                    if ov_setas:
+                                        adicionar_setas_direcao(fig_campo, xn, yn)
+                                    if ov_hull:
+                                        adicionar_convex_hull(fig_campo, xn, yn)
+                                    if ov_tercos:
+                                        adicionar_tercos_campo(fig_campo, xn, yn)
+                                    if ov_grade:
+                                        adicionar_grade_quadrantes(
+                                            fig_campo, xn, yn, n_cols_g, n_rows_g)
+                                    if ov_eventos and _dados_ev_campo and _ev_tipos_sel:
+                                        adicionar_eventos_campo(
+                                            fig_campo, _dados_ev_campo, _ev_tipos_sel)
+
+                                    st.plotly_chart(fig_campo, use_container_width=True)
+
+                                    # ── Detalhes de zona selecionada ──────────────────
+                                    if zona_sel and ov_grade:
+                                        r_idx = ord(zona_sel[0]) - 65
+                                        c_idx = int(zona_sel[1:]) - 1
+                                        cw_g  = 100.0 / n_cols_g
+                                        rh_g  = 70.0  / n_rows_g
+                                        st_z  = stats_quadrante(
+                                            xn, yn, vel_raw, acc_raw,
+                                            c_idx*cw_g, (c_idx+1)*cw_g,
+                                            r_idx*rh_g, (r_idx+1)*rh_g)
+                                        st.markdown(f"#### 🔍 Zona **{zona_sel}** — Detalhes")
+                                        z1,z2,z3,z4,z5,z6 = st.columns(6)
+                                        with z1: st.metric("% do Tempo",     f"{st_z['pct']:.1f}%")
+                                        with z2: st.metric("Pontos",          st_z['n_pontos'])
+                                        with z3: st.metric("Vel. Média",     f"{st_z['vel_media']:.1f} km/h")
+                                        with z4: st.metric("Vel. Máx",       f"{st_z['vel_max']:.1f} km/h")
+                                        with z5: st.metric("Acc. Média",     f"{st_z['acc_media']:.2f} m/s²")
+                                        with z6: st.metric("|Acc| Máx",      f"{st_z['acc_max']:.2f} m/s²")
+
+                                    # ── Estatísticas gerais ───────────────────────────
+                                    st.markdown("#### 📊 Estatísticas de Movimentação")
+                                    sc1, sc2, sc3, sc4 = st.columns(4)
+                                    with sc1:
+                                        dist_km = sum(vel_raw) * 0.1 / 3600
+                                        st.metric("Distância Total", f"{dist_km:.2f} km")
+                                    with sc2:
+                                        xr = max(xn) - min(xn)
+                                        st.metric("Largura Atuação", f"{xr:.0f} m")
+                                    with sc3:
+                                        yr = max(yn) - min(yn)
+                                        st.metric("Profundidade", f"{yr:.0f} m")
+                                    with sc4:
+                                        try:
+                                            from scipy.spatial import ConvexHull as _CH
+                                            _area = _CH(np.column_stack([xn, yn])).volume
+                                            st.metric("Área de Atuação", f"{_area:.0f} m²")
+                                        except Exception:
+                                            st.metric("Área (bbox)", f"{xr*yr:.0f} m²")
+
+                                    # ── Comparação entre períodos ─────────────────────
+                                    if len(dados_posicao_por_periodo) > 1:
+                                        st.markdown("---")
+                                        st.markdown("#### 🔄 Comparação entre Períodos")
+                                        periodos_lista = list(dados_posicao_por_periodo.keys())
+                                        cp1, cp2 = st.columns(2)
+                                        with cp1:
+                                            per1 = st.selectbox("Período A:", periodos_lista,
+                                                                 index=0, key="cmp_p1")
+                                        with cp2:
+                                            per2 = st.selectbox("Período B:", periodos_lista,
+                                                                 index=min(1, len(periodos_lista)-1),
+                                                                 key="cmp_p2")
+
+                                        if per1 != per2:
+                                            d1c = dados_posicao_por_periodo.get(per1, {}).get(atleta_mapa, {})
+                                            d2c = dados_posicao_por_periodo.get(per2, {}).get(atleta_mapa, {})
+                                            # Catapult x/y prioritário; cai para GPS fallback
+                                            cfg1 = st.session_state.get(
+                                                f"campo_cfg__{atleta_mapa}", cfg)
+                                            cfg2 = cfg1  # mesmo campo físico para todos os períodos
+                                            if d1c.get('xs') and d2c.get('xs'):
+                                                x1c, y1c = lat_lon_to_campo_coords(d1c['xs'], d1c['ys'])
+                                                x2c, y2c = lat_lon_to_campo_coords(d2c['xs'], d2c['ys'])
+                                            elif d1c.get('lats') and d2c.get('lats') and cfg1 and cfg2:
+                                                x1c, y1c = gps_para_campo_coords(
+                                                    d1c['lats'], d1c['lons'], cfg1)
+                                                x2c, y2c = gps_para_campo_coords(
+                                                    d2c['lats'], d2c['lons'], cfg2)
+                                            else:
+                                                x1c = x2c = []
+                                            if x1c and x2c:
+                                                fig_cmp = desenhar_campo_rugby_bonito(
+                                                    title=f"Comparação: {per1} (azul) vs {per2} (rosa)")
+                                                fig_cmp.add_trace(go.Scatter(
+                                                    x=x1c, y=y1c, mode='markers', name=per1,
+                                                    marker=dict(size=2, color='#00E5FF', opacity=0.5)))
+                                                fig_cmp.add_trace(go.Scatter(
+                                                    x=x2c, y=y2c, mode='markers', name=per2,
+                                                    marker=dict(size=2, color='#FF4081', opacity=0.5)))
+                                                st.plotly_chart(fig_cmp, use_container_width=True)
+                                            else:
+                                                st.info("Dados de posição não disponíveis em um dos períodos selecionados.")
+                                        else:
+                                            st.info("Selecione dois períodos diferentes para comparar.")
+                                else:
+                                    st.error("❌ Não foi possível calcular as coordenadas de campo.")
+                            else:
+                                st.warning(
+                                    "⚠️ Sem dados de posição disponíveis para análise de campo.\n\n"
+                                    "**Para ativar esta seção:**\n"
+                                    "- Certifique-se de que o campo GPS está **aplicado** "
+                                    "(clique ✅ Aplicar Campo no mapa acima)\n"
+                                    "- Verifique se o sensor GPS estava ativo durante a sessão"
+                                )
+
                     else:
                         st.info("Selecione um período e atleta")
                 else:
@@ -1492,9 +3221,62 @@ def main():
                             st.dataframe(efforts_df, use_container_width=True, height=400)
                             csv_eff = efforts_df.to_csv(index=False)
                             st.download_button("📥 Exportar Esforços", csv_eff, f"esforcos_{atleta_escolhido}.csv")
+
+                        # ── Timeline técnico-físico com eventos rugby ──────────
+                        st.markdown("---")
+                        st.markdown("### 🏉 Timeline Técnico-Físico")
+                        _ev_atleta = dados_eventos_por_periodo.get(
+                            periodo_escolhido, {}).get(atleta_escolhido, {})
+
+                        if _ev_atleta:
+                            _todos_tipos = list(_ev_atleta.keys())
+                            _tipos_timeline = st.multiselect(
+                                "Eventos a marcar na timeline:",
+                                options=_todos_tipos,
+                                default=_todos_tipos,
+                                format_func=lambda k: RUGBY_EVENTS_CONFIG[k]['label'],
+                                key="tipos_timeline"
+                            )
+                            if _tipos_timeline:
+                                fig_tl = criar_timeline_eventos(
+                                    sensor_points, _ev_atleta, atleta_escolhido, _tipos_timeline)
+                                if fig_tl:
+                                    st.plotly_chart(fig_tl, use_container_width=True)
+
+                                # ── Fadiga + recuperação pós-evento ───────────
+                                st.markdown("### 💪 Fadiga & Recuperação por Evento")
+                                janela_s = st.slider(
+                                    "Janela de análise (segundos antes/depois):",
+                                    5, 30, 10, key="janela_fadiga"
+                                )
+                                df_fadiga = analisar_fadiga_eventos(
+                                    sensor_points, _ev_atleta, _tipos_timeline, janela_s)
+                                if not df_fadiga.empty:
+                                    # Destaque colorido: variação negativa = vermelho
+                                    def _cor_variacao(v):
+                                        if v is None or pd.isna(v):
+                                            return ''
+                                        return 'color: #F44336' if v < 0 else 'color: #4CAF50'
+                                    st.caption(
+                                        "🟢 Variação positiva = atleta acelerou após o evento  "
+                                        "🔴 Variação negativa = atleta desacelerou (fadiga/impacto)"
+                                    )
+                                    styled = df_fadiga.style.map(
+                                        _cor_variacao, subset=['Variação (km/h)'])
+                                    st.dataframe(styled, use_container_width=True, height=360)
+                                    st.download_button(
+                                        "📥 Exportar análise de fadiga",
+                                        df_fadiga.to_csv(index=False),
+                                        f"fadiga_{atleta_escolhido}_{periodo_escolhido}.csv"
+                                    )
+                                else:
+                                    st.info("Nenhum dado de fadiga calculado para os eventos selecionados.")
+                        else:
+                            st.info("Nenhum evento rugby carregado para este atleta. "
+                                    "Ative os eventos na sidebar e recarregue os dados.")
                 else:
                     st.info("Dados de sensor não disponíveis")
-            
+
             # ==================== ABA 4: JANELAS TEMPORAIS MÓVEIS ====================
             with abas[3]:
                 st.subheader("📊 Análise de Intensidade - Janelas Temporais Móveis")
