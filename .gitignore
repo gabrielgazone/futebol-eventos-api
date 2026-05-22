@@ -24,6 +24,9 @@ build/
 .idea/
 *.code-workspace
 
+# Claude Code (memória local, não commitar)
+.claude/
+
 # Sistema operacional
 .DS_Store
 Thumbs.db
