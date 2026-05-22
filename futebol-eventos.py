@@ -2614,8 +2614,11 @@ def gerar_heatmap_segmentado(xs, ys, ts_list, bloco_min, bloco_idx, field_length
                     [0.3, '#1565C0'],        [0.6,    '#FFEB3B'],
                     [0.85,'#FF9800'],        [1,      '#F44336']],
         opacity=0.72, showscale=True,
-        colorbar=dict(title='Freq.', tickfont=dict(color='white'),
-                      titlefont=dict(color='white'), x=1.01, thickness=12),
+        colorbar=dict(
+            title=dict(text='Freq.', font=dict(color='white')),
+            tickfont=dict(color='white'),
+            x=1.01, thickness=12
+        ),
         name=f'Bloco {bloco_idx + 1}',
         hovertemplate='X: %{x:.1f}m<br>Y: %{y:.1f}m<br>Freq: %{z:.0f}<extra></extra>'
     ))
