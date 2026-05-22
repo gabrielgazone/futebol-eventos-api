@@ -31,7 +31,7 @@
 <body>
   <div id='map'></div>
   <div id='panel'>
-    <button class='btn' id='btnC' onclick='toggleCampo()'>🏉 Mostrar Campo</button>
+    <button class='btn' id='btnC' onclick='toggleCampo()'>⚽ Mostrar Campo</button>
 
     <div class='ctrl'>
       <label>📍 Lat centro:</label>
@@ -50,16 +50,16 @@
       <input type='range' id='rot' min='0' max='359' value='0' oninput='onRot(this.value)'>
     </div>
     <div class='ctrl'>
-      <label>📏 Comprimento: <span class='val' id='flv'>100</span>m</label>
-      <input type='range' id='fl' min='90' max='110' value='100' oninput='onDim()'>
+      <label>📏 Comprimento: <span class='val' id='flv'>105</span>m</label>
+      <input type='range' id='fl' min='95' max='115' value='105' oninput='onDim()'>
     </div>
     <div class='ctrl'>
-      <label>📏 Largura: <span class='val' id='fwv'>70</span>m</label>
-      <input type='range' id='fw' min='60' max='80' value='70' oninput='onDim()'>
+      <label>📏 Largura: <span class='val' id='fwv'>68</span>m</label>
+      <input type='range' id='fw' min='60' max='80' value='68' oninput='onDim()'>
     </div>
     <div class='ctrl'>
-      <label>🔚 In-goal: <span class='val' id='igv'>10</span>m</label>
-      <input type='range' id='ig' min='5' max='15' value='10' oninput='onDim()'>
+      <label>📐 Margem: <span class='val' id='igv'>3</span>m</label>
+      <input type='range' id='ig' min='0' max='8' value='3' oninput='onDim()'>
     </div>
 
     <button id='btnApply' onclick='aplicar()'>✅ Aplicar Campo</button>
@@ -68,18 +68,16 @@
 
   <script>
   // ── Estado global ──────────────────────────────────────────────────
-  var cLat=0, cLon=0, rotD=0, fL=100, fW=70, fI=10;
+  var cLat=0, cLon=0, rotD=0, fL=105, fW=68, fI=3;
   var campoOn=false;
   var map=null, cm=null, cl=null;
   var initialized=false;
 
   // ── Protocolo Streamlit ─────────────────────────────────────────────
-  // 1. Avisar que o componente está pronto
   window.parent.postMessage({
     isStreamlitMessage:true, type:'streamlit:componentReady', apiVersion:1
   }, '*');
 
-  // 2. Receber os dados do Python (streamlit:render)
   window.addEventListener('message', function(e){
     if(!e.data || typeof e.data !== 'object') return;
     if(e.data.type === 'streamlit:render' && !initialized){
@@ -89,7 +87,6 @@
     }
   });
 
-  // 3. Enviar valor de volta quando o usuário clicar "Aplicar"
   function aplicar(){
     window.parent.postMessage({
       isStreamlitMessage:true,
@@ -173,7 +170,6 @@
       document.getElementById('status').textContent='🎯 '+cLat.toFixed(5)+', '+cLon.toFixed(5);
     });
 
-    // Grupo de camadas do campo
     cl = L.layerGroup().addTo(map);
 
     // Legenda de velocidade
@@ -193,7 +189,6 @@
     };
     leg.addTo(map);
 
-    // Ajustar altura do frame
     window.parent.postMessage({
       isStreamlitMessage:true, type:'streamlit:setFrameHeight', height:700
     }, '*');
@@ -235,7 +230,7 @@
   function toggleCampo(){
     campoOn=!campoOn;
     var b=document.getElementById('btnC');
-    b.textContent=campoOn?'🏉 Ocultar Campo':'🏉 Mostrar Campo';
+    b.textContent=campoOn?'⚽ Ocultar Campo':'⚽ Mostrar Campo';
     b.className=campoOn?'btn on':'btn';
     drawField();
     document.getElementById('status').textContent=campoOn
@@ -257,28 +252,65 @@
     L.polyline(lc(pts), Object.assign({interactive:false},opt)).addTo(cl);
   }
 
+  // ── Campo de Futebol (medidas FIFA oficiais) ─────────────────────────
   function drawField(){
     if(!cl) return;
     cl.clearLayers();
     if(!campoOn) return;
-    var w={color:'white',weight:2,opacity:.9};
-    var wb={color:'white',weight:3,opacity:.9};
-    var gd={color:'#FFD700',weight:3,opacity:1,interactive:false};
-    pl([[-fI,0],[fL+fI,0],[fL+fI,fW],[-fI,fW],[-fI,0]], w);
-    pl([[0,0],[0,fW]], wb);
-    pl([[fL,0],[fL,fW]], wb);
+    var w  = {color:'white', weight:2,   opacity:.9};
+    var wb = {color:'white', weight:3,   opacity:.9};
+    var wd = {color:'white', weight:1.5, opacity:.9};
+    var gd = {color:'#FFD700', weight:3, opacity:1, interactive:false};
+    var i, a, pts, px, px2;
+
+    // Perímetro principal
+    pl([[0,0],[fL,0],[fL,fW],[0,fW],[0,0]], wb);
+    // Linha central
     pl([[fL/2,0],[fL/2,fW]], w);
-    pl([[22,0],[22,fW]], Object.assign({},w,{dashArray:'6 4'}));
-    pl([[fL-22,0],[fL-22,fW]], Object.assign({},w,{dashArray:'6 4'}));
-    pl([[10,0],[10,fW]], Object.assign({},w,{dashArray:'2 4'}));
-    pl([[fL-10,0],[fL-10,fW]], Object.assign({},w,{dashArray:'2 4'}));
-    pl([[15,0],[15,fW]], Object.assign({},w,{weight:1,dashArray:'2 2'}));
-    pl([[fL-15,0],[fL-15,fW]], Object.assign({},w,{weight:1,dashArray:'2 2'}));
-    var cy1=fW/2-3.4, cy2=fW/2+3.4;
-    L.polyline([geo(-fL/2,cy1-fW/2),geo(-fL/2,cy2-fW/2)],gd).addTo(cl);
-    L.polyline([geo(-fL/2,0),geo(-5-fL/2,0)],gd).addTo(cl);
-    L.polyline([geo(fL/2,cy1-fW/2),geo(fL/2,cy2-fW/2)],gd).addTo(cl);
-    L.polyline([geo(fL/2,0),geo(fL/2+5,0)],gd).addTo(cl);
+
+    // Área de penalidade esquerda  (16.5m × 40.32m)
+    pl([[0,fW/2-20.16],[16.5,fW/2-20.16],[16.5,fW/2+20.16],[0,fW/2+20.16]], w);
+    // Área de penalidade direita
+    pl([[fL,fW/2-20.16],[fL-16.5,fW/2-20.16],[fL-16.5,fW/2+20.16],[fL,fW/2+20.16]], w);
+
+    // Área pequena esquerda (5.5m × 18.32m)
+    pl([[0,fW/2-9.16],[5.5,fW/2-9.16],[5.5,fW/2+9.16],[0,fW/2+9.16]], w);
+    // Área pequena direita
+    pl([[fL,fW/2-9.16],[fL-5.5,fW/2-9.16],[fL-5.5,fW/2+9.16],[fL,fW/2+9.16]], w);
+
+    // Gol esquerdo (7.32m × 2.44m)
+    pl([[-2.44,fW/2-3.66],[0,fW/2-3.66],[0,fW/2+3.66],[-2.44,fW/2+3.66],[-2.44,fW/2-3.66]], gd);
+    // Gol direito
+    pl([[fL+2.44,fW/2-3.66],[fL,fW/2-3.66],[fL,fW/2+3.66],[fL+2.44,fW/2+3.66],[fL+2.44,fW/2-3.66]], gd);
+
+    // Círculo central (r = 9.15m)
+    pts=[];
+    for(i=0;i<=60;i++){ a=i/60*2*Math.PI; pts.push([fL/2+9.15*Math.cos(a), fW/2+9.15*Math.sin(a)]); }
+    pl(pts, wd);
+
+    // Arco de penalidade esquerdo (apenas fora da área de penalidade)
+    pts=[];
+    for(i=0;i<=60;i++){ a=-Math.PI+i/60*2*Math.PI; px=11+9.15*Math.cos(a); if(px>16.5) pts.push([px, fW/2+9.15*Math.sin(a)]); }
+    if(pts.length>1) pl(pts, wd);
+
+    // Arco de penalidade direito
+    pts=[];
+    for(i=0;i<=60;i++){ a=i/60*2*Math.PI; px2=(fL-11)+9.15*Math.cos(a); if(px2<fL-16.5) pts.push([px2, fW/2+9.15*Math.sin(a)]); }
+    if(pts.length>1) pl(pts, wd);
+
+    // Arcos de canto (r = 1m)
+    var corners=[[0,0,0,Math.PI/2],[fL,0,Math.PI/2,Math.PI],[fL,fW,Math.PI,3*Math.PI/2],[0,fW,3*Math.PI/2,2*Math.PI]];
+    for(var ci=0;ci<corners.length;ci++){
+      var cx2=corners[ci][0], cy2=corners[ci][1], a1=corners[ci][2], a2=corners[ci][3];
+      pts=[];
+      for(i=0;i<=10;i++){ a=a1+(a2-a1)*i/10; pts.push([cx2+Math.cos(a), cy2+Math.sin(a)]); }
+      pl(pts, Object.assign({},w,{weight:1}));
+    }
+
+    // Ponto central e pontos de penalidade
+    L.circleMarker(geo(0,0),                   {radius:3,color:'white',fillColor:'white',fillOpacity:1,weight:1,interactive:false}).addTo(cl);
+    L.circleMarker(geo(11-fL/2, 0),            {radius:3,color:'white',fillColor:'white',fillOpacity:1,weight:1,interactive:false}).addTo(cl);
+    L.circleMarker(geo(fL/2-11, 0),            {radius:3,color:'white',fillColor:'white',fillOpacity:1,weight:1,interactive:false}).addTo(cl);
   }
   </script>
 </body>

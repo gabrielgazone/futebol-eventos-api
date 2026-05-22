@@ -1,4 +1,4 @@
-# rugby_eventos_completo_final.py
+# futebol_eventos_completo_final.py
 # PARTE 1 - IMPORTS, CONSTANTES E CLASSE API
 
 import streamlit as st
@@ -6,16 +6,20 @@ import requests
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime
+from plotly.subplots import make_subplots
+from datetime import datetime, timedelta
 import json
 import base64
+import io
 import numpy as np
 from scipy.signal import savgol_filter
+from scipy.ndimage import gaussian_filter as _gf
+from scipy.spatial import cKDTree
 import folium
 from streamlit_folium import st_folium
 import os as _os
 
-st.set_page_config(page_title="Rugby Eventos - Catapult", layout="wide")
+st.set_page_config(page_title="Futebol Eventos - Catapult", layout="wide")
 
 # Componente bidirecional para o mapa interativo de posicionamento de campo
 _CAMPO_COMP_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "_campo_component")
@@ -27,6 +31,275 @@ SERVERS = {
     "Ásia-Pacífico (AU)": "https://connect-au.catapultsports.com/api/v6",
 }
 
+# ==================== SISTEMA DE IDIOMAS ====================
+LANGUAGES = {
+    "🇧🇷 Português (Brasil)": "pt",
+    "🇺🇸 English (US)":       "en",
+    "🇲🇽 Español (Latino)":   "es",
+    "🇫🇷 Français":           "fr",
+}
+
+TRANSLATIONS = {
+    "pt": {
+        "app_title":           "⚽ Futebol Eventos - Catapult Sports",
+        "app_subtitle":        "Análise de Performance com Filtros por Equipe, Posição e Período",
+        "server_header":       "🌍 Servidor",
+        "server_select":       "Selecione:",
+        "language_header":     "🌐 Idioma",
+        "language_select":     "Selecione o idioma:",
+        "token_header":        "🔐 Token",
+        "token_label":         "Token JWT:",
+        "load_btn":            "🔄 Carregar Dados",
+        "loading":             "Carregando...",
+        "loading_teams":       "📋 Carregando Equipes...",
+        "loading_athletes":    "📋 Carregando Atletas...",
+        "loading_activities":  "📋 Carregando Atividades...",
+        "loading_positions":   "📋 Carregando Posições...",
+        "mapping_athletes":    "📋 Mapeando atletas por equipe...",
+        "filters_header":      "🎯 Filtros",
+        "team_filter":         "🏢 Filtrar por Equipe",
+        "select_teams":        "Selecione as equipes:",
+        "position_filter":     "🎯 Filtrar por Posição",
+        "select_positions":    "Selecione as posições:",
+        "activity_header":     "📅 Atividade",
+        "select_activity":     "Selecione a atividade:",
+        "periods_header":      "📊 Selecionar Período(s)",
+        "select_periods":      "Selecione um ou mais períodos para análise:",
+        "search_btn":          "🔍 Buscar Atletas da Atividade",
+        "athletes_header":     "🏃 Selecionar Atletas",
+        "select_athletes":     "Selecione os atletas para análise:",
+        "events_header":       "⚽ Eventos Futebol",
+        "select_all":          "Selecionar todos",
+        "event_types":         "Tipos de evento:",
+        "tab_charts":          "📈 Gráficos Comparativos",
+        "tab_field":           "🗺️ Campo de Futebol",
+        "tab_efforts":         "⏱️ Esforços ao Longo do Tempo",
+        "tab_windows":         "📊 Janelas Temporais Móveis",
+        "metric_athletes":     "🏃 Atletas",
+        "metric_distance":     "📏 Distância Total",
+        "metric_pl":           "⚡ PlayerLoad Total",
+        "metric_maxspeed":     "💨 Velocidade Máx",
+        "compare_athletes":    "Comparar Atletas no Mesmo Período",
+        "compare_periods":     "Comparar Mesmo Atleta em Diferentes Períodos",
+        "field_title":         "🗺️ Campo de Futebol — Análise de Movimentação",
+        "phase1_title":        "### 1️⃣ Posicionamento no Campo Físico",
+        "phase1_desc":         "Ajuste o campo de futebol sobre a imagem de satélite e clique **✅ Aplicar Campo** no painel inferior do mapa.",
+        "phase1_info":         "📌 **Edite Lat/Lon** (ou use ↑↓) para mover o ⊙ amarelo · ⚽ **Mostrar Campo** para ativar o overlay · Sliders ajustam rotação e dimensões **em tempo real** · **✅ Aplicar Campo** quando estiver satisfeito",
+        "no_gps_warning":      "⚠️ Nenhum ponto GPS real (lat/lon) encontrado para este atleta.\n\nIsso pode ocorrer se o sensor não obteve lock GPS durante a sessão.",
+        "phase2_title":        "### 2️⃣ Análise de Esforços no Campo",
+        "phase3_title":        "### 3️⃣ Análise de Movimentação no Campo",
+        "readjust_btn":        "🔄 Reajustar",
+        "overlay_events":      "⚽ Eventos Futebol",
+        "timeline_title":      "### ⚽ Timeline Técnico-Físico",
+        "fatigue_title":       "### 💪 Fadiga & Recuperação por Evento",
+        "velocity_graph":      "### 🏃‍♂️ Velocidade ao Longo do Tempo",
+        "accel_graph":         "### 🔄 Aceleração ao Longo do Tempo",
+        "efforts_table":       "## 📋 Tabela de Esforços",
+        "no_data":             "Dados de sensor não disponíveis",
+        "select_athlete_msg":  "Selecione um atleta para análise",
+        "no_position_data":    "Dados de posição não disponíveis. Verifique se o sensor GPS estava ativo durante a sessão.",
+        "select_period_ath":   "Selecione um período e atleta",
+        "no_events_loaded":    "Nenhum evento futebol carregado para este atleta. Ative os eventos na sidebar e recarregue os dados.",
+        "no_events_sidebar":   "Nenhum evento futebol carregado. Recarregue os dados com eventos ativados na sidebar.",
+        "no_events_types":     "Nenhum evento futebol carregado para este atleta/período.",
+    },
+    "en": {
+        "app_title":           "⚽ Football Events - Catapult Sports",
+        "app_subtitle":        "Performance Analysis with Team, Position and Period Filters",
+        "server_header":       "🌍 Server",
+        "server_select":       "Select:",
+        "language_header":     "🌐 Language",
+        "language_select":     "Select language:",
+        "token_header":        "🔐 Token",
+        "token_label":         "JWT Token:",
+        "load_btn":            "🔄 Load Data",
+        "loading":             "Loading...",
+        "loading_teams":       "📋 Loading Teams...",
+        "loading_athletes":    "📋 Loading Athletes...",
+        "loading_activities":  "📋 Loading Activities...",
+        "loading_positions":   "📋 Loading Positions...",
+        "mapping_athletes":    "📋 Mapping athletes by team...",
+        "filters_header":      "🎯 Filters",
+        "team_filter":         "🏢 Filter by Team",
+        "select_teams":        "Select teams:",
+        "position_filter":     "🎯 Filter by Position",
+        "select_positions":    "Select positions:",
+        "activity_header":     "📅 Activity",
+        "select_activity":     "Select activity:",
+        "periods_header":      "📊 Select Period(s)",
+        "select_periods":      "Select one or more periods for analysis:",
+        "search_btn":          "🔍 Search Activity Athletes",
+        "athletes_header":     "🏃 Select Athletes",
+        "select_athletes":     "Select athletes for analysis:",
+        "events_header":       "⚽ Football Events",
+        "select_all":          "Select all",
+        "event_types":         "Event types:",
+        "tab_charts":          "📈 Comparative Charts",
+        "tab_field":           "🗺️ Football Pitch",
+        "tab_efforts":         "⏱️ Efforts Over Time",
+        "tab_windows":         "📊 Moving Time Windows",
+        "metric_athletes":     "🏃 Athletes",
+        "metric_distance":     "📏 Total Distance",
+        "metric_pl":           "⚡ Total PlayerLoad",
+        "metric_maxspeed":     "💨 Max Speed",
+        "compare_athletes":    "Compare Athletes in Same Period",
+        "compare_periods":     "Compare Same Athlete Across Periods",
+        "field_title":         "🗺️ Football Pitch — Movement Analysis",
+        "phase1_title":        "### 1️⃣ Physical Pitch Positioning",
+        "phase1_desc":         "Adjust the football pitch over the satellite image and click **✅ Apply Pitch** in the map panel.",
+        "phase1_info":         "📌 **Edit Lat/Lon** (or use ↑↓) to move the ⊙ marker · ⚽ **Show Pitch** to activate overlay · Sliders adjust rotation and dimensions **in real time** · **✅ Apply Pitch** when satisfied",
+        "no_gps_warning":      "⚠️ No real GPS points (lat/lon) found for this athlete.\n\nThis may occur if the sensor did not acquire GPS lock during the session.",
+        "phase2_title":        "### 2️⃣ Effort Analysis on Pitch",
+        "phase3_title":        "### 3️⃣ Movement Analysis on Pitch",
+        "readjust_btn":        "🔄 Readjust",
+        "overlay_events":      "⚽ Football Events",
+        "timeline_title":      "### ⚽ Technical-Physical Timeline",
+        "fatigue_title":       "### 💪 Fatigue & Recovery by Event",
+        "velocity_graph":      "### 🏃‍♂️ Velocity Over Time",
+        "accel_graph":         "### 🔄 Acceleration Over Time",
+        "efforts_table":       "## 📋 Efforts Table",
+        "no_data":             "Sensor data not available",
+        "select_athlete_msg":  "Select an athlete for analysis",
+        "no_position_data":    "Position data not available. Check that the GPS sensor was active during the session.",
+        "select_period_ath":   "Select a period and athlete",
+        "no_events_loaded":    "No football events loaded for this athlete. Enable events in the sidebar and reload data.",
+        "no_events_sidebar":   "No football events loaded. Reload data with events enabled in the sidebar.",
+        "no_events_types":     "No football events loaded for this athlete/period.",
+    },
+    "es": {
+        "app_title":           "⚽ Fútbol Eventos - Catapult Sports",
+        "app_subtitle":        "Análisis de Rendimiento con Filtros por Equipo, Posición y Período",
+        "server_header":       "🌍 Servidor",
+        "server_select":       "Seleccione:",
+        "language_header":     "🌐 Idioma",
+        "language_select":     "Seleccione el idioma:",
+        "token_header":        "🔐 Token",
+        "token_label":         "Token JWT:",
+        "load_btn":            "🔄 Cargar Datos",
+        "loading":             "Cargando...",
+        "loading_teams":       "📋 Cargando Equipos...",
+        "loading_athletes":    "📋 Cargando Atletas...",
+        "loading_activities":  "📋 Cargando Actividades...",
+        "loading_positions":   "📋 Cargando Posiciones...",
+        "mapping_athletes":    "📋 Mapeando atletas por equipo...",
+        "filters_header":      "🎯 Filtros",
+        "team_filter":         "🏢 Filtrar por Equipo",
+        "select_teams":        "Seleccione los equipos:",
+        "position_filter":     "🎯 Filtrar por Posición",
+        "select_positions":    "Seleccione las posiciones:",
+        "activity_header":     "📅 Actividad",
+        "select_activity":     "Seleccione la actividad:",
+        "periods_header":      "📊 Seleccionar Período(s)",
+        "select_periods":      "Seleccione uno o más períodos para análisis:",
+        "search_btn":          "🔍 Buscar Atletas de la Actividad",
+        "athletes_header":     "🏃 Seleccionar Atletas",
+        "select_athletes":     "Seleccione los atletas para análisis:",
+        "events_header":       "⚽ Eventos de Fútbol",
+        "select_all":          "Seleccionar todos",
+        "event_types":         "Tipos de evento:",
+        "tab_charts":          "📈 Gráficos Comparativos",
+        "tab_field":           "🗺️ Cancha de Fútbol",
+        "tab_efforts":         "⏱️ Esfuerzos en el Tiempo",
+        "tab_windows":         "📊 Ventanas Temporales",
+        "metric_athletes":     "🏃 Atletas",
+        "metric_distance":     "📏 Distancia Total",
+        "metric_pl":           "⚡ PlayerLoad Total",
+        "metric_maxspeed":     "💨 Vel. Máxima",
+        "compare_athletes":    "Comparar Atletas en el Mismo Período",
+        "compare_periods":     "Comparar el Mismo Atleta en Distintos Períodos",
+        "field_title":         "🗺️ Cancha de Fútbol — Análisis de Movimiento",
+        "phase1_title":        "### 1️⃣ Posicionamiento en la Cancha",
+        "phase1_desc":         "Ajuste la cancha de fútbol sobre la imagen satelital y haga clic en **✅ Aplicar Cancha** en el panel del mapa.",
+        "phase1_info":         "📌 **Edite Lat/Lon** (o use ↑↓) para mover el ⊙ amarillo · ⚽ **Mostrar Cancha** para activar el overlay · Sliders ajustan rotación y dimensiones **en tiempo real** · **✅ Aplicar Cancha** cuando esté listo",
+        "no_gps_warning":      "⚠️ No se encontraron puntos GPS reales (lat/lon) para este atleta.\n\nEsto puede ocurrir si el sensor no obtuvo señal GPS durante la sesión.",
+        "phase2_title":        "### 2️⃣ Análisis de Esfuerzos en la Cancha",
+        "phase3_title":        "### 3️⃣ Análisis de Movimiento en la Cancha",
+        "readjust_btn":        "🔄 Reajustar",
+        "overlay_events":      "⚽ Eventos de Fútbol",
+        "timeline_title":      "### ⚽ Timeline Técnico-Físico",
+        "fatigue_title":       "### 💪 Fatiga y Recuperación por Evento",
+        "velocity_graph":      "### 🏃‍♂️ Velocidad en el Tiempo",
+        "accel_graph":         "### 🔄 Aceleración en el Tiempo",
+        "efforts_table":       "## 📋 Tabla de Esfuerzos",
+        "no_data":             "Datos del sensor no disponibles",
+        "select_athlete_msg":  "Seleccione un atleta para análisis",
+        "no_position_data":    "Datos de posición no disponibles. Verifique que el sensor GPS estaba activo durante la sesión.",
+        "select_period_ath":   "Seleccione un período y atleta",
+        "no_events_loaded":    "No hay eventos de fútbol cargados para este atleta. Active los eventos en la barra lateral y recargue los datos.",
+        "no_events_sidebar":   "No hay eventos de fútbol cargados. Recargue los datos con eventos activados en la barra lateral.",
+        "no_events_types":     "No hay eventos de fútbol cargados para este atleta/período.",
+    },
+    "fr": {
+        "app_title":           "⚽ Football Événements - Catapult Sports",
+        "app_subtitle":        "Analyse de Performance avec Filtres par Équipe, Position et Période",
+        "server_header":       "🌍 Serveur",
+        "server_select":       "Sélectionnez:",
+        "language_header":     "🌐 Langue",
+        "language_select":     "Sélectionnez la langue:",
+        "token_header":        "🔐 Token",
+        "token_label":         "Token JWT:",
+        "load_btn":            "🔄 Charger les Données",
+        "loading":             "Chargement...",
+        "loading_teams":       "📋 Chargement des Équipes...",
+        "loading_athletes":    "📋 Chargement des Athlètes...",
+        "loading_activities":  "📋 Chargement des Activités...",
+        "loading_positions":   "📋 Chargement des Positions...",
+        "mapping_athletes":    "📋 Mapping des athlètes par équipe...",
+        "filters_header":      "🎯 Filtres",
+        "team_filter":         "🏢 Filtrer par Équipe",
+        "select_teams":        "Sélectionnez les équipes:",
+        "position_filter":     "🎯 Filtrer par Position",
+        "select_positions":    "Sélectionnez les positions:",
+        "activity_header":     "📅 Activité",
+        "select_activity":     "Sélectionnez l'activité:",
+        "periods_header":      "📊 Sélectionner Période(s)",
+        "select_periods":      "Sélectionnez une ou plusieurs périodes pour l'analyse:",
+        "search_btn":          "🔍 Chercher Athlètes de l'Activité",
+        "athletes_header":     "🏃 Sélectionner Athlètes",
+        "select_athletes":     "Sélectionnez les athlètes pour l'analyse:",
+        "events_header":       "⚽ Événements Football",
+        "select_all":          "Sélectionner tout",
+        "event_types":         "Types d'événement:",
+        "tab_charts":          "📈 Graphiques Comparatifs",
+        "tab_field":           "🗺️ Terrain de Football",
+        "tab_efforts":         "⏱️ Efforts dans le Temps",
+        "tab_windows":         "📊 Fenêtres Temporelles",
+        "metric_athletes":     "🏃 Athlètes",
+        "metric_distance":     "📏 Distance Totale",
+        "metric_pl":           "⚡ PlayerLoad Total",
+        "metric_maxspeed":     "💨 Vitesse Max",
+        "compare_athletes":    "Comparer Athlètes dans la Même Période",
+        "compare_periods":     "Comparer le Même Athlète sur Différentes Périodes",
+        "field_title":         "🗺️ Terrain de Football — Analyse de Déplacement",
+        "phase1_title":        "### 1️⃣ Positionnement sur le Terrain",
+        "phase1_desc":         "Ajustez le terrain de football sur l'image satellite et cliquez **✅ Appliquer Terrain** dans le panneau de la carte.",
+        "phase1_info":         "📌 **Éditez Lat/Lon** (ou utilisez ↑↓) pour déplacer le ⊙ jaune · ⚽ **Afficher Terrain** pour activer l'overlay · Sliders pour rotation/dimensions **en temps réel** · **✅ Appliquer Terrain** quand c'est bon",
+        "no_gps_warning":      "⚠️ Aucun point GPS réel (lat/lon) trouvé pour cet athlète.\n\nCela peut se produire si le capteur n'a pas obtenu de verrouillage GPS pendant la session.",
+        "phase2_title":        "### 2️⃣ Analyse des Efforts sur le Terrain",
+        "phase3_title":        "### 3️⃣ Analyse de Déplacement sur le Terrain",
+        "readjust_btn":        "🔄 Réajuster",
+        "overlay_events":      "⚽ Événements Football",
+        "timeline_title":      "### ⚽ Timeline Technico-Physique",
+        "fatigue_title":       "### 💪 Fatigue & Récupération par Événement",
+        "velocity_graph":      "### 🏃‍♂️ Vitesse dans le Temps",
+        "accel_graph":         "### 🔄 Accélération dans le Temps",
+        "efforts_table":       "## 📋 Tableau des Efforts",
+        "no_data":             "Données du capteur non disponibles",
+        "select_athlete_msg":  "Sélectionnez un athlète pour l'analyse",
+        "no_position_data":    "Données de position non disponibles. Vérifiez que le capteur GPS était actif pendant la session.",
+        "select_period_ath":   "Sélectionnez une période et un athlète",
+        "no_events_loaded":    "Aucun événement football chargé pour cet athlète. Activez les événements dans la barre latérale et rechargez les données.",
+        "no_events_sidebar":   "Aucun événement football chargé. Rechargez les données avec les événements activés dans la barre latérale.",
+        "no_events_types":     "Aucun événement football chargé pour cet athlète/période.",
+    },
+}
+
+def t(key):
+    """Retorna string traduzida para o idioma selecionado."""
+    lang_display = st.session_state.get("lang_selector", "🇧🇷 Português (Brasil)")
+    lang = LANGUAGES.get(lang_display, "pt")
+    return TRANSLATIONS.get(lang, TRANSLATIONS["pt"]).get(key, TRANSLATIONS["pt"].get(key, key))
+
 # ==================== REFERÊNCIAS BIBLIOGRÁFICAS ====================
 REFERENCIAS = {
     "janelas": """
@@ -34,8 +307,9 @@ REFERENCIAS = {
     *International Journal of Sports Physiology and Performance*, 6(3), 295-310.
     """,
     "campo": """
-    **Referência:** World Rugby (2023). "Law 1: The Ground". World Rugby Laws of the Game.
-    Campo oficial: 100m de comprimento x 70m de largura (entre linhas de fundo).
+    **Referência:** FIFA/IFAB (2023). "Regra 1: O Campo de Jogo". Regras do Jogo de Futebol.
+    Campo oficial FIFA: 105m de comprimento × 68m de largura (partidas internacionais).
+    Área de penalidade: 40,32m × 16,5m | Área pequena: 18,32m × 5,5m | Círculo central: r = 9,15m.
     """
 }
 
@@ -220,88 +494,70 @@ def lat_lon_to_campo_coords(latitudes, longitudes):
     lat_norm = (lats - lat_min) / lat_range
     lon_norm = (lons - lon_min) / lon_range
     
-    # Escalar para o campo (comprimento 100m, largura 70m)
-    x = lon_norm * 100
-    y = lat_norm * 70
+    # Escalar para o campo (comprimento 105m, largura 68m — FIFA)
+    x = lon_norm * 105
+    y = lat_norm * 68
     
     return x.tolist(), y.tolist()
 
-def desenhar_campo_rugby(field_length=100, field_width=70, in_goal_depth=10):
-    """Desenha o campo de rugby com todas as marcações oficiais"""
+def desenhar_campo_futebol(field_length=105, field_width=68):
+    """Desenha o campo de futebol com todas as marcações oficiais FIFA."""
     fig = go.Figure()
-    
-    # Fundo do campo
-    fig.add_shape(type="rect", x0=-in_goal_depth-2, y0=-5, x1=field_length+in_goal_depth+2, y1=field_width+5,
+    FL, FW = field_length, field_width
+    cy = FW / 2  # centro y
+
+    # Fundo
+    fig.add_shape(type="rect", x0=-5, y0=-5, x1=FL+5, y1=FW+5,
                   fillcolor="#1a472a", line=dict(color="rgba(0,0,0,0)", width=0))
-    
-    # Perímetro do campo
-    fig.add_shape(type="rect", x0=0, y0=0, x1=field_length, y1=field_width,
+    # Perímetro
+    fig.add_shape(type="rect", x0=0, y0=0, x1=FL, y1=FW,
                   line=dict(color="white", width=3), fillcolor="rgba(0,100,0,0.3)")
-    
-    # In-goal
-    fig.add_shape(type="rect", x0=-in_goal_depth, y0=0, x1=0, y1=field_width,
-                  line=dict(color="white", width=1), fillcolor="rgba(0,150,0,0.2)")
-    fig.add_shape(type="rect", x0=field_length, y0=0, x1=field_length + in_goal_depth, y1=field_width,
-                  line=dict(color="white", width=1), fillcolor="rgba(0,150,0,0.2)")
-    
-    # Linhas de gol
-    fig.add_shape(type="line", x0=0, y0=0, x1=0, y1=field_width, line=dict(color="white", width=3))
-    fig.add_shape(type="line", x0=field_length, y0=0, x1=field_length, y1=field_width, line=dict(color="white", width=3))
-    
-    # Linha de 22 metros
-    fig.add_shape(type="line", x0=22, y0=0, x1=22, y1=field_width, line=dict(color="white", width=1.5, dash="dash"))
-    fig.add_shape(type="line", x0=field_length - 22, y0=0, x1=field_length - 22, y1=field_width, line=dict(color="white", width=1.5, dash="dash"))
-    
-    # Linha de 10 metros
-    fig.add_shape(type="line", x0=10, y0=0, x1=10, y1=field_width, line=dict(color="white", width=1, dash="dot"))
-    fig.add_shape(type="line", x0=field_length - 10, y0=0, x1=field_length - 10, y1=field_width, line=dict(color="white", width=1, dash="dot"))
-    
     # Linha central
-    fig.add_shape(type="line", x0=field_length/2, y0=0, x1=field_length/2, y1=field_width, line=dict(color="white", width=2))
-    
-    # Círculo central
-    circle_center = (field_length/2, field_width/2)
-    circle_radius = 10
+    fig.add_shape(type="line", x0=FL/2, y0=0, x1=FL/2, y1=FW, line=dict(color="white", width=2))
+    # Círculo central (r=9.15m)
     theta = np.linspace(0, 2*np.pi, 100)
-    circle_x = circle_center[0] + circle_radius * np.cos(theta)
-    circle_y = circle_center[1] + circle_radius * np.sin(theta)
-    fig.add_trace(go.Scatter(x=circle_x, y=circle_y, mode='lines',
-                            line=dict(color="white", width=1.5), name="Círculo Central", showlegend=False))
-    
-    # Traves
-    crossbar_y = field_width/2 - 3
-    fig.add_shape(type="line", x0=0, y0=crossbar_y, x1=0, y1=crossbar_y + 6, line=dict(color="#FFD700", width=3))
-    fig.add_shape(type="line", x0=0, y0=field_width/2, x1=-5, y1=field_width/2, line=dict(color="#FFD700", width=3))
-    fig.add_shape(type="line", x0=field_length, y0=crossbar_y, x1=field_length, y1=crossbar_y + 6, line=dict(color="#FFD700", width=3))
-    fig.add_shape(type="line", x0=field_length, y0=field_width/2, x1=field_length + 5, y1=field_width/2, line=dict(color="#FFD700", width=3))
-    
-    # Linhas de 15 metros
-    fig.add_shape(type="line", x0=15, y0=0, x1=15, y1=field_width, line=dict(color="white", width=0.5, dash="dot"))
-    fig.add_shape(type="line", x0=field_length - 15, y0=0, x1=field_length - 15, y1=field_width, line=dict(color="white", width=0.5, dash="dot"))
-    
+    fig.add_trace(go.Scatter(x=FL/2 + 9.15*np.cos(theta), y=cy + 9.15*np.sin(theta),
+                             mode='lines', line=dict(color="white", width=1.5),
+                             name="Círculo Central", showlegend=False))
+    # Áreas de penalidade (16.5m × 40.32m)
+    for x0, x1 in [(0, 16.5), (FL-16.5, FL)]:
+        fig.add_shape(type="rect", x0=x0, y0=cy-20.16, x1=x1, y1=cy+20.16,
+                      line=dict(color="white", width=1.5))
+    # Áreas pequenas (5.5m × 18.32m)
+    for x0, x1 in [(0, 5.5), (FL-5.5, FL)]:
+        fig.add_shape(type="rect", x0=x0, y0=cy-9.16, x1=x1, y1=cy+9.16,
+                      line=dict(color="white", width=1.5))
+    # Pontos de penalidade
+    for px in [11, FL-11]:
+        fig.add_trace(go.Scatter(x=[px], y=[cy], mode='markers',
+                                 marker=dict(size=6, color='white'),
+                                 showlegend=False))
+    # Ponto central
+    fig.add_trace(go.Scatter(x=[FL/2], y=[cy], mode='markers',
+                             marker=dict(size=6, color='white'), showlegend=False))
+    # Gols (7.32m × 2.44m)
+    fig.add_shape(type="rect", x0=-2.44, y0=cy-3.66, x1=0, y1=cy+3.66,
+                  line=dict(color="#FFD700", width=3))
+    fig.add_shape(type="rect", x0=FL, y0=cy-3.66, x1=FL+2.44, y1=cy+3.66,
+                  line=dict(color="#FFD700", width=3))
+
     fig.update_layout(
-        title="Campo de Rugby Oficial - Trajetória e Mapa de Calor",
-        xaxis=dict(range=[-in_goal_depth-5, field_length+in_goal_depth+5],
-                   title="Comprimento do Campo (m)", fixedrange=False,
-                   gridcolor='rgba(255,255,255,0.1)', zeroline=False),
-        yaxis=dict(range=[-10, field_width+10], title="Largura do Campo (m)", fixedrange=False,
-                   gridcolor='rgba(255,255,255,0.1)', zeroline=False),
-        plot_bgcolor='#1a472a',
-        paper_bgcolor='#1a1a2e',
-        height=600,
-        hovermode='closest'
+        title="Campo de Futebol Oficial FIFA — Trajetória e Mapa de Calor",
+        xaxis=dict(range=[-5, FL+5], title="Comprimento do Campo (m)",
+                   fixedrange=False, gridcolor='rgba(255,255,255,0.1)', zeroline=False),
+        yaxis=dict(range=[-5, FW+5], title="Largura do Campo (m)",
+                   fixedrange=False, gridcolor='rgba(255,255,255,0.1)', zeroline=False),
+        plot_bgcolor='#1a472a', paper_bgcolor='#1a1a2e', height=600, hovermode='closest'
     )
-    
     fig.add_annotation(x=0.02, y=0.98, xref="paper", yref="paper",
-                       text="⚪ Linhas de campo | 🟡 Traves | 🔵 Trajetória | 🟢 Início | 🔴 Fim",
+                       text="⚪ Linhas FIFA | 🟡 Gol | 🔵 Trajetória | 🟢 Início | 🔴 Fim",
                        showarrow=False, font=dict(color="white", size=10),
                        bgcolor='rgba(0,0,0,0.6)', borderpad=4)
-    
     return fig
 
 def plotar_trajetoria_campo(x_coords, y_coords, velocidades, athlete_name):
     """Plota a trajetória do atleta no campo"""
-    fig = desenhar_campo_rugby()
+    fig = desenhar_campo_futebol(105, 68)
     
     if len(x_coords) == 0:
         return fig
@@ -345,13 +601,13 @@ def plotar_trajetoria_campo(x_coords, y_coords, velocidades, athlete_name):
 
 def plotar_heatmap_campo(x_coords, y_coords, velocidades, athlete_name):
     """Plota mapa de calor de intensidade no campo"""
-    fig = desenhar_campo_rugby()
-    
+    fig = desenhar_campo_futebol(105, 68)
+
     if len(x_coords) == 0 or len(y_coords) == 0:
         return fig
-    
-    x_edges = np.linspace(0, 100, 40)
-    y_edges = np.linspace(0, 70, 40)
+
+    x_edges = np.linspace(0, 105, 40)
+    y_edges = np.linspace(0, 68, 40)
     
     heatmap, xedges, yedges = np.histogram2d(x_coords, y_coords, bins=[x_edges, y_edges], weights=velocidades)
     counts, _, _ = np.histogram2d(x_coords, y_coords, bins=[x_edges, y_edges])
@@ -374,13 +630,13 @@ def plotar_heatmap_campo(x_coords, y_coords, velocidades, athlete_name):
 
 def plotar_heatmap_presenca_campo(x_coords, y_coords, athlete_name):
     """Plota mapa de calor de presença (frequência de posições) no campo"""
-    fig = desenhar_campo_rugby()
+    fig = desenhar_campo_futebol(105, 68)
 
     if len(x_coords) == 0 or len(y_coords) == 0:
         return fig
 
-    x_edges = np.linspace(0, 100, 40)
-    y_edges = np.linspace(0, 70, 40)
+    x_edges = np.linspace(0, 105, 40)
+    y_edges = np.linspace(0, 68, 40)
 
     counts, xedges, yedges = np.histogram2d(x_coords, y_coords, bins=[x_edges, y_edges])
 
@@ -400,7 +656,7 @@ def plotar_heatmap_presenca_campo(x_coords, y_coords, athlete_name):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BANDAS DE VELOCIDADE E ACELERAÇÃO (referências Catapult Rugby)
+# BANDAS DE VELOCIDADE E ACELERAÇÃO (referências Catapult Football)
 # ══════════════════════════════════════════════════════════════════════════════
 BANDAS_VEL = {
     1: {'label': 'B1 — < 8 km/h (Caminhada)',          'min': 0,    'max': 8,    'color': '#2196F3'},
@@ -419,28 +675,27 @@ BANDAS_ACC = {
     'D3': {'label': 'Dec -3 — < -2 m/s² (Alta Desacel.)',   'min': -9999, 'max': -2,   'color': '#DD2C00'},
 }
 
-# ── Configuração dos tipos de eventos rugby ────────────────────────────────
-RUGBY_EVENTS_CONFIG = {
-    'rugby_union_scrum': {
-        'label': '🟠 Scrum',
-        'color': '#FF9800', 'marker': 'circle', 'size': 14,
-        'attrs': ['confidence', 'duration', 'post_event_load', 'post_event_active'],
-    },
-    'rugby_union_contact_involvement': {
-        'label': '🔴 Contato/Tackle',
-        'color': '#F44336', 'marker': 'x', 'size': 12,
-        'attrs': ['confidence', 'duration', 'active_percentage',
-                  'post_event_load', 'post_event_back_in_game_time'],
-    },
-    'rugby_union_kick': {
+# ── Configuração dos tipos de eventos futebol ──────────────────────────────
+FUTEBOL_EVENTS_CONFIG = {
+    'football_kick': {
         'label': '🟡 Chute',
-        'color': '#FFEB3B', 'marker': 'star', 'size': 13,
+        'color': '#FFEB3B', 'marker': 'star', 'size': 14,
         'attrs': ['confidence', 'class'],
     },
-    'rugby_union_lineout': {
-        'label': '🟢 Line-out',
-        'color': '#4CAF50', 'marker': 'triangle-up', 'size': 13,
+    'football_header': {
+        'label': '🔵 Cabeceio',
+        'color': '#2196F3', 'marker': 'diamond', 'size': 13,
         'attrs': ['confidence'],
+    },
+    'football_tackle': {
+        'label': '🔴 Disputa/Tackle',
+        'color': '#F44336', 'marker': 'x', 'size': 12,
+        'attrs': ['confidence', 'duration'],
+    },
+    'football_cross': {
+        'label': '🟠 Cruzamento',
+        'color': '#FF9800', 'marker': 'triangle-up', 'size': 13,
+        'attrs': ['confidence', 'class'],
     },
     'ima_impact': {
         'label': '⚪ Impacto (IMA)',
@@ -448,19 +703,19 @@ RUGBY_EVENTS_CONFIG = {
         'attrs': ['impact', 'direction'],
     },
     'ima_jump': {
-        'label': '🔵 Salto (IMA)',
-        'color': '#2196F3', 'marker': 'triangle-up', 'size': 11,
+        'label': '🟢 Salto (IMA)',
+        'color': '#4CAF50', 'marker': 'triangle-up', 'size': 11,
         'attrs': ['height'],
     },
 }
 
-def extrair_eventos_rugby(response_data):
-    """Extrai eventos rugby da resposta da API /events."""
+def extrair_eventos_futebol(response_data):
+    """Extrai eventos futebol da resposta da API /events."""
     if not response_data or not isinstance(response_data, list):
         return {}
     item = response_data[0] if response_data else {}
     data = item.get('data', {}) if isinstance(item, dict) else {}
-    return {k: v for k, v in data.items() if v and k in RUGBY_EVENTS_CONFIG}
+    return {k: v for k, v in data.items() if v and k in FUTEBOL_EVENTS_CONFIG}
 
 def enriquecer_eventos_com_posicao(eventos_dict, ts_gps, lats_gps, lons_gps, vels_gps, campo_config=None):
     """Associa cada evento ao ponto GPS (e posição no campo) mais próximo no tempo."""
@@ -487,12 +742,12 @@ def enriquecer_eventos_com_posicao(eventos_dict, ts_gps, lats_gps, lons_gps, vel
     return result
 
 def adicionar_eventos_campo(fig, eventos_dict, tipos_sel):
-    """Plota marcadores de eventos rugby sobre o campo esquemático."""
+    """Plota marcadores de eventos futebol sobre o campo esquemático."""
     for event_type in tipos_sel:
         events = eventos_dict.get(event_type, [])
         if not events:
             continue
-        cfg_ev = RUGBY_EVENTS_CONFIG[event_type]
+        cfg_ev = FUTEBOL_EVENTS_CONFIG[event_type]
         xs_ev = [ev.get('_fx') for ev in events if ev.get('_fx') is not None]
         ys_ev = [ev.get('_fy') for ev in events if ev.get('_fy') is not None]
         if not xs_ev:
@@ -526,7 +781,7 @@ def adicionar_eventos_campo(fig, eventos_dict, tipos_sel):
 
 def criar_timeline_eventos(sensor_points, eventos_dict, atleta_nome, tipos_sel):
     """
-    Gráfico de velocidade ao longo do tempo com pins verticais dos eventos rugby.
+    Gráfico de velocidade ao longo do tempo com pins verticais dos eventos futebol.
     """
     if not sensor_points:
         return None
@@ -551,7 +806,7 @@ def criar_timeline_eventos(sensor_points, eventos_dict, atleta_nome, tipos_sel):
         events = eventos_dict.get(event_type, [])
         if not events:
             continue
-        cfg_ev = RUGBY_EVENTS_CONFIG[event_type]
+        cfg_ev = FUTEBOL_EVENTS_CONFIG[event_type]
         for ev in events:
             t_ev  = float(ev.get('start_time', 0)) - ts0
             v_ev  = ev.get('_vel', 0)
@@ -581,7 +836,7 @@ def criar_timeline_eventos(sensor_points, eventos_dict, atleta_nome, tipos_sel):
             ))
 
     fig.update_layout(
-        title=f"🏉 Timeline Técnico-Físico — {atleta_nome}",
+        title=f"⚽ Timeline Técnico-Físico — {atleta_nome}",
         xaxis_title='Tempo (s)',
         yaxis_title='Velocidade (km/h)',
         plot_bgcolor='#0e1117',
@@ -612,7 +867,7 @@ def analisar_fadiga_eventos(sensor_points, eventos_dict, tipos_sel, janela_s=10)
     rows = []
     for event_type in tipos_sel:
         events = eventos_dict.get(event_type, [])
-        cfg_ev = RUGBY_EVENTS_CONFIG[event_type]
+        cfg_ev = FUTEBOL_EVENTS_CONFIG[event_type]
         for ev in events:
             t = float(ev.get('start_time', 0))
             mask_before = (ts_arr >= t - janela_s) & (ts_arr < t)
@@ -638,13 +893,14 @@ def analisar_fadiga_eventos(sensor_points, eventos_dict, tipos_sel, janela_s=10)
     return df
 
 
-def desenhar_campo_rugby_bonito(field_length=100, field_width=70, in_goal_depth=10, title=""):
-    """Campo de rugby com faixas verdes alternadas, linhas oficiais e traves douradas (top-down)."""
-    FL, FW, IG = field_length, field_width, in_goal_depth
+def desenhar_campo_futebol_bonito(field_length=105, field_width=68, margin=3, title=""):
+    """Campo de futebol com faixas verdes alternadas e marcações oficiais FIFA (top-down)."""
+    FL, FW, MG = field_length, field_width, margin
+    cy = FW / 2  # centro y
     fig = go.Figure()
 
     # Fundo externo
-    fig.add_shape(type="rect", x0=-IG-4, y0=-4, x1=FL+IG+4, y1=FW+4,
+    fig.add_shape(type="rect", x0=-MG-4, y0=-MG-2, x1=FL+MG+4, y1=FW+MG+2,
                   fillcolor="#1a3a18", line_width=0, layer="below")
 
     # Faixas verdes alternadas no campo de jogo
@@ -654,80 +910,76 @@ def desenhar_campo_rugby_bonito(field_length=100, field_width=70, in_goal_depth=
         fig.add_shape(type="rect", x0=i*sw, y0=0, x1=(i+1)*sw, y1=FW,
                       fillcolor=cores_faixa[i % 2], line_width=0, layer="below")
 
-    # In-goal (faixas mais escuras)
-    ig_cores = ["#246620", "#1e5a1a"]
-    for i in range(int(IG)):
-        fig.add_shape(type="rect", x0=-(i+1), y0=0, x1=-i, y1=FW,
-                      fillcolor=ig_cores[i % 2], line_width=0, layer="below")
-        fig.add_shape(type="rect", x0=FL+i, y0=0, x1=FL+i+1, y1=FW,
-                      fillcolor=ig_cores[i % 2], line_width=0, layer="below")
-
-    # Bordas in-goal
-    fig.add_shape(type="rect", x0=-IG, y0=0, x1=FL+IG, y1=FW,
+    # Perímetro principal
+    fig.add_shape(type="rect", x0=0, y0=0, x1=FL, y1=FW,
                   line=dict(color="white", width=2), fillcolor="rgba(0,0,0,0)")
 
-    # Goal lines
-    fig.add_shape(type="line", x0=0,  y0=0, x1=0,  y1=FW, line=dict(color="white", width=3))
-    fig.add_shape(type="line", x0=FL, y0=0, x1=FL, y1=FW, line=dict(color="white", width=3))
-
     # Linha central
-    fig.add_shape(type="line", x0=FL/2, y0=0, x1=FL/2, y1=FW, line=dict(color="white", width=2))
+    fig.add_shape(type="line", x0=FL/2, y0=0, x1=FL/2, y1=FW,
+                  line=dict(color="white", width=2))
 
-    # 22m lines
-    for x22 in [22, FL-22]:
-        fig.add_shape(type="line", x0=x22, y0=0, x1=x22, y1=FW,
-                      line=dict(color="white", width=1.5, dash="dash"))
-    # 10m lines
-    for x10 in [10, FL-10]:
-        fig.add_shape(type="line", x0=x10, y0=0, x1=x10, y1=FW,
-                      line=dict(color="white", width=1, dash="dot"))
-    # 15m lines
-    for x15 in [15, FL-15]:
-        fig.add_shape(type="line", x0=x15, y0=0, x1=x15, y1=FW,
-                      line=dict(color="white", width=0.8, dash="dot"))
-
-    # Hash marks a cada 5m nas linhas de 5m e 15m
-    for x_h in [5, FL-5]:
-        for y_h in np.arange(5, FW, 5):
-            fig.add_shape(type="line", x0=x_h-1, y0=y_h, x1=x_h+1, y1=y_h,
-                          line=dict(color="white", width=1))
-
-    # Círculo central
+    # Círculo central (r = 9.15m)
     th = np.linspace(0, 2*np.pi, 80)
-    fig.add_trace(go.Scatter(x=FL/2 + 5*np.cos(th), y=FW/2 + 5*np.sin(th),
+    fig.add_trace(go.Scatter(x=FL/2 + 9.15*np.cos(th), y=cy + 9.15*np.sin(th),
                              mode='lines', line=dict(color='white', width=1.5),
                              showlegend=False, hoverinfo='skip', name='_circ'))
-    fig.add_trace(go.Scatter(x=[FL/2], y=[FW/2], mode='markers',
+    # Ponto central
+    fig.add_trace(go.Scatter(x=[FL/2], y=[cy], mode='markers',
                              marker=dict(size=5, color='white'),
                              showlegend=False, hoverinfo='skip', name='_ctr'))
 
-    # Traves (H deitado — vista aérea)
-    cy, post, ext = FW/2, 2.8, 6
-    gd, gdt, gdc = (dict(color="#FFD700", width=3),
-                    dict(color="#FFD700", width=2),
-                    dict(color="#FFD700", width=4))
-    # Esquerda
-    fig.add_shape(type="line", x0=0,    y0=cy-post, x1=0,    y1=cy+post, line=dict(**gdc))
-    fig.add_shape(type="line", x0=-ext, y0=cy-post, x1=0,    y1=cy-post, line=dict(**gd))
-    fig.add_shape(type="line", x0=-ext, y0=cy+post, x1=0,    y1=cy+post, line=dict(**gd))
-    fig.add_shape(type="line", x0=-ext, y0=cy-post, x1=-ext, y1=cy+post, line=dict(**gdt))
-    # Direita
-    fig.add_shape(type="line", x0=FL,     y0=cy-post, x1=FL,     y1=cy+post, line=dict(**gdc))
-    fig.add_shape(type="line", x0=FL,     y0=cy-post, x1=FL+ext, y1=cy-post, line=dict(**gd))
-    fig.add_shape(type="line", x0=FL,     y0=cy+post, x1=FL+ext, y1=cy+post, line=dict(**gd))
-    fig.add_shape(type="line", x0=FL+ext, y0=cy-post, x1=FL+ext, y1=cy+post, line=dict(**gdt))
+    # Área de penalidade (16.5m × 40.32m)
+    for x0, x1 in [(0, 16.5), (FL-16.5, FL)]:
+        fig.add_shape(type="rect", x0=x0, y0=cy-20.16, x1=x1, y1=cy+20.16,
+                      line=dict(color="white", width=1.5), fillcolor="rgba(0,0,0,0)")
+
+    # Área pequena (5.5m × 18.32m)
+    for x0, x1 in [(0, 5.5), (FL-5.5, FL)]:
+        fig.add_shape(type="rect", x0=x0, y0=cy-9.16, x1=x1, y1=cy+9.16,
+                      line=dict(color="white", width=1.5), fillcolor="rgba(0,0,0,0)")
+
+    # Arcos de penalidade (r = 9.15m, apenas fora da área de penalidade)
+    th_full = np.linspace(0, 2*np.pi, 200)
+    for px_p, lado in [(11, 'esq'), (FL-11, 'dir')]:
+        arc_x = px_p + 9.15*np.cos(th_full)
+        arc_y = cy + 9.15*np.sin(th_full)
+        mask = (arc_x > 16.5) if lado == 'esq' else (arc_x < FL-16.5)
+        if mask.sum() > 1:
+            fig.add_trace(go.Scatter(x=arc_x[mask], y=arc_y[mask],
+                                     mode='lines', line=dict(color='white', width=1.5),
+                                     showlegend=False, hoverinfo='skip', name='_parc'))
+
+    # Pontos de penalidade
+    for px_p in [11, FL-11]:
+        fig.add_trace(go.Scatter(x=[px_p], y=[cy], mode='markers',
+                                 marker=dict(size=6, color='white'),
+                                 showlegend=False, hoverinfo='skip', name='_pen'))
+
+    # Arcos de canto (r = 1m)
+    corners_def = [(0, 0, 0, np.pi/2), (FL, 0, np.pi/2, np.pi),
+                   (FL, FW, np.pi, 3*np.pi/2), (0, FW, 3*np.pi/2, 2*np.pi)]
+    for cx_c, cy_c, a1, a2 in corners_def:
+        th_c = np.linspace(a1, a2, 20)
+        fig.add_trace(go.Scatter(x=cx_c + np.cos(th_c), y=cy_c + np.sin(th_c),
+                                 mode='lines', line=dict(color='white', width=1.5),
+                                 showlegend=False, hoverinfo='skip', name='_corner'))
+
+    # Gols (7.32m × 2.44m) — dourado
+    gd_line = dict(color="#FFD700", width=3)
+    fig.add_shape(type="rect", x0=-2.44, y0=cy-3.66, x1=0,   y1=cy+3.66, line=dict(**gd_line))
+    fig.add_shape(type="rect", x0=FL,   y0=cy-3.66, x1=FL+2.44, y1=cy+3.66, line=dict(**gd_line))
 
     # Labels das linhas
     lkw = dict(showarrow=False, font=dict(color='rgba(255,255,255,0.55)', size=9))
-    for xl, txt in [(0,"GL"), (22,"22m"), (FL/2,"50m"), (FL-22,"22m"), (FL,"GL")]:
-        fig.add_annotation(x=xl, y=-2.8, text=txt, **lkw)
+    for xl, txt in [(0, "GL"), (FL/2, "50m"), (FL, "GL")]:
+        fig.add_annotation(x=xl, y=-2.5, text=txt, **lkw)
 
     fig.update_layout(
         title=dict(text=title, font=dict(color='white', size=13)) if title else {},
-        xaxis=dict(range=[-IG-4, FL+IG+4], showgrid=False, zeroline=False,
+        xaxis=dict(range=[-MG-4, FL+MG+4], showgrid=False, zeroline=False,
                    tickfont=dict(color='white', size=9),
                    title=dict(text="metros (comprimento)", font=dict(color='#aaa', size=10))),
-        yaxis=dict(range=[-4, FW+4], showgrid=False, zeroline=False,
+        yaxis=dict(range=[-MG-2, FW+MG+2], showgrid=False, zeroline=False,
                    scaleanchor='x', scaleratio=1,
                    tickfont=dict(color='white', size=9),
                    title=dict(text="metros (largura)", font=dict(color='#aaa', size=10))),
@@ -863,7 +1115,7 @@ def adicionar_convex_hull(fig, x_coords, y_coords):
         pass
 
 
-def adicionar_tercos_campo(fig, x_coords, y_coords, field_length=100, field_width=70):
+def adicionar_tercos_campo(fig, x_coords, y_coords, field_length=105, field_width=68):
     """Overlay dos terços do campo (defensivo / meio / ataque) com % de tempo."""
     if not x_coords:
         return
@@ -886,7 +1138,7 @@ def adicionar_tercos_campo(fig, x_coords, y_coords, field_length=100, field_widt
 
 
 def adicionar_grade_quadrantes(fig, x_coords, y_coords, n_cols, n_rows,
-                               field_length=100, field_width=70):
+                               field_length=105, field_width=68):
     """Grade de quadrantes com % de tempo em cada zona."""
     if not x_coords:
         return
@@ -993,17 +1245,17 @@ def campo_para_latlon(centro_lat, centro_lon, x_m, y_m, rotacao_deg):
     return (float(centro_lat) + d_lat, float(centro_lon) + d_lon)
 
 
-def criar_mapa_satelite_rugby(
+def criar_mapa_satelite_futebol(
     lats, lons, vels, atleta_nome,
     centro_lat, centro_lon, rotacao_deg,
-    field_length=100, field_width=70, in_goal=10,
+    field_length=105, field_width=68, in_goal=3,
     mostrar_campo=True
 ):
     """
     Cria um mapa Folium com:
     - Tiles de satélite Esri World Imagery (gratuito, sem chave de API)
     - Trajetória GPS do atleta colorida por faixa de velocidade
-    - Overlay do campo de rugby (linhas brancas + traves douradas) — opcional via mostrar_campo
+    - Overlay do campo de futebol (linhas FIFA + gols dourados) — opcional via mostrar_campo
     """
     if not lats or not lons:
         return None
@@ -1034,7 +1286,7 @@ def criar_mapa_satelite_rugby(
         opacity=0.7
     ).add_to(m)
 
-    # ---- Overlay do campo de rugby (só quando pedido) ----
+    # ---- Overlay do campo de futebol (só quando pedido) ----
     if mostrar_campo:
         cx = field_length / 2
         cy = field_width / 2
@@ -1045,7 +1297,8 @@ def criar_mapa_satelite_rugby(
         def linha(pontos_xy):
             return [pt(x - cx, y - cy) for x, y in pontos_xy]
 
-        campo_group = folium.FeatureGroup(name="🏉 Campo de Rugby", show=True)
+        campo_group = folium.FeatureGroup(name="⚽ Campo de Futebol", show=True)
+        FW_h = field_width / 2
 
         def add_line(pts_xy, color="white", weight=2, dash=None):
             latlon_pts = linha(pts_xy)
@@ -1054,39 +1307,30 @@ def criar_mapa_satelite_rugby(
                 kwargs["dash_array"] = dash
             folium.PolyLine(latlon_pts, **kwargs).add_to(campo_group)
 
-        add_line([
-            (-in_goal, 0), (field_length + in_goal, 0),
-            (field_length + in_goal, field_width), (-in_goal, field_width),
-            (-in_goal, 0)
-        ], weight=2)
-        add_line([(0, 0), (0, field_width)], weight=3)
-        add_line([(field_length, 0), (field_length, field_width)], weight=3)
-        add_line([(field_length / 2, 0), (field_length / 2, field_width)], weight=2)
-        add_line([(22, 0), (22, field_width)], dash="6 4")
-        add_line([(field_length - 22, 0), (field_length - 22, field_width)], dash="6 4")
-        add_line([(10, 0), (10, field_width)], dash="2 4")
-        add_line([(field_length - 10, 0), (field_length - 10, field_width)], dash="2 4")
-        add_line([(15, 0), (15, field_width)], dash="2 2", weight=1)
-        add_line([(field_length - 15, 0), (field_length - 15, field_width)], dash="2 2", weight=1)
-
-        crossbar_y1 = field_width / 2 - 3.4
-        crossbar_y2 = field_width / 2 + 3.4
-        folium.PolyLine(
-            [pt(0 - cx, crossbar_y1 - cy), pt(0 - cx, crossbar_y2 - cy)],
-            color="#FFD700", weight=3, opacity=1
-        ).add_to(campo_group)
-        folium.PolyLine(
-            [pt(0 - cx, field_width / 2 - cy), pt(-5 - cx, field_width / 2 - cy)],
-            color="#FFD700", weight=3, opacity=1
-        ).add_to(campo_group)
-        folium.PolyLine(
-            [pt(field_length - cx, crossbar_y1 - cy), pt(field_length - cx, crossbar_y2 - cy)],
-            color="#FFD700", weight=3, opacity=1
-        ).add_to(campo_group)
-        folium.PolyLine(
-            [pt(field_length - cx, field_width / 2 - cy), pt(field_length + 5 - cx, field_width / 2 - cy)],
-            color="#FFD700", weight=3, opacity=1
-        ).add_to(campo_group)
+        # Perímetro
+        add_line([(0,0),(field_length,0),(field_length,field_width),(0,field_width),(0,0)], weight=3)
+        # Linha central
+        add_line([(field_length/2, 0), (field_length/2, field_width)], weight=2)
+        # Área de penalidade esquerda (16.5 × 40.32)
+        add_line([(0,FW_h-20.16),(16.5,FW_h-20.16),(16.5,FW_h+20.16),(0,FW_h+20.16)])
+        # Área de penalidade direita
+        add_line([(field_length,FW_h-20.16),(field_length-16.5,FW_h-20.16),
+                  (field_length-16.5,FW_h+20.16),(field_length,FW_h+20.16)])
+        # Área pequena esquerda (5.5 × 18.32)
+        add_line([(0,FW_h-9.16),(5.5,FW_h-9.16),(5.5,FW_h+9.16),(0,FW_h+9.16)])
+        # Área pequena direita
+        add_line([(field_length,FW_h-9.16),(field_length-5.5,FW_h-9.16),
+                  (field_length-5.5,FW_h+9.16),(field_length,FW_h+9.16)])
+        # Gol esquerdo (7.32 × 2.44)
+        folium.PolyLine([pt(-2.44-cx,FW_h-3.66-cy), pt(0-cx,FW_h-3.66-cy),
+                         pt(0-cx,FW_h+3.66-cy), pt(-2.44-cx,FW_h+3.66-cy),
+                         pt(-2.44-cx,FW_h-3.66-cy)],
+                        color="#FFD700", weight=3, opacity=1).add_to(campo_group)
+        # Gol direito
+        folium.PolyLine([pt(field_length+2.44-cx,FW_h-3.66-cy), pt(field_length-cx,FW_h-3.66-cy),
+                         pt(field_length-cx,FW_h+3.66-cy), pt(field_length+2.44-cx,FW_h+3.66-cy),
+                         pt(field_length+2.44-cx,FW_h-3.66-cy)],
+                        color="#FFD700", weight=3, opacity=1).add_to(campo_group)
         campo_group.add_to(m)
 
     # ---- Trajetória GPS colorida por velocidade ----
@@ -1183,7 +1427,7 @@ def criar_html_campo_interativo(lats_gps, lons_gps, vels_gps, atleta_nome, heigh
     Gera HTML auto-contido com Leaflet.js:
     - Satélite Esri (gratuito, sem API key)
     - Trajetória GPS colorida por velocidade
-    - Campo de rugby interativo: clique para posicionar centro,
+    - Campo de futebol interativo: clique para posicionar centro,
       sliders para rotação/tamanho em tempo real
     - Zero re-renders do Streamlit (toda interação é client-side em JavaScript)
     """
@@ -1231,7 +1475,7 @@ def criar_html_campo_interativo(lats_gps, lons_gps, vels_gps, atleta_nome, heigh
         "  </style>\n</head>\n<body>\n"
         "  <div id='map'></div>\n"
         "  <div id='panel'>\n"
-        "    <button class='btn' id='btnC' onclick='toggleCampo()'>🏉 Mostrar Campo</button>\n"
+        "    <button class='btn' id='btnC' onclick='toggleCampo()'>⚽ Mostrar Campo</button>\n"
         "    <div class='ctrl'>\n"
         f"      <label>📍 Lat centro:</label>\n"
         f"      <input type='number' id='inLat' value='{lat_c}' step='0.00005'\n"
@@ -1249,16 +1493,16 @@ def criar_html_campo_interativo(lats_gps, lons_gps, vels_gps, atleta_nome, heigh
         "      <input type='range' id='rot' min='0' max='359' value='0' oninput='onRot(this.value)'>\n"
         "    </div>\n"
         "    <div class='ctrl'>\n"
-        "      <label>📏 Comprimento: <span class='val' id='flv'>100</span>m</label>\n"
-        "      <input type='range' id='fl' min='90' max='110' value='100' oninput='onDim()'>\n"
+        "      <label>📏 Comprimento: <span class='val' id='flv'>105</span>m</label>\n"
+        "      <input type='range' id='fl' min='95' max='115' value='105' oninput='onDim()'>\n"
         "    </div>\n"
         "    <div class='ctrl'>\n"
-        "      <label>📏 Largura: <span class='val' id='fwv'>70</span>m</label>\n"
-        "      <input type='range' id='fw' min='60' max='80' value='70' oninput='onDim()'>\n"
+        "      <label>📏 Largura: <span class='val' id='fwv'>68</span>m</label>\n"
+        "      <input type='range' id='fw' min='60' max='80' value='68' oninput='onDim()'>\n"
         "    </div>\n"
         "    <div class='ctrl'>\n"
-        "      <label>🔚 In-goal: <span class='val' id='igv'>10</span>m</label>\n"
-        "      <input type='range' id='ig' min='5' max='15' value='10' oninput='onDim()'>\n"
+        "      <label>📐 Margem: <span class='val' id='igv'>3</span>m</label>\n"
+        "      <input type='range' id='ig' min='0' max='8' value='3' oninput='onDim()'>\n"
         "    </div>\n"
         "    <span id='status'>📍 Ajuste Lat/Lon acima para mover o centro · ↑↓ no teclado = ~5m</span>\n"
         "  </div>\n"
@@ -1297,7 +1541,7 @@ def criar_html_campo_interativo(lats_gps, lons_gps, vels_gps, atleta_nome, heigh
         "  // ---- Estado do campo ----\n"
         "  let campoOn=false;\n"
         f"  let cLat={lat_c},cLon={lon_c};\n"
-        "  let rotD=0,fL=100,fW=70,fI=10;\n"
+        "  let rotD=0,fL=105,fW=68,fI=3;\n"
         "  const cl=L.layerGroup().addTo(map);\n"
         "  // ---- Marcador arrastável (L.Marker com divIcon — não depende de map.on click) ----\n"
         "  const cmIcon=L.divIcon({\n"
@@ -1351,25 +1595,78 @@ def criar_html_campo_interativo(lats_gps, lons_gps, vels_gps, atleta_nome, heigh
         "  function drawField(){\n"
         "    cl.clearLayers();\n"
         "    if(!campoOn)return;\n"
-        "    const L_=fL,W=fW,ig=fI;\n"
+        "    const FL=fL,FW=fW,mg=fI;\n"
         "    const w={color:'white',weight:2,opacity:.9};\n"
-        "    const wb={color:'white',weight:3,opacity:.9};\n"
+        "    const wb={color:'white',weight:3,opacity:.95};\n"
+        "    const wd={color:'white',weight:1,opacity:.7,dashArray:'4 4'};\n"
         "    const gd={color:'#FFD700',weight:3,opacity:1,interactive:false};\n"
-        "    pl([[-ig,0],[L_+ig,0],[L_+ig,W],[-ig,W],[-ig,0]],w);\n"
-        "    pl([[0,0],[0,W]],wb);\n"
-        "    pl([[L_,0],[L_,W]],wb);\n"
-        "    pl([[L_/2,0],[L_/2,W]],w);\n"
-        "    pl([[22,0],[22,W]],Object.assign({},w,{dashArray:'6 4'}));\n"
-        "    pl([[L_-22,0],[L_-22,W]],Object.assign({},w,{dashArray:'6 4'}));\n"
-        "    pl([[10,0],[10,W]],Object.assign({},w,{dashArray:'2 4'}));\n"
-        "    pl([[L_-10,0],[L_-10,W]],Object.assign({},w,{dashArray:'2 4'}));\n"
-        "    pl([[15,0],[15,W]],Object.assign({},w,{weight:1,dashArray:'2 2'}));\n"
-        "    pl([[L_-15,0],[L_-15,W]],Object.assign({},w,{weight:1,dashArray:'2 2'}));\n"
-        "    const cy1=W/2-3.4,cy2=W/2+3.4;\n"
-        "    L.polyline([geo(-L_/2,cy1-W/2),geo(-L_/2,cy2-W/2)],gd).addTo(cl);\n"
-        "    L.polyline([geo(-L_/2,0),geo(-5-L_/2,0)],gd).addTo(cl);\n"
-        "    L.polyline([geo(L_/2,cy1-W/2),geo(L_/2,cy2-W/2)],gd).addTo(cl);\n"
-        "    L.polyline([geo(L_/2,0),geo(L_/2+5,0)],gd).addTo(cl);\n"
+        "    // Margem exterior (bounding box)\n"
+        "    pl([[-mg,-mg],[FL+mg,-mg],[FL+mg,FW+mg],[-mg,FW+mg],[-mg,-mg]],\n"
+        "       {color:'white',weight:1,opacity:.4,dashArray:'4 4'});\n"
+        "    // Perímetro do campo\n"
+        "    pl([[0,0],[FL,0],[FL,FW],[0,FW],[0,0]],wb);\n"
+        "    // Linha central\n"
+        "    pl([[FL/2,0],[FL/2,FW]],w);\n"
+        "    // Área de penalidade esquerda (40.32 x 16.5)\n"
+        "    var pa_w=40.32,pa_d=16.5;\n"
+        "    var pa_y1=(FW-pa_w)/2,pa_y2=(FW+pa_w)/2;\n"
+        "    pl([[0,pa_y1],[pa_d,pa_y1],[pa_d,pa_y2],[0,pa_y2]],w);\n"
+        "    // Área de penalidade direita\n"
+        "    pl([[FL,pa_y1],[FL-pa_d,pa_y1],[FL-pa_d,pa_y2],[FL,pa_y2]],w);\n"
+        "    // Área pequena esquerda (18.32 x 5.5)\n"
+        "    var ga_w=18.32,ga_d=5.5;\n"
+        "    var ga_y1=(FW-ga_w)/2,ga_y2=(FW+ga_w)/2;\n"
+        "    pl([[0,ga_y1],[ga_d,ga_y1],[ga_d,ga_y2],[0,ga_y2]],w);\n"
+        "    // Área pequena direita\n"
+        "    pl([[FL,ga_y1],[FL-ga_d,ga_y1],[FL-ga_d,ga_y2],[FL,ga_y2]],w);\n"
+        "    // Gols (7.32 x 2.44) — dourado\n"
+        "    var gw=7.32,gd2=2.44;\n"
+        "    var gy1=(FW-gw)/2,gy2=(FW+gw)/2;\n"
+        "    L.polyline([geo(-gd2-FL/2,gy1-FW/2),geo(-gd2-FL/2,gy2-FW/2),\n"
+        "                geo(-FL/2,gy2-FW/2),geo(-FL/2,gy1-FW/2)],gd).addTo(cl);\n"
+        "    L.polyline([geo(FL+gd2-FL/2,gy1-FW/2),geo(FL+gd2-FL/2,gy2-FW/2),\n"
+        "                geo(FL-FL/2,gy2-FW/2),geo(FL-FL/2,gy1-FW/2)],gd).addTo(cl);\n"
+        "    // Círculo central (r=9.15)\n"
+        "    var N=48,r=9.15;\n"
+        "    var cpts=[];\n"
+        "    for(var i=0;i<=N;i++){\n"
+        "      var a=2*Math.PI*i/N;\n"
+        "      cpts.push(geo(FL/2+r*Math.sin(a)-FL/2, FW/2+r*Math.cos(a)-FW/2));\n"
+        "    }\n"
+        "    L.polyline(cpts,w).addTo(cl);\n"
+        "    // Ponto central\n"
+        "    L.circleMarker(geo(0,0),{radius:3,color:'white',fillColor:'white',\n"
+        "      fillOpacity:1,weight:1,interactive:false}).addTo(cl);\n"
+        "    // Pontos de penalidade (11m)\n"
+        "    L.circleMarker(geo(11-FL/2,-FW/2),{radius:3,color:'white',fillColor:'white',\n"
+        "      fillOpacity:1,weight:1,interactive:false}).addTo(cl);\n"
+        "    L.circleMarker(geo(FL-11-FL/2,-FW/2),{radius:3,color:'white',fillColor:'white',\n"
+        "      fillOpacity:1,weight:1,interactive:false}).addTo(cl);\n"
+        "    // Arcos de penalidade (fora da área)\n"
+        "    var rA=9.15,pts1=[],pts2=[];\n"
+        "    for(var i=0;i<=60;i++){\n"
+        "      var a=-Math.PI/2+Math.PI*i/60;\n"
+        "      var px1=11+rA*Math.cos(a);\n"
+        "      var py1=FW/2+rA*Math.sin(a);\n"
+        "      if(px1>pa_d){pts1.push(geo(px1-FL/2,py1-FW/2));}\n"
+        "      var px2=FL-11+rA*Math.cos(Math.PI-a);\n"
+        "      var py2=FW/2+rA*Math.sin(a);\n"
+        "      if(px2<FL-pa_d){pts2.push(geo(px2-FL/2,py2-FW/2));}\n"
+        "    }\n"
+        "    if(pts1.length>1)L.polyline(pts1,w).addTo(cl);\n"
+        "    if(pts2.length>1)L.polyline(pts2,w).addTo(cl);\n"
+        "    // Arcos de canto (r=1)\n"
+        "    var rc=1,corners=[[0,0],[FL,0],[0,FW],[FL,FW]];\n"
+        "    var aStart=[[0,Math.PI/2],[Math.PI/2,Math.PI],[3*Math.PI/2,2*Math.PI],\n"
+        "                [Math.PI,3*Math.PI/2]];\n"
+        "    corners.forEach(function(c,i){\n"
+        "      var cpts2=[],a0=aStart[i][0],a1=aStart[i][1];\n"
+        "      for(var j=0;j<=12;j++){\n"
+        "        var a=a0+(a1-a0)*j/12;\n"
+        "        cpts2.push(geo(c[0]+rc*Math.cos(a)-FL/2,c[1]+rc*Math.sin(a)-FW/2));\n"
+        "      }\n"
+        "      L.polyline(cpts2,w).addTo(cl);\n"
+        "    });\n"
         "  }\n"
         "  function onRot(v){rotD=+v;document.getElementById('rv').textContent=v;drawField();}\n"
         "  function onDim(){\n"
@@ -1384,7 +1681,7 @@ def criar_html_campo_interativo(lats_gps, lons_gps, vels_gps, atleta_nome, heigh
         "  function toggleCampo(){\n"
         "    campoOn=!campoOn;\n"
         "    const b=document.getElementById('btnC');\n"
-        "    b.textContent=campoOn?'🏉 Ocultar Campo':'🏉 Mostrar Campo';\n"
+        "    b.textContent=campoOn?'⚽ Ocultar Campo':'⚽ Mostrar Campo';\n"
         "    b.className=campoOn?'btn on':'btn';\n"
         "    drawField();\n"
         "    document.getElementById('status').textContent=campoOn\n"
@@ -1414,9 +1711,9 @@ def criar_html_campo_fixo(lats_gps, lons_gps, vels_gps, campo_config,
                           lats_eff=None, lons_eff=None, vels_eff=None,
                           atleta_nome="", esforco_desc="", height=580):
     """
-    Mapa satélite com campo de rugby FIXO (já configurado e aplicado).
+    Mapa satélite com campo de futebol FIXO (já configurado e aplicado).
     - Trajetória GPS completa como fundo (opacidade baixa)
-    - Campo de rugby desenhado na posição salva
+    - Campo de futebol desenhado na posição salva
     - Se lats_eff fornecido: destaca os pontos do esforço selecionado (linha grossa)
     """
     import json as _json
@@ -1474,7 +1771,7 @@ def criar_html_campo_fixo(lats_gps, lons_gps, vels_gps, campo_config,
         "    <span class='lk'>🔒 Campo Aplicado</span>\n"
         f"    <span style='color:#90CAF9'>📍 {cLat:.5f}, {cLon:.5f}</span>\n"
         f"    <span style='color:#aaa'>🧭 {rotD}°</span>\n"
-        f"    <span style='color:#aaa'>📏 {fL}×{fW}m + in-goal {fI}m</span>\n"
+        f"    <span style='color:#aaa'>📏 {fL}×{fW}m + margem {fI}m (FIFA)</span>\n"
         "    <span id='effinfo' style='color:#FFD700;margin-left:auto;font-weight:bold'></span>\n"
         "  </div>\n"
         "  <script>\n"
@@ -1543,24 +1840,33 @@ def criar_html_campo_fixo(lats_gps, lons_gps, vels_gps, campo_config,
         "  function lc(pts){return pts.map(p=>geo(p[0]-fL/2,p[1]-fW/2));}\n"
         "  function pl(pts,opt){L.polyline(lc(pts),Object.assign({interactive:false},opt)).addTo(cl);}\n"
         "  (function(){\n"
-        "    const w={color:'white',weight:2,opacity:.9};\n"
-        "    const wb={color:'white',weight:3,opacity:.9};\n"
-        "    const gd={color:'#FFD700',weight:3,opacity:1,interactive:false};\n"
-        "    pl([[-fI,0],[fL+fI,0],[fL+fI,fW],[-fI,fW],[-fI,0]],w);\n"
-        "    pl([[0,0],[0,fW]],wb);\n"
-        "    pl([[fL,0],[fL,fW]],wb);\n"
+        "    var w={color:'white',weight:2,opacity:.9};\n"
+        "    var wb={color:'white',weight:3,opacity:.9};\n"
+        "    var wd={color:'white',weight:1.5,opacity:.9};\n"
+        "    var gd={color:'#FFD700',weight:3,opacity:1,interactive:false};\n"
+        "    var i,a,pts,px,px2;\n"
+        "    pl([[0,0],[fL,0],[fL,fW],[0,fW],[0,0]],wb);\n"
         "    pl([[fL/2,0],[fL/2,fW]],w);\n"
-        "    pl([[22,0],[22,fW]],Object.assign({},w,{dashArray:'6 4'}));\n"
-        "    pl([[fL-22,0],[fL-22,fW]],Object.assign({},w,{dashArray:'6 4'}));\n"
-        "    pl([[10,0],[10,fW]],Object.assign({},w,{dashArray:'2 4'}));\n"
-        "    pl([[fL-10,0],[fL-10,fW]],Object.assign({},w,{dashArray:'2 4'}));\n"
-        "    pl([[15,0],[15,fW]],Object.assign({},w,{weight:1,dashArray:'2 2'}));\n"
-        "    pl([[fL-15,0],[fL-15,fW]],Object.assign({},w,{weight:1,dashArray:'2 2'}));\n"
-        "    const cy1=fW/2-3.4,cy2=fW/2+3.4;\n"
-        "    L.polyline([geo(-fL/2,cy1-fW/2),geo(-fL/2,cy2-fW/2)],gd).addTo(cl);\n"
-        "    L.polyline([geo(-fL/2,0),geo(-5-fL/2,0)],gd).addTo(cl);\n"
-        "    L.polyline([geo(fL/2,cy1-fW/2),geo(fL/2,cy2-fW/2)],gd).addTo(cl);\n"
-        "    L.polyline([geo(fL/2,0),geo(fL/2+5,0)],gd).addTo(cl);\n"
+        "    pl([[0,fW/2-20.16],[16.5,fW/2-20.16],[16.5,fW/2+20.16],[0,fW/2+20.16]],w);\n"
+        "    pl([[fL,fW/2-20.16],[fL-16.5,fW/2-20.16],[fL-16.5,fW/2+20.16],[fL,fW/2+20.16]],w);\n"
+        "    pl([[0,fW/2-9.16],[5.5,fW/2-9.16],[5.5,fW/2+9.16],[0,fW/2+9.16]],w);\n"
+        "    pl([[fL,fW/2-9.16],[fL-5.5,fW/2-9.16],[fL-5.5,fW/2+9.16],[fL,fW/2+9.16]],w);\n"
+        "    pl([[-2.44,fW/2-3.66],[0,fW/2-3.66],[0,fW/2+3.66],[-2.44,fW/2+3.66],[-2.44,fW/2-3.66]],gd);\n"
+        "    pl([[fL+2.44,fW/2-3.66],[fL,fW/2-3.66],[fL,fW/2+3.66],[fL+2.44,fW/2+3.66],[fL+2.44,fW/2-3.66]],gd);\n"
+        "    pts=[];\n"
+        "    for(i=0;i<=60;i++){a=i/60*2*Math.PI;pts.push([fL/2+9.15*Math.cos(a),fW/2+9.15*Math.sin(a)]);}\n"
+        "    pl(pts,wd);\n"
+        "    pts=[];\n"
+        "    for(i=0;i<=60;i++){a=-Math.PI+i/60*2*Math.PI;px=11+9.15*Math.cos(a);if(px>16.5)pts.push([px,fW/2+9.15*Math.sin(a)]);}\n"
+        "    if(pts.length>1)pl(pts,wd);\n"
+        "    pts=[];\n"
+        "    for(i=0;i<=60;i++){a=i/60*2*Math.PI;px2=(fL-11)+9.15*Math.cos(a);if(px2<fL-16.5)pts.push([px2,fW/2+9.15*Math.sin(a)]);}\n"
+        "    if(pts.length>1)pl(pts,wd);\n"
+        "    var corners=[[0,0,0,Math.PI/2],[fL,0,Math.PI/2,Math.PI],[fL,fW,Math.PI,3*Math.PI/2],[0,fW,3*Math.PI/2,2*Math.PI]];\n"
+        "    for(var ci=0;ci<corners.length;ci++){var cx2=corners[ci][0],cy2=corners[ci][1],a1=corners[ci][2],a2=corners[ci][3];pts=[];for(i=0;i<=10;i++){a=a1+(a2-a1)*i/10;pts.push([cx2+Math.cos(a),cy2+Math.sin(a)]);}pl(pts,Object.assign({},w,{weight:1}));}\n"
+        "    L.circleMarker(geo(0,0),{radius:3,color:'white',fillColor:'white',fillOpacity:1,weight:1,interactive:false}).addTo(cl);\n"
+        "    L.circleMarker(geo(11-fL/2,0),{radius:3,color:'white',fillColor:'white',fillOpacity:1,weight:1,interactive:false}).addTo(cl);\n"
+        "    L.circleMarker(geo(fL/2-11,0),{radius:3,color:'white',fillColor:'white',fillOpacity:1,weight:1,interactive:false}).addTo(cl);\n"
         "  })();\n"
         "  // ---- Legenda ----\n"
         "  const leg=L.control({position:'bottomleft'});\n"
@@ -2183,10 +2489,503 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
         st.info("Nenhum evento de média-alta ou alta intensidade encontrado")
 
 
+# ==================== FEATURE 1: HEATMAP TEMPORAL SEGMENTADO ====================
+
+def gerar_heatmap_segmentado(xs, ys, ts_list, bloco_min, bloco_idx, field_length=105, field_width=68):
+    """Heatmap de presença para um bloco temporal específico da partida."""
+    if not ts_list or not xs or not ys:
+        return None, 0, ""
+
+    ts_arr = np.array(ts_list, dtype=float)
+    xs_arr = np.array(xs,      dtype=float)
+    ys_arr = np.array(ys,      dtype=float)
+
+    ts_rel  = ts_arr - ts_arr.min()
+    bloco_s = bloco_min * 60.0
+    t0, t1  = bloco_idx * bloco_s, (bloco_idx + 1) * bloco_s
+    label   = f"{int(t0 // 60)}–{int(t1 // 60)} min"
+    mascara = (ts_rel >= t0) & (ts_rel < t1)
+
+    xb = xs_arr[mascara]
+    yb = ys_arr[mascara]
+    xb = xb[(xb >= 0) & (xb <= field_length)]
+    yb = yb[(yb >= 0) & (yb <= field_width)]
+
+    if len(xb) < 5:
+        return None, int(mascara.sum()), label
+
+    H, xe, ye = np.histogram2d(xb, yb, bins=[52, 34],
+                                range=[[0, field_length], [0, field_width]])
+    H = _gf(H, sigma=2.0)
+    xc = (xe[:-1] + xe[1:]) / 2
+    yc = (ye[:-1] + ye[1:]) / 2
+
+    fig = desenhar_campo_futebol_bonito(field_length, field_width,
+                                        title=f"🕐 Heatmap por Fase — {label}")
+    fig.add_trace(go.Heatmap(
+        x=xc, y=yc, z=H.T,
+        colorscale=[[0, 'rgba(0,0,0,0)'],  [0.0001, '#1a237e'],
+                    [0.3, '#1565C0'],        [0.6,    '#FFEB3B'],
+                    [0.85,'#FF9800'],        [1,      '#F44336']],
+        opacity=0.72, showscale=True,
+        colorbar=dict(title='Freq.', tickfont=dict(color='white'),
+                      titlefont=dict(color='white'), x=1.01, thickness=12),
+        name=f'Bloco {bloco_idx + 1}',
+        hovertemplate='X: %{x:.1f}m<br>Y: %{y:.1f}m<br>Freq: %{z:.0f}<extra></extra>'
+    ))
+    return fig, int(mascara.sum()), label
+
+
+# ==================== FEATURE 2: DIAGRAMA DE VORONOI ====================
+
+def calcular_voronoi_campo(posicoes_atletas, field_length=105, field_width=68, resolucao=1.5):
+    """Diagrama de Voronoi (nearest-neighbor grid) — raio de ação por atleta."""
+    centroids = {}
+    for nome, dados in posicoes_atletas.items():
+        xs = [x for x in dados.get('xs', []) if 0 <= x <= field_length]
+        ys = [y for y in dados.get('ys', []) if 0 <= y <= field_width]
+        if len(xs) > 10:
+            centroids[nome] = (float(np.median(xs)), float(np.median(ys)))
+
+    if len(centroids) < 2:
+        return None
+
+    names = list(centroids.keys())
+    cx    = np.array([centroids[n][0] for n in names])
+    cy    = np.array([centroids[n][1] for n in names])
+    n     = len(names)
+
+    gx = np.arange(0, field_length + resolucao, resolucao)
+    gy = np.arange(0, field_width  + resolucao, resolucao)
+    GX, GY = np.meshgrid(gx, gy)
+    pts_flat = np.column_stack([GX.ravel(), GY.ravel()])
+    tree     = cKDTree(np.column_stack([cx, cy]))
+    _, zone_flat = tree.query(pts_flat)
+    Z = zone_flat.reshape(GX.shape).astype(float)
+
+    base_colors = ['#2196F3','#F44336','#4CAF50','#FF9800',
+                   '#9C27B0','#00BCD4','#FFEB3B','#E91E63',
+                   '#FF5722','#607D8B']
+    cs = []
+    for i in range(n):
+        lo = i / n
+        hi = min((i + 1) / n, 1.0)
+        c  = base_colors[i % len(base_colors)]
+        cs.append([lo, c])
+        cs.append([hi, c])
+    cs[0][0]  = 0.0
+    cs[-1][0] = 1.0
+
+    fig = desenhar_campo_futebol_bonito(field_length, field_width,
+                                        title="🔷 Voronoi — Raio de Ação por Atleta")
+    fig.add_trace(go.Heatmap(
+        x=gx, y=gy, z=Z,
+        colorscale=cs, opacity=0.38, showscale=False,
+        zmin=0, zmax=max(n - 0.001, 1),
+        hoverinfo='skip', name='Zonas'
+    ))
+    for i, nome in enumerate(names):
+        cx_i, cy_i = centroids[nome]
+        fig.add_trace(go.Scatter(
+            x=[cx_i], y=[cy_i],
+            mode='markers+text',
+            marker=dict(size=14, color=base_colors[i % len(base_colors)],
+                        symbol='diamond', line=dict(width=2, color='white')),
+            text=[nome.split()[0]], textposition='top center',
+            textfont=dict(color='white', size=10, family='Arial Black'),
+            name=nome, showlegend=True
+        ))
+    fig.update_layout(
+        legend=dict(bgcolor='rgba(0,0,30,.75)', font=dict(color='white'),
+                    bordercolor='#555', borderwidth=1)
+    )
+    return fig
+
+
+# ==================== FEATURE 6: CARGA NEUROMUSCULAR ====================
+
+def calcular_carga_neuromuscular(sensor_points, limiar=2.0):
+    """Analisa esforços de acc/dec intensos como indicador de carga neuromuscular."""
+    if not sensor_points:
+        return None
+
+    ts_l, acc_l, vel_l = [], [], []
+    for p in sensor_points:
+        if p.get('a') is not None and p.get('ts') is not None:
+            ts_l.append(float(p['ts']))
+            acc_l.append(float(p['a']))
+            vel_l.append(float(p.get('v') or 0) * 3.6)
+
+    if len(ts_l) < 10:
+        return None
+
+    ts_arr  = np.array(ts_l,  dtype=float)
+    acc_arr = np.array(acc_l, dtype=float)
+    vel_arr = np.array(vel_l, dtype=float)
+    ts_rel  = ts_arr - ts_arr.min()
+    duracao = float(ts_rel.max())
+
+    lm = limiar * 0.65
+    mask_hi_acc  = acc_arr >= limiar
+    mask_med_acc = (acc_arr >= lm) & (acc_arr < limiar)
+    mask_hi_dec  = acc_arr <= -limiar
+    mask_med_dec = (acc_arr <= -lm) & (acc_arr > -limiar)
+
+    t_bins = np.arange(0, duracao + 60, 60)
+    n_bins = max(1, len(t_bins) - 1)
+
+    def _cpm(mask):
+        return np.array([
+            mask[(ts_rel >= t_bins[i]) & (ts_rel < t_bins[i + 1])].sum()
+            for i in range(n_bins)
+        ])
+
+    t_mid = [(t_bins[i] + t_bins[i + 1]) / 2 / 60 for i in range(n_bins)]
+    return {
+        'ts_rel': ts_rel, 'acc': acc_arr, 'vel': vel_arr, 't_mid': t_mid,
+        'hi_acc_min':  _cpm(mask_hi_acc),  'hi_dec_min':  _cpm(mask_hi_dec),
+        'med_acc_min': _cpm(mask_med_acc), 'med_dec_min': _cpm(mask_med_dec),
+        'total_hi_acc':  int(mask_hi_acc.sum()),  'total_hi_dec':  int(mask_hi_dec.sum()),
+        'total_med_acc': int(mask_med_acc.sum()), 'total_med_dec': int(mask_med_dec.sum()),
+        'limiar': limiar,
+    }
+
+
+def plotar_carga_neuromuscular(dados, atleta_nome):
+    """Painel Plotly 2×2 com análise de carga neuromuscular."""
+    lim = dados['limiar']
+    t   = dados['t_mid']
+
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=(
+            f"🟢 Acelerações ≥{lim} m/s² / min",
+            f"🔴 Desacelerações ≥{lim} m/s² / min",
+            "📊 Aceleração × Velocidade",
+            "⚡ Carga Neuromuscular Acumulada"
+        ),
+        vertical_spacing=0.18, horizontal_spacing=0.1
+    )
+    # Acelerações
+    fig.add_trace(go.Bar(x=t, y=dados['hi_acc_min'],  name=f'Alta Acc ≥{lim}',
+                         marker_color='#4CAF50', opacity=0.9), row=1, col=1)
+    fig.add_trace(go.Bar(x=t, y=dados['med_acc_min'], name='Média Acc',
+                         marker_color='#81C784', opacity=0.6), row=1, col=1)
+    # Desacelerações
+    fig.add_trace(go.Bar(x=t, y=dados['hi_dec_min'],  name=f'Alta Dec ≥{lim}',
+                         marker_color='#F44336', opacity=0.9), row=1, col=2)
+    fig.add_trace(go.Bar(x=t, y=dados['med_dec_min'], name='Média Dec',
+                         marker_color='#E57373', opacity=0.6), row=1, col=2)
+    # Scatter acc × vel
+    step = max(1, len(dados['ts_rel']) // 2000)
+    ac_s = dados['acc'][::step];  vl_s = dados['vel'][::step]
+    c_s  = np.where(ac_s >= lim, '#4CAF50', np.where(ac_s <= -lim, '#F44336', '#90CAF9'))
+    fig.add_trace(go.Scatter(
+        x=vl_s, y=ac_s, mode='markers',
+        marker=dict(size=3, color=c_s, opacity=0.5),
+        name='Acc × Vel', showlegend=False
+    ), row=2, col=1)
+    fig.add_hline(y= lim, line_dash='dash', line_color='#4CAF50', opacity=0.6, row=2, col=1)
+    fig.add_hline(y=-lim, line_dash='dash', line_color='#F44336', opacity=0.6, row=2, col=1)
+    fig.add_hline(y=0,    line_color='white', opacity=0.3, row=2, col=1)
+    # Carga acumulada
+    dt       = np.diff(dados['ts_rel'], prepend=dados['ts_rel'][0])
+    dt       = np.clip(dt, 0, 1)
+    carga    = np.cumsum(np.abs(dados['acc']) * dt)
+    step2    = max(1, len(carga) // 1500)
+    fig.add_trace(go.Scatter(
+        x=dados['ts_rel'][::step2] / 60, y=carga[::step2],
+        mode='lines', line=dict(color='#FFEB3B', width=2),
+        fill='tozeroy', fillcolor='rgba(255,235,59,0.12)',
+        name='Carga Acum.'
+    ), row=2, col=2)
+
+    fig.update_layout(
+        title=dict(text=f'💪 Carga Neuromuscular — {atleta_nome}',
+                   font=dict(size=16, color='white')),
+        height=620, paper_bgcolor='#0a0a1e', plot_bgcolor='#1a1a2e',
+        font=dict(color='white'), barmode='stack',
+        legend=dict(bgcolor='rgba(0,0,0,.5)', font=dict(color='white'))
+    )
+    for r in [1, 2]:
+        for c in [1, 2]:
+            fig.update_xaxes(gridcolor='#333', row=r, col=c)
+            fig.update_yaxes(gridcolor='#333', row=r, col=c)
+    fig.update_xaxes(title_text='Tempo (min)',        row=1, col=1)
+    fig.update_xaxes(title_text='Tempo (min)',        row=1, col=2)
+    fig.update_xaxes(title_text='Velocidade (km/h)',  row=2, col=1)
+    fig.update_xaxes(title_text='Tempo (min)',        row=2, col=2)
+    fig.update_yaxes(title_text='Contagem / min',     row=1, col=1)
+    fig.update_yaxes(title_text='Contagem / min',     row=1, col=2)
+    fig.update_yaxes(title_text='Aceleração (m/s²)',  row=2, col=1)
+    fig.update_yaxes(title_text='Carga Acumulada',    row=2, col=2)
+    return fig
+
+
+# ==================== FEATURE 8: RELATÓRIO PDF ====================
+
+def gerar_pdf_relatorio(atleta_nome, periodo_nome, metricas, sensor_points, dados_pos,
+                        field_length=105, field_width=68):
+    """Gera relatório PDF A3 landscape em memória via matplotlib. Retorna bytes."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    from matplotlib.patches import Rectangle as MplRect, Circle as MplCircle
+    from matplotlib.gridspec import GridSpec
+
+    BG   = '#0a0a1e'; PAN = '#1a1a2e'; GOLD = '#FFD700'
+    BLU  = '#2196F3'; GRN = '#4CAF50'; ORG  = '#FF9800'
+    RED  = '#F44336'; WHT = '#FFFFFF'; GRY  = '#90CAF9'
+
+    plt.rcParams.update({
+        'text.color': WHT, 'axes.labelcolor': WHT,
+        'xtick.color': WHT, 'ytick.color': WHT,
+        'axes.edgecolor': '#555', 'axes.facecolor': PAN,
+        'figure.facecolor': BG,   'axes.grid': True,
+        'grid.color': '#333',     'grid.alpha': 0.5,
+        'font.size': 8,
+    })
+
+    fig = plt.figure(figsize=(16.54, 11.69), facecolor=BG)
+    gs  = GridSpec(3, 4, figure=fig, hspace=0.52, wspace=0.38,
+                   left=0.04, right=0.97, top=0.92, bottom=0.06)
+
+    # ── Cabeçalho ──────────────────────────────────────────────────────────
+    ax_h = fig.add_subplot(gs[0, :])
+    ax_h.set_facecolor('#0d1117'); ax_h.axis('off')
+    ax_h.text(0.5, 0.80, '⚽  RELATÓRIO DE PERFORMANCE — FUTEBOL',
+              transform=ax_h.transAxes, ha='center', va='center',
+              fontsize=20, fontweight='bold', color=GOLD)
+    ax_h.text(0.5, 0.44, atleta_nome,
+              transform=ax_h.transAxes, ha='center', va='center',
+              fontsize=14, color=WHT)
+    ax_h.text(0.5, 0.12,
+              f'Período: {periodo_nome}   |   {datetime.now().strftime("%d/%m/%Y  %H:%M")}   |   Catapult Sports API v6',
+              transform=ax_h.transAxes, ha='center', va='center',
+              fontsize=8, color=GRY, style='italic')
+    ax_h.add_patch(mpatches.Rectangle((0, 0), 1, 1, transform=ax_h.transAxes,
+                                       fill=False, edgecolor=GOLD, linewidth=1.5))
+
+    # ── Métricas biométricas ───────────────────────────────────────────────
+    ax_m = fig.add_subplot(gs[1, 0]); ax_m.axis('off')
+    ax_m.text(0.5, 0.97, '📊 MÉTRICAS BIOMÉTRICAS', transform=ax_m.transAxes,
+              ha='center', va='top', fontsize=9, fontweight='bold', color=GRN)
+    kpis = [
+        ('Distância Total',    f"{metricas.get('Distância (m)', 0):,.0f} m",            BLU),
+        ('PlayerLoad',         f"{metricas.get('PlayerLoad', 0):,.0f}",                 '#FFEB3B'),
+        ('Vel. Máxima',        f"{metricas.get('Velocidade Máx (km/h)', 0):.1f} km/h",  ORG),
+        ('Vel. Média',         f"{metricas.get('Velocidade Média (km/h)', 0):.1f} km/h", GRN),
+        ('FC Média',           f"{metricas.get('FC Média (bpm)', 0):.0f} bpm",          RED),
+        ('Dist. >19 km/h',     f"{metricas.get('Dist. > 19 km/h (m)', 0):.0f} m",      ORG),
+        ('Dist. >24 km/h',     f"{metricas.get('Dist. > 24 km/h (m)', 0):.0f} m",      RED),
+        ('Sprints (>24)',       f"{metricas.get('Sprints (>24 km/h)', 0)}",             '#E91E63'),
+        ('Acels. (>3 m/s²)',   f"{metricas.get('Acelerações (>3 m/s²)', 0)}",          GRN),
+    ]
+    for i, (lbl, val, clr) in enumerate(kpis):
+        y = 0.84 - i * 0.092
+        ax_m.text(0.05, y, lbl + ':', transform=ax_m.transAxes,
+                  ha='left', va='top', fontsize=7.5, color='#aaa')
+        ax_m.text(0.95, y, val, transform=ax_m.transAxes,
+                  ha='right', va='top', fontsize=8.5, fontweight='bold', color=clr)
+
+    # ── Gráfico de velocidade ──────────────────────────────────────────────
+    ax_v = fig.add_subplot(gs[1, 1:])
+    if sensor_points:
+        ts_v, vl_v = [], []
+        for p in sensor_points:
+            if p.get('ts') is not None and p.get('v') is not None:
+                ts_v.append(float(p['ts'])); vl_v.append(float(p['v']) * 3.6)
+        if ts_v:
+            ta = np.array(ts_v); ta -= ta.min(); ta /= 60
+            va = np.array(vl_v)
+            wl = min(61, max(11, (len(va) // 100) * 2 + 1))
+            if wl % 2 == 0: wl -= 1
+            try:    vs = savgol_filter(va, wl, 3)
+            except: vs = va
+            c_pts = np.select([va < 7, va < 14, va < 19, va < 24],
+                               [BLU, GRN, '#FFEB3B', ORG], default=RED)
+            ax_v.scatter(ta[::3], va[::3], c=c_pts[::3], s=1.5, alpha=0.4, linewidths=0)
+            ax_v.plot(ta, vs, color=WHT, lw=1.2, alpha=0.85)
+            ax_v.axhline(24, color=RED, lw=0.9, ls='--', alpha=0.7, label='Sprint 24 km/h')
+            ax_v.axhline(19, color=ORG, lw=0.9, ls='--', alpha=0.7, label='Alta Int. 19 km/h')
+            ax_v.legend(fontsize=7, loc='upper right',
+                        facecolor=PAN, labelcolor=WHT, edgecolor='#555')
+    ax_v.set_xlabel('Tempo (min)'); ax_v.set_ylabel('Velocidade (km/h)')
+    ax_v.set_title('📈 Perfil de Velocidade', fontsize=10, pad=6, color=WHT)
+    ax_v.spines[['top', 'right']].set_visible(False)
+
+    # ── Mapa de calor no campo ─────────────────────────────────────────────
+    ax_f = fig.add_subplot(gs[2, :2])
+    ax_f.set_facecolor('#1a4a2e')
+    ax_f.set_xlim(-2, field_length + 2); ax_f.set_ylim(-2, field_width + 2)
+    ax_f.set_aspect('equal')
+    ax_f.set_title('🗺️ Mapa de Calor — Posicionamento', fontsize=9, pad=5, color=WHT)
+    for xy in [(0, 0, field_length, field_width),
+               (0, (field_width - 40.32) / 2, 16.5,            40.32),
+               (field_length - 16.5, (field_width - 40.32) / 2, 16.5, 40.32)]:
+        ax_f.add_patch(MplRect((xy[0], xy[1]), xy[2], xy[3],
+                               fill=False, edgecolor='white', lw=0.9, alpha=0.9))
+    ax_f.axvline(field_length / 2, color='white', lw=0.7, alpha=0.7)
+    ax_f.add_patch(MplCircle((field_length / 2, field_width / 2), 9.15,
+                              fill=False, edgecolor='white', lw=0.7, alpha=0.7))
+    if dados_pos and 'xs' in dados_pos and 'ys' in dados_pos:
+        xf = np.array([x for x in dados_pos['xs'] if 0 <= x <= field_length])
+        yf = np.array([y for y in dados_pos['ys'] if 0 <= y <= field_width])
+        if len(xf) > 10:
+            H, xe, ye = np.histogram2d(xf, yf, bins=[52, 34],
+                                       range=[[0, field_length], [0, field_width]])
+            H = _gf(H, sigma=2.0)
+            Hm = np.ma.masked_where(H.T < H.max() * 0.02, H.T)
+            ax_f.pcolormesh(xe, ye, Hm, cmap='hot', alpha=0.72, vmin=0)
+    ax_f.set_xlabel('Comprimento (m)'); ax_f.set_ylabel('Largura (m)')
+
+    # ── Sprints resumo ─────────────────────────────────────────────────────
+    ax_s = fig.add_subplot(gs[2, 2]); ax_s.axis('off')
+    ax_s.text(0.5, 0.97, '⚡ SPRINTS & ACELERAÇÕES', transform=ax_s.transAxes,
+              ha='center', va='top', fontsize=9, fontweight='bold', color=ORG)
+    sprint_kpis = [
+        ('N° Sprints >24 km/h', f"{metricas.get('Sprints (>24 km/h)', 0)}",              RED),
+        ('Dist. em Sprint',     f"{metricas.get('Dist. > 24 km/h (m)', 0):.0f} m",       RED),
+        ('Esforços >19 km/h',   f"{metricas.get('Esforços Alta Int.', 0)}",              ORG),
+        ('Dist. Alta Int.',     f"{metricas.get('Dist. > 19 km/h (m)', 0):.0f} m",       ORG),
+        ('Acels. Intensas',     f"{metricas.get('Acelerações (>3 m/s²)', 0)}",           GRN),
+        ('Desacels. Intensas',  f"{metricas.get('Desacelerações (<-3 m/s²)', 0)}",       '#9C27B0'),
+    ]
+    for i, (lbl, val, clr) in enumerate(sprint_kpis):
+        y = 0.83 - i * 0.13
+        ax_s.text(0.05, y, lbl + ':', transform=ax_s.transAxes,
+                  ha='left', va='top', fontsize=7.5, color='#aaa')
+        ax_s.text(0.95, y, val, transform=ax_s.transAxes,
+                  ha='right', va='top', fontsize=9, fontweight='bold', color=clr)
+
+    # ── Aceleração ao longo do tempo ───────────────────────────────────────
+    ax_a = fig.add_subplot(gs[2, 3])
+    if sensor_points:
+        ts_a, ac_a = [], []
+        for p in sensor_points:
+            if p.get('ts') is not None and p.get('a') is not None:
+                ts_a.append(float(p['ts'])); ac_a.append(float(p['a']))
+        if ts_a:
+            ta2 = np.array(ts_a); ta2 -= ta2.min(); ta2 /= 60
+            aa  = np.array(ac_a)
+            wl2 = min(31, max(5, (len(aa) // 200) * 2 + 1))
+            if wl2 % 2 == 0: wl2 -= 1
+            try:    as_ = savgol_filter(aa, wl2, 2)
+            except: as_ = aa
+            ax_a.fill_between(ta2[::3], as_[::3], 0,
+                              where=as_[::3] >= 0, color=GRN, alpha=0.5, label='Acc')
+            ax_a.fill_between(ta2[::3], as_[::3], 0,
+                              where=as_[::3] < 0,  color=RED, alpha=0.5, label='Dec')
+            ax_a.axhline(0,  color=WHT, lw=0.6, alpha=0.5)
+            ax_a.axhline(3,  color=GRN, lw=0.8, ls='--', alpha=0.6)
+            ax_a.axhline(-3, color=RED, lw=0.8, ls='--', alpha=0.6)
+            ax_a.legend(fontsize=7, facecolor=PAN, labelcolor=WHT, edgecolor='#555')
+    ax_a.set_xlabel('Tempo (min)'); ax_a.set_ylabel('Aceleração (m/s²)')
+    ax_a.set_title('🔄 Perfil de Aceleração', fontsize=9, pad=5, color=WHT)
+    ax_a.spines[['top', 'right']].set_visible(False)
+
+    fig.text(0.5, 0.005,
+             '⚽  Futebol Eventos — Powered by Catapult Sports API v6 | Claude AI',
+             ha='center', fontsize=7, color='#444', style='italic')
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='pdf', bbox_inches='tight', facecolor=BG, dpi=120)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+# ==================== FEATURE 10: ACWR ====================
+
+def calcular_acwr_df(df_cargas):
+    """
+    ACWR (Acute:Chronic Workload Ratio) por atleta e data.
+    df_cargas: DataFrame com colunas 'atleta', 'data' (datetime), 'player_load', 'atividade'.
+    """
+    resultados = []
+    for atleta in df_cargas['atleta'].unique():
+        df_a = df_cargas[df_cargas['atleta'] == atleta].sort_values('data')
+        for _, row in df_a.iterrows():
+            d_ref  = row['data']
+            aguda  = df_a[(df_a['data'] <= d_ref) &
+                           (df_a['data'] >  d_ref - timedelta(days=7))]['player_load'].sum()
+            cronica = df_a[(df_a['data'] <= d_ref) &
+                            (df_a['data'] >  d_ref - timedelta(days=28))]['player_load'].sum()
+            cr_sem = cronica / 4 if cronica > 0 else 0
+            acwr   = round(aguda / cr_sem, 3) if cr_sem > 0 else None
+            resultados.append({
+                'Atleta': atleta,
+                'Data': d_ref,
+                'Atividade': row.get('atividade', ''),
+                'PlayerLoad': round(row['player_load'], 1),
+                'Carga Aguda 7d': round(aguda, 1),
+                'Carga Crônica 28d': round(cronica, 1),
+                'ACWR': acwr,
+            })
+    return pd.DataFrame(resultados)
+
+
+def plotar_acwr(df_acwr):
+    """Gráfico de ACWR com zonas de risco coloridas."""
+    fig = make_subplots(rows=2, cols=1,
+                        subplot_titles=('📊 PlayerLoad por Sessão', '🎯 ACWR — Índice de Carga Aguda/Crônica'),
+                        vertical_spacing=0.15, shared_xaxes=True)
+    cores = ['#2196F3','#4CAF50','#FF9800','#F44336','#9C27B0',
+             '#00BCD4','#FFEB3B','#E91E63','#FF5722','#607D8B']
+    atletas = df_acwr['Atleta'].unique()
+
+    for i, atl in enumerate(atletas):
+        df_a = df_acwr[df_acwr['Atleta'] == atl].copy()
+        c    = cores[i % len(cores)]
+        fig.add_trace(go.Bar(
+            x=df_a['Data'], y=df_a['PlayerLoad'],
+            name=atl, marker_color=c, opacity=0.8,
+            hovertemplate='%{x|%d/%m/%y}<br>PL: %{y:.0f}<extra>' + atl + '</extra>'
+        ), row=1, col=1)
+        df_acwr_v = df_a.dropna(subset=['ACWR'])
+        if not df_acwr_v.empty:
+            fig.add_trace(go.Scatter(
+                x=df_acwr_v['Data'], y=df_acwr_v['ACWR'],
+                mode='lines+markers', name=atl + ' ACWR',
+                line=dict(color=c, width=2), marker=dict(size=6),
+                showlegend=False,
+                hovertemplate='%{x|%d/%m/%y}<br>ACWR: %{y:.2f}<extra>' + atl + '</extra>'
+            ), row=2, col=1)
+
+    # Zonas de risco no gráfico ACWR
+    acwr_vals = df_acwr.dropna(subset=['ACWR'])['ACWR']
+    y_max = max(float(acwr_vals.max()) * 1.2, 2.0) if len(acwr_vals) else 2.0
+    for y0, y1, cor, label in [
+        (0.0, 0.8,  'rgba(33,150,243,.10)',  'Subcarregado'),
+        (0.8, 1.3,  'rgba(76,175,80,.15)',   '✅ Zona Ótima'),
+        (1.3, 1.5,  'rgba(255,152,0,.15)',   '⚠️ Atenção'),
+        (1.5, y_max,'rgba(244,67,54,.15)',   '🔴 Risco'),
+    ]:
+        fig.add_hrect(y0=y0, y1=min(y1, y_max), fillcolor=cor,
+                      line_width=0, row=2, col=1, annotation_text=label,
+                      annotation_position='right',
+                      annotation_font=dict(size=9, color='white'))
+    fig.add_hline(y=1.5, line_dash='dash', line_color='#F44336', opacity=0.8, row=2, col=1)
+    fig.add_hline(y=1.3, line_dash='dash', line_color='#FF9800', opacity=0.7, row=2, col=1)
+    fig.add_hline(y=0.8, line_dash='dash', line_color='#2196F3', opacity=0.6, row=2, col=1)
+
+    fig.update_layout(
+        height=650, paper_bgcolor='#0a0a1e', plot_bgcolor='#1a1a2e',
+        font=dict(color='white'),
+        legend=dict(bgcolor='rgba(0,0,0,.5)', font=dict(color='white')),
+        barmode='group',
+        xaxis2=dict(title='Data', gridcolor='#333'),
+        yaxis=dict(title='PlayerLoad', gridcolor='#333'),
+        yaxis2=dict(title='ACWR', gridcolor='#333'),
+    )
+    return fig
+
+
 def main():
-    st.title("🏉 Rugby Eventos - Catapult Sports")
-    st.markdown("### Análise de Performance com Filtros por Equipe, Posição e Período")
-    
+    st.title(t("app_title"))
+    st.markdown(f"### {t('app_subtitle')}")
+
     # Inicializar session state
     if 'df_athletes' not in st.session_state:
         st.session_state.df_athletes = pd.DataFrame()
@@ -2206,7 +3005,10 @@ def main():
         st.header("🌍 Servidor")
         server = st.selectbox("Selecione:", list(SERVERS.keys()))
         base_url = SERVERS[server]
-        
+
+        st.header(t("language_header"))
+        st.selectbox(t("language_select"), list(LANGUAGES.keys()), key="lang_selector")
+
         st.header("🔐 Token")
         token = st.text_area("Token JWT:", height=80)
         
@@ -2383,25 +3185,25 @@ def main():
                     atletas_sel = st.multiselect("Selecione os atletas para análise:", st.session_state.atletas_filtrados['nome'].tolist())
                     st.session_state.atletas_sel = atletas_sel
 
-        # ── Seletor de Eventos Rugby ───────────────────────────────────
+        # ── Seletor de Eventos Futebol ────────────────────────────────
         if not st.session_state.get('df_activities', pd.DataFrame()).empty and token:
             st.markdown("---")
-            st.header("🏉 Eventos Rugby")
-            _todos_ev = list(RUGBY_EVENTS_CONFIG.keys())
+            st.header("⚽ Eventos Futebol")
+            _todos_ev = list(FUTEBOL_EVENTS_CONFIG.keys())
             _sel_all  = st.checkbox("Selecionar todos", value=True, key="eventos_sel_all")
             if _sel_all:
-                eventos_rugby_sel = _todos_ev
+                eventos_futebol_sel = _todos_ev
             else:
-                eventos_rugby_sel = st.multiselect(
+                eventos_futebol_sel = st.multiselect(
                     "Tipos de evento:",
                     options=_todos_ev,
                     default=_todos_ev[:4],
-                    format_func=lambda k: RUGBY_EVENTS_CONFIG[k]['label'],
-                    key="eventos_rugby_ms"
+                    format_func=lambda k: FUTEBOL_EVENTS_CONFIG[k]['label'],
+                    key="eventos_futebol_ms"
                 )
-            st.session_state.eventos_rugby_sel = eventos_rugby_sel
-            if eventos_rugby_sel:
-                st.caption(f"{len(eventos_rugby_sel)} tipo(s) selecionado(s). "
+            st.session_state.eventos_futebol_sel = eventos_futebol_sel
+            if eventos_futebol_sel:
+                st.caption(f"{len(eventos_futebol_sel)} tipo(s) selecionado(s). "
                            "Os eventos serão carregados junto com os dados.")
     
     # Área principal
@@ -2422,11 +3224,11 @@ def main():
         dados_efforts_vel_por_periodo = {}
         dados_efforts_acc_por_periodo = {}
         dados_posicao_por_periodo = {}
-        dados_eventos_por_periodo = {}   # ← eventos rugby
+        dados_eventos_por_periodo = {}   # ← eventos futebol
 
-        # Tipos de eventos rugby selecionados na sidebar
-        eventos_rugby_sel = st.session_state.get('eventos_rugby_sel', list(RUGBY_EVENTS_CONFIG.keys()))
-        eventos_rugby_str = ','.join(eventos_rugby_sel) if eventos_rugby_sel else ''
+        # Tipos de eventos futebol selecionados na sidebar
+        eventos_futebol_sel = st.session_state.get('eventos_futebol_sel', list(FUTEBOL_EVENTS_CONFIG.keys()))
+        eventos_futebol_str = ','.join(eventos_futebol_sel) if eventos_futebol_sel else ''
 
         for periodo_nome in periodos_selecionados:
             period_id = period_ids.get(periodo_nome)
@@ -2436,7 +3238,7 @@ def main():
             dados_efforts_vel = {}
             dados_efforts_acc = {}
             dados_posicao = {}
-            dados_eventos = {}   # ← eventos rugby deste período
+            dados_eventos = {}   # ← eventos futebol deste período
             
             progresso = st.progress(0)
             status_text = st.empty()
@@ -2455,11 +3257,11 @@ def main():
                 if period_id:
                     response         = api.get_period_sensor_data(period_id, athlete_id)
                     efforts_response = api.get_period_efforts(period_id, athlete_id, "velocity,acceleration")
-                    events_response  = api.get_period_events(period_id, athlete_id, eventos_rugby_str) if eventos_rugby_str else None
+                    events_response  = api.get_period_events(period_id, athlete_id, eventos_futebol_str) if eventos_futebol_str else None
                 else:
                     response         = api.get_sensor_data(activity_id, athlete_id)
                     efforts_response = api.get_activity_efforts(activity_id, athlete_id, "velocity,acceleration")
-                    events_response  = api.get_activity_events(activity_id, athlete_id, eventos_rugby_str) if eventos_rugby_str else None
+                    events_response  = api.get_activity_events(activity_id, athlete_id, eventos_futebol_str) if eventos_futebol_str else None
                 
                 sensor_points = extrair_dados_sensor(response)
                 
@@ -2486,7 +3288,8 @@ def main():
                     pontos_pos = [
                         (float(p['x']), float(p['y']),
                          (p.get('v') or 0) * 3.6,
-                         float(p.get('a') or 0))
+                         float(p.get('a') or 0),
+                         float(p.get('ts') or 0))
                         for p in sensor_points
                         if p.get('x') is not None and p.get('y') is not None
                         and -50 < float(p['x']) < 250
@@ -2497,9 +3300,10 @@ def main():
                         ys          = [pt[1] for pt in pontos_pos]
                         velocidades = [pt[2] for pt in pontos_pos]
                         aceleracoes = [pt[3] for pt in pontos_pos]
+                        ts_pos      = [pt[4] for pt in pontos_pos]
                         dados_posicao[atleta_nome] = {
                             'vel': velocidades, 'xs': xs, 'ys': ys,
-                            'acc': aceleracoes,
+                            'acc': aceleracoes, 'ts_pos': ts_pos,
                             'posicao': athlete_posicao, 'equipe': athlete_equipe,
                             'n_pontos': len(pontos_pos)
                         }
@@ -2531,9 +3335,9 @@ def main():
                         dados_posicao[atleta_nome]['vels_gps'] = [pt[2] for pt in gps_sub]
                         dados_posicao[atleta_nome]['ts_gps']  = [pt[3] for pt in gps_sub]
 
-                    # ── Processar eventos rugby ────────────────────────────────
+                    # ── Processar eventos futebol ─────────────────────────────
                     if events_response:
-                        ev_raw = extrair_eventos_rugby(events_response)
+                        ev_raw = extrair_eventos_futebol(events_response)
                         if ev_raw:
                             ts_g   = dados_posicao.get(atleta_nome, {}).get('ts_gps', [])
                             lats_g = dados_posicao.get(atleta_nome, {}).get('lats', [])
@@ -2544,9 +3348,9 @@ def main():
                                 # campo_config será enriquecido depois, no momento da visualização
                             )
                             n_ev = sum(len(v) for v in ev_raw.values())
-                            st.success(f"✅ {atleta_nome}: {len(sensor_points)} pontos · {n_ev} eventos rugby")
+                            st.success(f"✅ {atleta_nome}: {len(sensor_points)} pontos · {n_ev} eventos futebol")
                         else:
-                            st.success(f"✅ {atleta_nome}: {len(sensor_points)} pontos · 0 eventos rugby")
+                            st.success(f"✅ {atleta_nome}: {len(sensor_points)} pontos · 0 eventos futebol")
                     else:
                         st.success(f"✅ {atleta_nome}: {len(sensor_points)} pontos")
                 
@@ -2590,9 +3394,11 @@ def main():
             
             abas = st.tabs([
                 "📈 Gráficos Comparativos",
-                "🗺️ Campo de Rugby",
+                "🗺️ Campo de Futebol",
                 "⏱️ Esforços ao Longo do Tempo",
                 "📊 Janelas Temporais Móveis",
+                "💪 Carga Neuromuscular",
+                "📅 Microciclo ACWR",
             ])
             
             # ==================== ABA 1: GRÁFICOS COMPARATIVOS ====================
@@ -2684,7 +3490,7 @@ def main():
             
             # ==================== ABA 2: CAMPO DE RUGBY ====================
             with abas[1]:
-                st.subheader("🗺️ Campo de Rugby — Análise de Movimentação")
+                st.subheader("🗺️ Campo de Futebol — Análise de Movimentação")
                 st.caption(REFERENCIAS["campo"])
 
                 if dados_posicao_por_periodo:
@@ -2718,14 +3524,14 @@ def main():
                         if not campo_aplicado:
                             st.markdown("### 1️⃣ Posicionamento no Campo Físico")
                             st.markdown(
-                                "Ajuste o campo de rugby sobre a imagem de satélite e clique "
+                                "Ajuste o campo de futebol sobre a imagem de satélite e clique "
                                 "**✅ Aplicar Campo** no painel inferior do mapa."
                             )
 
                             if lats_gps and lons_gps:
                                 st.info(
                                     "📌 **Edite Lat/Lon** (ou use ↑↓) para mover o ⊙ amarelo · "
-                                    "🏉 **Mostrar Campo** para ativar o overlay · "
+                                    "⚽ **Mostrar Campo** para ativar o overlay · "
                                     "Sliders ajustam rotação e dimensões **em tempo real** · "
                                     "**✅ Aplicar Campo** quando estiver satisfeito"
                                 )
@@ -2955,7 +3761,7 @@ def main():
                                         with oa:
                                             ov_setas   = st.checkbox("🏹 Setas de direção",    key="ov_setas")
                                             ov_hull    = st.checkbox("📐 Área de atuação",     key="ov_hull")
-                                            ov_eventos = st.checkbox("🏉 Eventos Rugby",        key="ov_eventos")
+                                            ov_eventos = st.checkbox("⚽ Eventos Futebol",      key="ov_eventos")
                                         with ob:
                                             ov_tercos  = st.checkbox("📊 Terços do campo",     key="ov_tercos")
                                             ov_grade   = st.checkbox("🔲 Grade de quadrantes", key="ov_grade")
@@ -3005,14 +3811,14 @@ def main():
                                                     "Tipos de evento no campo:",
                                                     options=_ev_tipos_disp,
                                                     default=_ev_tipos_disp,
-                                                    format_func=lambda k: RUGBY_EVENTS_CONFIG[k]['label'],
+                                                    format_func=lambda k: FUTEBOL_EVENTS_CONFIG[k]['label'],
                                                     key="ev_campo_tipos"
                                                 )
                                                 _dados_ev_campo = _ev_rich
                                             else:
-                                                st.info("Nenhum evento rugby carregado para este atleta/período.")
+                                                st.info("Nenhum evento de futebol carregado para este atleta/período.")
                                         else:
-                                            st.info("Nenhum evento rugby carregado. Recarregue os dados com eventos ativados na sidebar.")
+                                            st.info("Nenhum evento de futebol carregado. Recarregue os dados com eventos ativados na sidebar.")
 
                                     n_cols_g, n_rows_g, zona_sel = 4, 3, None
                                     if ov_grade:
@@ -3033,7 +3839,7 @@ def main():
                                                 zona_sel = None
 
                                     # ── Construir figura ──────────────────────────────
-                                    fig_campo = desenhar_campo_rugby_bonito(
+                                    fig_campo = desenhar_campo_futebol_bonito(
                                         title=f"📍 {atleta_mapa} — {periodo_mapa}")
 
                                     if modo_viz == "🗺️ Trajetória":
@@ -3064,8 +3870,8 @@ def main():
                                     if zona_sel and ov_grade:
                                         r_idx = ord(zona_sel[0]) - 65
                                         c_idx = int(zona_sel[1:]) - 1
-                                        cw_g  = 100.0 / n_cols_g
-                                        rh_g  = 70.0  / n_rows_g
+                                        cw_g  = 105.0 / n_cols_g
+                                        rh_g  = 68.0  / n_rows_g
                                         st_z  = stats_quadrante(
                                             xn, yn, vel_raw, acc_raw,
                                             c_idx*cw_g, (c_idx+1)*cw_g,
@@ -3131,7 +3937,7 @@ def main():
                                             else:
                                                 x1c = x2c = []
                                             if x1c and x2c:
-                                                fig_cmp = desenhar_campo_rugby_bonito(
+                                                fig_cmp = desenhar_campo_futebol_bonito(
                                                     title=f"Comparação: {per1} (azul) vs {per2} (rosa)")
                                                 fig_cmp.add_trace(go.Scatter(
                                                     x=x1c, y=y1c, mode='markers', name=per1,
@@ -3157,9 +3963,106 @@ def main():
 
                     else:
                         st.info("Selecione um período e atleta")
+
+                    # ══════════════════════════════════════════════════════
+                    # FEATURE 1 — HEATMAP TEMPORAL SEGMENTADO
+                    # ══════════════════════════════════════════════════════
+                    st.markdown("---")
+                    st.markdown("### 🕐 Heatmap por Fase da Partida")
+                    st.caption("Visualize onde o atleta atuou em cada bloco de tempo da sessão.")
+
+                    _per_ht = list(dados_posicao_por_periodo.keys())
+                    if _per_ht:
+                        _col_ht1, _col_ht2, _col_ht3 = st.columns([2, 2, 2])
+                        with _col_ht1:
+                            _per_ht_sel = st.selectbox("Período:", _per_ht, key="ht_periodo")
+                        with _col_ht2:
+                            _ats_ht = list(dados_posicao_por_periodo.get(_per_ht_sel, {}).keys())
+                            _atl_ht = st.selectbox("Atleta:", _ats_ht, key="ht_atleta") if _ats_ht else None
+                        with _col_ht3:
+                            _bloco_min_ht = st.selectbox("Duração do bloco:", [5, 10, 15, 20, 30],
+                                                          index=2, key="ht_bloco")
+
+                        if _atl_ht:
+                            _dp_ht = dados_posicao_por_periodo[_per_ht_sel].get(_atl_ht, {})
+                            _xs_ht  = _dp_ht.get('xs', [])
+                            _ys_ht  = _dp_ht.get('ys', [])
+                            _ts_ht  = _dp_ht.get('ts_pos', [])
+
+                            if _xs_ht and _ts_ht:
+                                _ts_rel_ht = np.array(_ts_ht, dtype=float)
+                                _ts_rel_ht -= _ts_rel_ht.min()
+                                _dur_min    = int(_ts_rel_ht.max() / 60)
+                                _n_blocos   = max(1, -(-_dur_min // _bloco_min_ht))  # ceil div
+
+                                _col_sl, _col_bt = st.columns([4, 1])
+                                with _col_sl:
+                                    _bloco_idx = st.slider(
+                                        "Selecione o bloco:", 0, _n_blocos - 1, 0,
+                                        format=f"Bloco %d de {_n_blocos}",
+                                        key="ht_bloco_idx"
+                                    )
+                                with _col_bt:
+                                    st.metric("Total de blocos", _n_blocos)
+
+                                _fig_ht, _n_pts_ht, _lbl_ht = gerar_heatmap_segmentado(
+                                    _xs_ht, _ys_ht, _ts_ht,
+                                    _bloco_min_ht, _bloco_idx,
+                                    field_length=105, field_width=68
+                                )
+                                if _fig_ht:
+                                    st.caption(f"📍 {_n_pts_ht} pontos GPS neste bloco ({_lbl_ht})")
+                                    st.plotly_chart(_fig_ht, use_container_width=True)
+                                else:
+                                    st.info(f"Nenhum ponto de campo disponível no bloco {_lbl_ht}. "
+                                            "Tente outro bloco ou reduza a duração.")
+                            else:
+                                st.info("Dados de posição com timestamp não disponíveis para este atleta.")
+
+                    # ══════════════════════════════════════════════════════
+                    # FEATURE 2 — DIAGRAMA DE VORONOI
+                    # ══════════════════════════════════════════════════════
+                    st.markdown("---")
+                    st.markdown("### 🔷 Diagrama de Voronoi — Raio de Ação Coletivo")
+                    st.caption(
+                        "Mostra a zona de domínio espacial de cada atleta com base na sua posição mediana. "
+                        "Útil para identificar cobertura coletiva e gaps táticos."
+                    )
+
+                    _per_vor = list(dados_posicao_por_periodo.keys())
+                    if _per_vor:
+                        _per_vor_sel = st.selectbox("Período para Voronoi:", _per_vor, key="vor_periodo")
+                        _dp_vor_all  = dados_posicao_por_periodo.get(_per_vor_sel, {})
+                        _ats_vor_all = list(_dp_vor_all.keys())
+
+                        if len(_ats_vor_all) >= 2:
+                            _ats_vor_sel = st.multiselect(
+                                "Atletas a incluir no diagrama:",
+                                _ats_vor_all, default=_ats_vor_all,
+                                key="vor_atletas"
+                            )
+                            if len(_ats_vor_sel) >= 2:
+                                _pos_vor = {a: _dp_vor_all[a] for a in _ats_vor_sel if a in _dp_vor_all}
+                                _fig_vor = calcular_voronoi_campo(_pos_vor)
+                                if _fig_vor:
+                                    st.plotly_chart(_fig_vor, use_container_width=True)
+                                    with st.expander("ℹ️ Como interpretar o Voronoi"):
+                                        st.markdown("""
+                                        - Cada **cor** representa a zona de domínio espacial de um atleta.
+                                        - O **losango** indica a posição mediana do atleta na sessão.
+                                        - Zonas **grandes** indicam que o jogador cobriu mais espaço sem apoio próximo.
+                                        - Zonas **sobrepostas** (pequenas) sugerem concentração de jogadores em uma área.
+                                        """)
+                                else:
+                                    st.info("Dados de posição insuficientes para gerar o diagrama.")
+                            else:
+                                st.info("Selecione pelo menos 2 atletas para gerar o Voronoi.")
+                        else:
+                            st.info("É necessário ter pelo menos 2 atletas com dados de posição no período selecionado.")
+
                 else:
                     st.info("Dados de posição não disponíveis. Verifique se o sensor GPS estava ativo durante a sessão.")
-            
+
             # ==================== ABA 3: ESFORÇOS AO LONGO DO TEMPO ====================
             with abas[2]:
                 st.subheader("⏱️ Esforços ao Longo do Tempo")
@@ -3222,9 +4125,9 @@ def main():
                             csv_eff = efforts_df.to_csv(index=False)
                             st.download_button("📥 Exportar Esforços", csv_eff, f"esforcos_{atleta_escolhido}.csv")
 
-                        # ── Timeline técnico-físico com eventos rugby ──────────
+                        # ── Timeline técnico-físico com eventos futebol ───────
                         st.markdown("---")
-                        st.markdown("### 🏉 Timeline Técnico-Físico")
+                        st.markdown("### ⚽ Timeline Técnico-Físico")
                         _ev_atleta = dados_eventos_por_periodo.get(
                             periodo_escolhido, {}).get(atleta_escolhido, {})
 
@@ -3234,7 +4137,7 @@ def main():
                                 "Eventos a marcar na timeline:",
                                 options=_todos_tipos,
                                 default=_todos_tipos,
-                                format_func=lambda k: RUGBY_EVENTS_CONFIG[k]['label'],
+                                format_func=lambda k: FUTEBOL_EVENTS_CONFIG[k]['label'],
                                 key="tipos_timeline"
                             )
                             if _tipos_timeline:
@@ -3272,10 +4175,53 @@ def main():
                                 else:
                                     st.info("Nenhum dado de fadiga calculado para os eventos selecionados.")
                         else:
-                            st.info("Nenhum evento rugby carregado para este atleta. "
+                            st.info("Nenhum evento de futebol carregado para este atleta. "
                                     "Ative os eventos na sidebar e recarregue os dados.")
                 else:
                     st.info("Dados de sensor não disponíveis")
+
+                # ── FEATURE 8: PDF Export ────────────────────────────────────
+                st.markdown("---")
+                st.markdown("### 📄 Exportar Relatório PDF")
+                st.caption(
+                    "Gera um relatório A3 com heatmap, perfil de velocidade, aceleração e métricas biométricas."
+                )
+                if dados_sensor_por_atleta_por_periodo:
+                    _pdf_per_opts = list(dados_sensor_por_atleta_por_periodo.keys())
+                    _col_pdf1, _col_pdf2 = st.columns(2)
+                    with _col_pdf1:
+                        _pdf_per = st.selectbox("Período:", _pdf_per_opts, key="pdf_periodo")
+                    with _col_pdf2:
+                        _pdf_ats = list(dados_sensor_por_atleta_por_periodo.get(_pdf_per, {}).keys())
+                        _pdf_atl = st.selectbox("Atleta:", _pdf_ats, key="pdf_atleta") if _pdf_ats else None
+
+                    if _pdf_atl and st.button("📄 Gerar Relatório PDF", type="primary", key="btn_pdf"):
+                        with st.spinner("Gerando relatório PDF..."):
+                            _pdf_sp = dados_sensor_por_atleta_por_periodo[_pdf_per].get(_pdf_atl, [])
+                            _pdf_dp = dados_posicao_por_periodo.get(_pdf_per, {}).get(_pdf_atl, {})
+                            _pdf_met = {}
+                            for _r in resultados_por_periodo.get(_pdf_per, []):
+                                if _r.get('Atleta') == _pdf_atl:
+                                    _pdf_met = _r
+                                    break
+                            try:
+                                _pdf_bytes = gerar_pdf_relatorio(
+                                    atleta_nome=_pdf_atl,
+                                    periodo_nome=_pdf_per,
+                                    metricas=_pdf_met,
+                                    sensor_points=_pdf_sp,
+                                    dados_pos=_pdf_dp,
+                                )
+                                st.download_button(
+                                    label="⬇️ Baixar PDF",
+                                    data=_pdf_bytes,
+                                    file_name=f"relatorio_{_pdf_atl.replace(' ','_')}_{_pdf_per}.pdf",
+                                    mime="application/pdf",
+                                    key="dl_pdf"
+                                )
+                                st.success("✅ PDF gerado com sucesso! Clique em **⬇️ Baixar PDF** acima.")
+                            except Exception as _e:
+                                st.error(f"Erro ao gerar PDF: {_e}")
 
             # ==================== ABA 4: JANELAS TEMPORAIS MÓVEIS ====================
             with abas[3]:
@@ -3345,8 +4291,207 @@ def main():
                             st.info("Dados de sensor não disponíveis")
                 else:
                     st.info("Selecione um atleta para análise")
-            
-        
+
+            # ==================== ABA 5: CARGA NEUROMUSCULAR ====================
+            with abas[4]:
+                st.subheader("💪 Análise de Carga Neuromuscular")
+                st.markdown("""
+                Esforços de **aceleração** e **desaceleração** intensa são indicadores críticos de
+                carga neuromuscular/excêntrica — desacelerações superiores a 2 m/s² geram impacto
+                muscular frequentemente maior que sprints. Esta aba quantifica esses esforços por
+                minuto e acumula a carga ao longo da sessão.
+                """)
+
+                if dados_sensor_por_atleta_por_periodo:
+                    _nm_per = st.selectbox("Período:", list(dados_sensor_por_atleta_por_periodo.keys()),
+                                           key="nm_periodo")
+                    if dados_sensor_por_atleta_por_periodo[_nm_per]:
+                        _nm_ats = list(dados_sensor_por_atleta_por_periodo[_nm_per].keys())
+                        _nm_atl = st.selectbox("Atleta:", _nm_ats, key="nm_atleta")
+                        _nm_lim = st.slider("Limiar de intensidade (m/s²):", 1.0, 4.0, 2.0, 0.5,
+                                            key="nm_limiar",
+                                            help="Acelerações/desacelerações acima deste valor são classificadas como intensas.")
+
+                        _nm_sp = dados_sensor_por_atleta_por_periodo[_nm_per][_nm_atl]
+                        _nm_dados = calcular_carga_neuromuscular(_nm_sp, limiar=_nm_lim)
+
+                        if _nm_dados:
+                            # Métricas resumo
+                            c1, c2, c3, c4 = st.columns(4)
+                            c1.metric(f"🟢 Acels. ≥{_nm_lim} m/s²", _nm_dados['total_hi_acc'])
+                            c2.metric(f"🔴 Desacels. ≥{_nm_lim} m/s²", _nm_dados['total_hi_dec'])
+                            c3.metric("⚡ Total Acels. (todas)", _nm_dados['total_hi_acc'] + _nm_dados['total_med_acc'])
+                            c4.metric("⚡ Total Desacels. (todas)", _nm_dados['total_hi_dec'] + _nm_dados['total_med_dec'])
+
+                            _nm_razao = ((_nm_dados['total_hi_dec'] / _nm_dados['total_hi_acc'])
+                                         if _nm_dados['total_hi_acc'] > 0 else 0)
+                            if _nm_razao > 1.4:
+                                st.warning(f"⚠️ Razão Dec/Acc = **{_nm_razao:.2f}** — alto componente excêntrico. "
+                                           "Monitorar recuperação muscular dos membros inferiores.")
+                            elif _nm_razao > 0.9:
+                                st.info(f"ℹ️ Razão Dec/Acc = **{_nm_razao:.2f}** — carga excêntrica equilibrada.")
+                            else:
+                                st.success(f"✅ Razão Dec/Acc = **{_nm_razao:.2f}** — perfil predominantemente acelerativo.")
+
+                            _nm_fig = plotar_carga_neuromuscular(_nm_dados, _nm_atl)
+                            st.plotly_chart(_nm_fig, use_container_width=True)
+
+                            # Exportar
+                            _nm_df = pd.DataFrame({
+                                'Tempo (min)': _nm_dados['t_mid'],
+                                'Acels. Intensas/min': _nm_dados['hi_acc_min'],
+                                'Acels. Médias/min': _nm_dados['med_acc_min'],
+                                'Desacels. Intensas/min': _nm_dados['hi_dec_min'],
+                                'Desacels. Médias/min': _nm_dados['med_dec_min'],
+                            })
+                            st.download_button(
+                                "📥 Exportar Carga Neuromuscular (CSV)",
+                                _nm_df.to_csv(index=False),
+                                f"carga_neuro_{_nm_atl.replace(' ','_')}.csv"
+                            )
+                        else:
+                            st.info("Dados de aceleração insuficientes para este atleta/período.")
+                else:
+                    st.info("Carregue os dados de um atleta para analisar a carga neuromuscular.")
+
+            # ==================== ABA 6: MICROCICLO ACWR ====================
+            with abas[5]:
+                st.subheader("📅 Microciclo — Acute:Chronic Workload Ratio (ACWR)")
+                st.markdown("""
+                O **ACWR** mede a relação entre a carga recente (últimos 7 dias) e a carga habitual (média
+                das últimas 4 semanas). É um dos indicadores mais usados na prevenção de lesões em futebol.
+
+                | Zona | ACWR | Interpretação |
+                |------|------|---------------|
+                | 🔵 Subcarregado | < 0.8 | Atleta abaixo da carga habitual |
+                | ✅ Ótimo | 0.8 – 1.3 | Zona segura e de alto rendimento |
+                | ⚠️ Atenção | 1.3 – 1.5 | Risco moderado de lesão |
+                | 🔴 Risco | > 1.5 | Alto risco — revisar planejamento |
+                """)
+                st.markdown("---")
+
+                if not st.session_state.get('df_activities', pd.DataFrame()).empty and 'api' in st.session_state:
+                    _acwr_atividades = st.session_state.df_activities
+
+                    st.markdown("#### 1️⃣ Selecione as atividades do microciclo")
+                    st.caption("Selecione múltiplas atividades de diferentes datas para calcular o ACWR.")
+
+                    _acwr_ats_sel = st.multiselect(
+                        "Atividades:", _acwr_atividades['nome'].tolist(),
+                        key="acwr_ativs"
+                    )
+
+                    if _acwr_ats_sel and 'atletas_filtrados' in st.session_state:
+                        _acwr_atl_opts = st.session_state.atletas_filtrados['nome'].tolist()
+                        _acwr_atls_sel = st.multiselect(
+                            "Atletas para o microciclo:", _acwr_atl_opts,
+                            default=_acwr_atl_opts[:min(3, len(_acwr_atl_opts))],
+                            key="acwr_atletas"
+                        )
+
+                        if _acwr_atls_sel and st.button("📊 Calcular ACWR", type="primary", key="btn_acwr"):
+                            _acwr_api = st.session_state.api
+                            _acwr_rows = []
+
+                            _acwr_prog = st.progress(0)
+                            _acwr_status = st.empty()
+                            _n_total = len(_acwr_ats_sel) * len(_acwr_atls_sel)
+                            _cnt = 0
+
+                            for _acwr_atv_nome in _acwr_ats_sel:
+                                _acwr_row_atv = _acwr_atividades[_acwr_atividades['nome'] == _acwr_atv_nome]
+                                if _acwr_row_atv.empty:
+                                    continue
+                                _acwr_atv_id = _acwr_row_atv['id'].values[0]
+                                _acwr_data_raw = _acwr_row_atv['data'].values[0]
+
+                                # Parse data
+                                try:
+                                    if isinstance(_acwr_data_raw, str):
+                                        _acwr_dt = datetime.fromisoformat(
+                                            _acwr_data_raw.replace('Z', '+00:00')
+                                        ).replace(tzinfo=None)
+                                    else:
+                                        _acwr_dt = pd.to_datetime(_acwr_data_raw).to_pydatetime()
+                                except Exception:
+                                    _acwr_dt = datetime.now()
+
+                                for _acwr_atl_nome in _acwr_atls_sel:
+                                    _cnt += 1
+                                    _acwr_status.text(f"Carregando {_acwr_atl_nome} — {_acwr_atv_nome}...")
+                                    _acwr_atl_row = st.session_state.atletas_filtrados[
+                                        st.session_state.atletas_filtrados['nome'] == _acwr_atl_nome
+                                    ]
+                                    if _acwr_atl_row.empty:
+                                        continue
+                                    _acwr_atl_id = _acwr_atl_row['id'].values[0]
+
+                                    try:
+                                        _resp = _acwr_api.get_sensor_data(_acwr_atv_id, _acwr_atl_id)
+                                        _spts = extrair_dados_sensor(_resp)
+                                        if _spts:
+                                            _mets = calcular_metricas(_spts, _acwr_atl_nome)
+                                            _pl   = _mets.get('PlayerLoad', 0) if _mets else 0
+                                        else:
+                                            _pl = 0
+                                    except Exception:
+                                        _pl = 0
+
+                                    _acwr_rows.append({
+                                        'atleta': _acwr_atl_nome,
+                                        'data': _acwr_dt,
+                                        'atividade': _acwr_atv_nome,
+                                        'player_load': float(_pl),
+                                    })
+                                    _acwr_prog.progress(_cnt / _n_total)
+
+                            _acwr_prog.empty()
+                            _acwr_status.empty()
+
+                            if _acwr_rows:
+                                _df_cargas = pd.DataFrame(_acwr_rows)
+                                _df_acwr   = calcular_acwr_df(_df_cargas)
+                                st.session_state['df_acwr_calculado'] = _df_acwr
+                                st.success(f"✅ ACWR calculado para {len(_acwr_atls_sel)} atletas em {len(_acwr_ats_sel)} atividades.")
+                            else:
+                                st.warning("Nenhum dado de PlayerLoad obtido. Verifique se os atletas participaram das atividades selecionadas.")
+
+                        # Mostrar resultado se já calculado
+                        if 'df_acwr_calculado' in st.session_state:
+                            _df_acwr_show = st.session_state['df_acwr_calculado']
+                            _fig_acwr = plotar_acwr(_df_acwr_show)
+                            st.plotly_chart(_fig_acwr, use_container_width=True)
+
+                            # Alertas automáticos
+                            _df_risco = _df_acwr_show[_df_acwr_show['ACWR'] > 1.5].dropna(subset=['ACWR'])
+                            _df_atenc = _df_acwr_show[
+                                (_df_acwr_show['ACWR'] > 1.3) & (_df_acwr_show['ACWR'] <= 1.5)
+                            ].dropna(subset=['ACWR'])
+
+                            if not _df_risco.empty:
+                                st.error(f"🔴 **{len(_df_risco)} sessões com ACWR > 1.5** — risco elevado de lesão:")
+                                st.dataframe(_df_risco[['Atleta','Data','Atividade','PlayerLoad','ACWR']],
+                                             use_container_width=True)
+                            if not _df_atenc.empty:
+                                st.warning(f"⚠️ **{len(_df_atenc)} sessões com ACWR entre 1.3–1.5** — monitorar:")
+                                st.dataframe(_df_atenc[['Atleta','Data','Atividade','PlayerLoad','ACWR']],
+                                             use_container_width=True)
+
+                            # Tabela completa + exportar
+                            with st.expander("📋 Tabela completa ACWR"):
+                                st.dataframe(_df_acwr_show, use_container_width=True)
+                            st.download_button(
+                                "📥 Exportar ACWR (CSV)",
+                                _df_acwr_show.to_csv(index=False),
+                                "microciclo_acwr.csv"
+                            )
+                    elif not _acwr_ats_sel:
+                        st.info("Selecione as atividades do microciclo acima.")
+                    else:
+                        st.info("Carregue os dados de atletas antes de calcular o ACWR.")
+                else:
+                    st.info("Carregue os dados da API para usar esta funcionalidade.")
+
         else:
             st.warning("Nenhum dado encontrado")
     
