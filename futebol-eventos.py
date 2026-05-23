@@ -4237,6 +4237,22 @@ def main():
                                             _n_pts = len(xs_a)
                                             _step_a = max(1, _n_pts // 80)  # máx 80 frames
 
+                                            # ── Slider de velocidade ──────────────────
+                                            _vel_opcoes = {
+                                                "🐢 0.25×": 320,
+                                                "🚶 0.5×":  160,
+                                                "🏃 1× (real)": 80,
+                                                "⚡ 2×":    40,
+                                                "🚀 4×":    20,
+                                            }
+                                            _vel_sel = st.select_slider(
+                                                "⏩ Velocidade da animação",
+                                                options=list(_vel_opcoes.keys()),
+                                                value="🏃 1× (real)",
+                                                key="anim_speed_slider"
+                                            )
+                                            _frame_dur = _vel_opcoes[_vel_sel]
+
                                             # ── Campo base (estático) ─────────────────
                                             _fig_a = desenhar_campo_futebol_bonito(
                                                 title=(
@@ -4347,7 +4363,7 @@ def main():
                                                     'buttons': [
                                                         {
                                                             'args': [None, {
-                                                                'frame': {'duration': 80, 'redraw': True},
+                                                                'frame': {'duration': _frame_dur, 'redraw': True},
                                                                 'fromcurrent': True,
                                                                 'transition': {'duration': 0},
                                                             }],
