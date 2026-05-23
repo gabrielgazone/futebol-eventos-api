@@ -19,7 +19,8 @@
       "Bash(venv\\\\Scripts\\\\python.exe -m py_compile futebol-eventos.py)",
       "Bash(git push *)",
       "Bash(python -c \"import ast; ast.parse\\(open\\('futebol-eventos.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('futebol-eventos.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('futebol-eventos.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -m py_compile futebol-eventos.py)"
     ]
   }
 }

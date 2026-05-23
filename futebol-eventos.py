@@ -4148,6 +4148,10 @@ def main():
                             )
 
                             efforts_df_full = pd.DataFrame()
+                            _esf_fonte = "sensor"  # rastreia a origem dos dados
+
+                            # ── Tentativa 1: detecção baseada em sensor (x/y) ──────
+                            # Consistente com a Tabela Descritiva
                             if _xn_e:
                                 if tipo_esf == "⚡ Velocidade":
                                     efforts_df_full = calcular_efforts_velocidade_sensor(
@@ -4156,7 +4160,41 @@ def main():
                                     efforts_df_full = calcular_efforts_aceleracao_sensor(
                                         _xn_e, _yn_e, _acc_e, _vel_e, _ts_e, min_dur_s=_min_dur_acc_s)
 
+                            # ── Fallback: esforços pré-calculados pela API Catapult ─
+                            # Usado quando não há coordenadas x/y no sensor (GPS-only)
+                            if efforts_df_full.empty:
+                                _esf_fonte = "api"
+                                _raw_api: list = []
+                                for _pm in periodos_mapa_sel:
+                                    if tipo_esf == "⚡ Velocidade":
+                                        _raw_api += dados_efforts_vel_por_periodo.get(
+                                            _pm, {}).get(atleta_mapa, [])
+                                    else:
+                                        _raw_api += dados_efforts_acc_por_periodo.get(
+                                            _pm, {}).get(atleta_mapa, [])
+                                if _raw_api:
+                                    if tipo_esf == "⚡ Velocidade":
+                                        efforts_df_full = processar_efforts_velocidade(_raw_api)
+                                    else:
+                                        efforts_df_full = processar_efforts_aceleracao(_raw_api)
+                                    # Reordenar e renumerar após concat de vários períodos
+                                    if not efforts_df_full.empty:
+                                        if '_start_ts' in efforts_df_full.columns and \
+                                                efforts_df_full['_start_ts'].sum() > 0:
+                                            efforts_df_full = efforts_df_full.sort_values(
+                                                '_start_ts').reset_index(drop=True)
+                                        efforts_df_full['Esforço'] = range(
+                                            1, len(efforts_df_full) + 1)
+
                             if not efforts_df_full.empty:
+                                # Aviso de fonte
+                                if _esf_fonte == "api":
+                                    st.caption(
+                                        "ℹ️ Esforços fornecidos pela API Catapult "
+                                        "(sensor sem coordenadas x/y). "
+                                        "Valores podem diferir levemente da Tabela Descritiva."
+                                    )
+
                                 # Filtro de bandas
                                 if 'Banda' in efforts_df_full.columns:
                                     bandas_disp = sorted(efforts_df_full['Banda'].dropna().unique())
@@ -4172,7 +4210,7 @@ def main():
                                 if efforts_df_full.empty:
                                     st.info("Nenhum esforço encontrado após aplicar os filtros.")
                                 else:
-                                    # Colunas visíveis (esconde _start_ts / _end_ts)
+                                    # Colunas visíveis (esconde _start_ts / _end_ts / _seg_*)
                                     cols_show = [c for c in efforts_df_full.columns
                                                  if not c.startswith('_')]
                                     efforts_df_show = efforts_df_full[cols_show]
@@ -5929,3 +5967,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
