@@ -3974,6 +3974,65 @@ def main():
                             _has_xy  = bool(xn and yn)
                             _has_gps = bool(lats_gps and lons_gps and cfg)
 
+                            # ── Computar coords do esforço ANTECIPADO ──────────────
+                            # (usado no highlight do fig_campo E na animação abaixo)
+                            xs_a, ys_a, vel_a, acc_a = [], [], [], []
+                            if (_anim_effort_row is not None
+                                    and _anim_start_ts > 0
+                                    and _anim_end_ts > 0
+                                    and xn):
+                                # Tentativa 1: matching por timestamp exato
+                                if ts_pos_campo and len(ts_pos_campo) == len(xn):
+                                    _ts_c = np.array(ts_pos_campo)
+                                    _m    = (_ts_c >= _anim_start_ts) & (_ts_c <= _anim_end_ts)
+                                    if _m.any():
+                                        xs_a  = np.array(xn)[_m].tolist()
+                                        ys_a  = np.array(yn)[_m].tolist()
+                                        vel_a = (np.array(vel_raw_campo)[_m].tolist()
+                                                 if len(vel_raw_campo) == len(xn) else [0]*int(_m.sum()))
+                                        acc_a = (np.array(acc_raw_campo)[_m].tolist()
+                                                 if len(acc_raw_campo) == len(xn) else [0]*int(_m.sum()))
+                                # Tentativa 2: fallback proporcional quando ts não bate
+                                if len(xs_a) < 2 and ts_pos_campo:
+                                    _ts_min = min(ts_pos_campo)
+                                    _ts_max = max(ts_pos_campo)
+                                    if _ts_max > _ts_min:
+                                        _sp = max(0.0, (_anim_start_ts - _ts_min) / (_ts_max - _ts_min))
+                                        _ep = min(1.0, (_anim_end_ts   - _ts_min) / (_ts_max - _ts_min))
+                                        _si = int(_sp * len(xn))
+                                        _ei = min(len(xn), int(_ep * len(xn)) + 1)
+                                        if _ei > _si + 1:
+                                            xs_a  = xn[_si:_ei]
+                                            ys_a  = yn[_si:_ei]
+                                            vel_a = (vel_raw_campo[_si:_ei]
+                                                     if len(vel_raw_campo) == len(xn) else [0]*(_ei-_si))
+                                            acc_a = (acc_raw_campo[_si:_ei]
+                                                     if len(acc_raw_campo) == len(xn) else [0]*(_ei-_si))
+                                # Tentativa 3: fallback final — use duração como fração do total
+                                if len(xs_a) < 2 and xn:
+                                    try:
+                                        _dur_s = float(_anim_effort_row.get('Duração (s)', 5))
+                                        _ini_s = 0.0
+                                        _ini_str = str(_anim_effort_row.get('Início', ''))
+                                        if ':' in _ini_str:
+                                            _parts = _ini_str.split(':')
+                                            _ini_s = int(_parts[0])*60 + float(_parts[1])
+                                        _total_s = len(xn) / 10.0  # sensor a 10 Hz
+                                        if _total_s > 0:
+                                            _sp = max(0.0, min(1.0, _ini_s / _total_s))
+                                            _ep = max(0.0, min(1.0, (_ini_s + _dur_s) / _total_s))
+                                            _si = int(_sp * len(xn))
+                                            _ei = min(len(xn), int(_ep * len(xn)) + 1)
+                                            if _ei > _si + 1:
+                                                xs_a  = xn[_si:_ei]
+                                                ys_a  = yn[_si:_ei]
+                                                vel_a = (vel_raw_campo[_si:_ei]
+                                                         if len(vel_raw_campo) == len(xn) else [0]*(_ei-_si))
+                                                acc_a = (acc_raw_campo[_si:_ei]
+                                                         if len(acc_raw_campo) == len(xn) else [0]*(_ei-_si))
+                                    except Exception:
+                                        pass
+
                             if _fonte_xy:
                                 st.caption("📡 Coordenadas x/y Catapult OpenField")
                             elif not _fonte_xy and _has_gps:
@@ -4109,6 +4168,49 @@ def main():
                                         adicionar_eventos_campo(
                                             fig_campo, _dados_ev_campo, _ev_tipos_sel)
 
+                                    # ── Highlight do esforço selecionado ─────────────
+                                    if xs_a and len(xs_a) >= 2:
+                                        # Halo laranja pulsante (linha mais grossa por baixo)
+                                        fig_campo.add_trace(go.Scatter(
+                                            x=xs_a, y=ys_a, mode='lines',
+                                            line=dict(color='rgba(255,152,0,0.35)', width=14),
+                                            name='_halo', showlegend=False, hoverinfo='skip'
+                                        ))
+                                        # Trajetória do esforço em laranja sólido
+                                        fig_campo.add_trace(go.Scatter(
+                                            x=xs_a, y=ys_a, mode='lines+markers',
+                                            line=dict(color='#FF9800', width=4),
+                                            marker=dict(size=3, color='#FF9800'),
+                                            name=f"Esforço #{int(_anim_effort_row['Esforço'])}",
+                                            showlegend=True, hoverinfo='skip'
+                                        ))
+                                        # Marcador de início (verde)
+                                        fig_campo.add_trace(go.Scatter(
+                                            x=[xs_a[0]], y=[ys_a[0]], mode='markers+text',
+                                            marker=dict(size=14, color='#4CAF50', symbol='circle',
+                                                        line=dict(color='white', width=2)),
+                                            text=['▶'], textposition='top center',
+                                            textfont=dict(color='white', size=10),
+                                            name='Início', showlegend=False, hoverinfo='skip'
+                                        ))
+                                        # Marcador de fim (vermelho)
+                                        fig_campo.add_trace(go.Scatter(
+                                            x=[xs_a[-1]], y=[ys_a[-1]], mode='markers+text',
+                                            marker=dict(size=14, color='#F44336', symbol='x',
+                                                        line=dict(color='white', width=2)),
+                                            text=['■'], textposition='top center',
+                                            textfont=dict(color='white', size=10),
+                                            name='Fim', showlegend=False, hoverinfo='skip'
+                                        ))
+                                        fig_campo.update_layout(
+                                            title=dict(
+                                                text=(
+                                                    f"📍 {atleta_mapa} — {_label_periodos} &nbsp;|&nbsp; "
+                                                    f"🟠 Esforço #{int(_anim_effort_row['Esforço'])} destacado"
+                                                )
+                                            )
+                                        )
+
                                     st.plotly_chart(fig_campo, use_container_width=True)
 
                                     # ══════════════════════════════════════════════
@@ -4123,17 +4225,7 @@ def main():
                                             f"Vel. Máx: **{_anim_effort_row['Vel. Máx (km/h)']} km/h**"
                                         )
 
-                                        # Encontra pontos de campo correspondentes ao esforço
-                                        _ts_arr_c = np.array(ts_pos_campo) if ts_pos_campo else np.array([])
-                                        if len(_ts_arr_c) > 0 and len(_ts_arr_c) == len(xn):
-                                            _eff_mask = (_ts_arr_c >= _anim_start_ts) & (_ts_arr_c <= _anim_end_ts)
-                                            xs_a  = np.array(xn)[_eff_mask].tolist()
-                                            ys_a  = np.array(yn)[_eff_mask].tolist()
-                                            vel_a = np.array(vel_raw)[_eff_mask].tolist() if len(vel_raw) == len(xn) else [0]*len(xs_a)
-                                            acc_a = np.array(acc_raw)[_eff_mask].tolist() if len(acc_raw) == len(xn) else [0]*len(xs_a)
-                                        else:
-                                            xs_a, ys_a, vel_a, acc_a = [], [], [], []
-
+                                        # xs_a / ys_a já foram calculados acima com fallbacks
                                         def _vc_anim(v):
                                             if v < 7:  return '#2196F3'
                                             if v < 14: return '#4CAF50'
