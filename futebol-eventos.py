@@ -439,7 +439,7 @@ class CatapultAPI:
     # PARTE 2 - FUNÇÕES DE EXTRAÇÃO, CONVERSÃO E CÁLCULO
 
 # ── Parâmetro global de duração mínima de esforço (segundos) ──────────────────
-# Catapult: 0.6 s | StatSports: 0.4 s | configurável pelo usuário na sidebar
+# Padrão 0.6 s (Catapult OpenField) — configurável pelo usuário na sidebar
 _DEFAULT_MIN_DUR_S = 0.6
 _SENSOR_HZ = 10  # frequência de amostragem Catapult (10 Hz)
 
@@ -3342,7 +3342,7 @@ def main():
                 help=(
                     "Tempo mínimo contínuo na zona de threshold para contar um evento.\n\n"
                     "🔵 Catapult OpenField: 0.6 s\n"
-                    "🟢 StatSports: 0.4 s\n"
+                    "🟡 Sistema alternativo: 0.4 s\n"
                     "Ajuste conforme o sistema de referência da sua análise."
                 )
             )
@@ -3570,7 +3570,7 @@ def main():
                 "⏱️ Esforços ao Longo do Tempo",
                 "📊 Janelas Temporais Móveis",
                 "💪 Carga Neuromuscular",
-                "📅 Microciclo ACWR",
+                "🏎️ Perfil Acc-Vel",
                 "📋 Tabela Descritiva",
                 "📊 Por Posição",
             ])
@@ -4606,143 +4606,388 @@ def main():
                 else:
                     st.info("Carregue os dados de um atleta para analisar a carga neuromuscular.")
 
-            # ==================== ABA 6: MICROCICLO ACWR ====================
+            # ==================== ABA 6: PERFIL ACELERAÇÃO-VELOCIDADE ====================
             with abas[5]:
-                st.subheader("📅 Microciclo — Acute:Chronic Workload Ratio (ACWR)")
-                st.markdown("""
-                O **ACWR** mede a relação entre a carga recente (últimos 7 dias) e a carga habitual (média
-                das últimas 4 semanas). É um dos indicadores mais usados na prevenção de lesões em futebol.
-
-                | Zona | ACWR | Interpretação |
-                |------|------|---------------|
-                | 🔵 Subcarregado | < 0.8 | Atleta abaixo da carga habitual |
-                | ✅ Ótimo | 0.8 – 1.3 | Zona segura e de alto rendimento |
-                | ⚠️ Atenção | 1.3 – 1.5 | Risco moderado de lesão |
-                | 🔴 Risco | > 1.5 | Alto risco — revisar planejamento |
-                """)
+                st.subheader("🏎️ Perfil Aceleração × Velocidade")
+                st.caption(
+                    "Baseado no modelo de Samozino & Morin (2016) — relação linear entre aceleração e velocidade "
+                    "para extrair o perfil mecânico individual de sprint."
+                )
                 st.markdown("---")
 
-                if not st.session_state.get('df_activities', pd.DataFrame()).empty and 'api' in st.session_state:
-                    _acwr_atividades = st.session_state.df_activities
+                from scipy import stats as _scipy_stats
 
-                    st.markdown("#### 1️⃣ Selecione as atividades do microciclo")
-                    st.caption("Selecione múltiplas atividades de diferentes datas para calcular o ACWR.")
-
-                    _acwr_ats_sel = st.multiselect(
-                        "Atividades:", _acwr_atividades['nome'].tolist(),
-                        key="acwr_ativs"
-                    )
-
-                    if _acwr_ats_sel and 'atletas_filtrados' in st.session_state:
-                        _acwr_atl_opts = st.session_state.atletas_filtrados['nome'].tolist()
-                        _acwr_atls_sel = st.multiselect(
-                            "Atletas para o microciclo:", _acwr_atl_opts,
-                            default=_acwr_atl_opts[:min(3, len(_acwr_atl_opts))],
-                            key="acwr_atletas"
+                _av_periodos = list(dados_sensor_por_atleta_por_periodo.keys())
+                if _av_periodos and resultados_por_periodo:
+                    _av_col1, _av_col2 = st.columns([2, 1])
+                    with _av_col1:
+                        _av_per = st.selectbox("Período:", _av_periodos, key="av_periodo")
+                    with _av_col2:
+                        _av_atletas_disp = list(dados_sensor_por_atleta_por_periodo.get(_av_per, {}).keys())
+                        _av_atls_sel = st.multiselect(
+                            "Atletas (até 6):", _av_atletas_disp,
+                            default=_av_atletas_disp[:min(3, len(_av_atletas_disp))],
+                            key="av_atletas_sel"
                         )
 
-                        if _acwr_atls_sel and st.button("📊 Calcular ACWR", type="primary", key="btn_acwr"):
-                            _acwr_api = st.session_state.api
-                            _acwr_rows = []
+                    if _av_atls_sel:
+                        # ── Paleta de cores por atleta ────────────────────────
+                        _AV_PALETTE = ['#2196F3','#4CAF50','#FF9800','#E91E63','#9C27B0','#00BCD4']
+                        _av_cores = {a: _AV_PALETTE[i % len(_AV_PALETTE)] for i, a in enumerate(_av_atls_sel)}
 
-                            _acwr_prog = st.progress(0)
-                            _acwr_status = st.empty()
-                            _n_total = len(_acwr_ats_sel) * len(_acwr_atls_sel)
-                            _cnt = 0
+                        # ── Extrai (v, a) de todos os atletas selecionados ────
+                        _av_dados = {}
+                        for _av_atl in _av_atls_sel:
+                            _spts = dados_sensor_por_atleta_por_periodo.get(_av_per, {}).get(_av_atl, [])
+                            if not _spts:
+                                continue
+                            _vels, _accs = [], []
+                            for _p in _spts:
+                                _v = _p.get('v')
+                                _a = _p.get('a')
+                                if _v is not None and _a is not None:
+                                    _vels.append(float(_v) * 3.6)
+                                    _accs.append(float(_a))
+                            if _vels:
+                                _av_dados[_av_atl] = {
+                                    'vel': np.array(_vels),
+                                    'acc': np.array(_accs),
+                                }
 
-                            for _acwr_atv_nome in _acwr_ats_sel:
-                                _acwr_row_atv = _acwr_atividades[_acwr_atividades['nome'] == _acwr_atv_nome]
-                                if _acwr_row_atv.empty:
-                                    continue
-                                _acwr_atv_id = _acwr_row_atv['id'].values[0]
-                                _acwr_data_raw = _acwr_row_atv['data'].values[0]
+                        if not _av_dados:
+                            st.warning("Dados de aceleração não disponíveis para os atletas selecionados.")
+                        else:
+                            # ════════════════════════════════════════════════
+                            # SEÇÃO 1 — SCATTER ACC × VEL (multi-atleta)
+                            # ════════════════════════════════════════════════
+                            st.markdown("### 📍 Scatter Aceleração × Velocidade")
+                            _fig_sc = go.Figure()
 
-                                # Parse data
-                                try:
-                                    if isinstance(_acwr_data_raw, str):
-                                        _acwr_dt = datetime.fromisoformat(
-                                            _acwr_data_raw.replace('Z', '+00:00')
-                                        ).replace(tzinfo=None)
-                                    else:
-                                        _acwr_dt = pd.to_datetime(_acwr_data_raw).to_pydatetime()
-                                except Exception:
-                                    _acwr_dt = datetime.now()
+                            for _av_atl, _d in _av_dados.items():
+                                # Sub-amostra para não sobrecarregar o gráfico
+                                _step = max(1, len(_d['vel']) // 3000)
+                                _v_s  = _d['vel'][::_step]
+                                _a_s  = _d['acc'][::_step]
+                                _fig_sc.add_trace(go.Scatter(
+                                    x=_v_s, y=_a_s, mode='markers',
+                                    marker=dict(color=_av_cores[_av_atl], size=3, opacity=0.45),
+                                    name=_av_atl,
+                                    hovertemplate=f'{_av_atl}<br>Vel: %{{x:.1f}} km/h<br>Acc: %{{y:.2f}} m/s²<extra></extra>',
+                                ))
 
-                                for _acwr_atl_nome in _acwr_atls_sel:
-                                    _cnt += 1
-                                    _acwr_status.text(f"Carregando {_acwr_atl_nome} — {_acwr_atv_nome}...")
-                                    _acwr_atl_row = st.session_state.atletas_filtrados[
-                                        st.session_state.atletas_filtrados['nome'] == _acwr_atl_nome
-                                    ]
-                                    if _acwr_atl_row.empty:
-                                        continue
-                                    _acwr_atl_id = _acwr_atl_row['id'].values[0]
+                            # Linhas de limiar
+                            for _lim, _cor, _txt in [(3.0,'#F44336','Acc >3 m/s²'),
+                                                      (2.0,'#FF9800','Acc >2 m/s²'),
+                                                      (-2.0,'#FF9800','Dcc <-2 m/s²'),
+                                                      (-3.0,'#F44336','Dcc <-3 m/s²')]:
+                                _fig_sc.add_hline(y=_lim, line=dict(color=_cor, dash='dash', width=1),
+                                                  annotation_text=_txt,
+                                                  annotation_font=dict(color=_cor, size=10))
 
-                                    try:
-                                        _resp = _acwr_api.get_sensor_data(_acwr_atv_id, _acwr_atl_id)
-                                        _spts = extrair_dados_sensor(_resp)
-                                        if _spts:
-                                            _mets = calcular_metricas(_spts, _acwr_atl_nome)
-                                            _pl   = _mets.get('PlayerLoad', 0) if _mets else 0
-                                        else:
-                                            _pl = 0
-                                    except Exception:
-                                        _pl = 0
-
-                                    _acwr_rows.append({
-                                        'atleta': _acwr_atl_nome,
-                                        'data': _acwr_dt,
-                                        'atividade': _acwr_atv_nome,
-                                        'player_load': float(_pl),
-                                    })
-                                    _acwr_prog.progress(_cnt / _n_total)
-
-                            _acwr_prog.empty()
-                            _acwr_status.empty()
-
-                            if _acwr_rows:
-                                _df_cargas = pd.DataFrame(_acwr_rows)
-                                _df_acwr   = calcular_acwr_df(_df_cargas)
-                                st.session_state['df_acwr_calculado'] = _df_acwr
-                                st.success(f"✅ ACWR calculado para {len(_acwr_atls_sel)} atletas em {len(_acwr_ats_sel)} atividades.")
-                            else:
-                                st.warning("Nenhum dado de PlayerLoad obtido. Verifique se os atletas participaram das atividades selecionadas.")
-
-                        # Mostrar resultado se já calculado
-                        if 'df_acwr_calculado' in st.session_state:
-                            _df_acwr_show = st.session_state['df_acwr_calculado']
-                            _fig_acwr = plotar_acwr(_df_acwr_show)
-                            st.plotly_chart(_fig_acwr, use_container_width=True)
-
-                            # Alertas automáticos
-                            _df_risco = _df_acwr_show[_df_acwr_show['ACWR'] > 1.5].dropna(subset=['ACWR'])
-                            _df_atenc = _df_acwr_show[
-                                (_df_acwr_show['ACWR'] > 1.3) & (_df_acwr_show['ACWR'] <= 1.5)
-                            ].dropna(subset=['ACWR'])
-
-                            if not _df_risco.empty:
-                                st.error(f"🔴 **{len(_df_risco)} sessões com ACWR > 1.5** — risco elevado de lesão:")
-                                st.dataframe(_df_risco[['Atleta','Data','Atividade','PlayerLoad','ACWR']],
-                                             use_container_width=True)
-                            if not _df_atenc.empty:
-                                st.warning(f"⚠️ **{len(_df_atenc)} sessões com ACWR entre 1.3–1.5** — monitorar:")
-                                st.dataframe(_df_atenc[['Atleta','Data','Atividade','PlayerLoad','ACWR']],
-                                             use_container_width=True)
-
-                            # Tabela completa + exportar
-                            with st.expander("📋 Tabela completa ACWR"):
-                                st.dataframe(_df_acwr_show, use_container_width=True)
-                            st.download_button(
-                                "📥 Exportar ACWR (CSV)",
-                                _df_acwr_show.to_csv(index=False),
-                                "microciclo_acwr.csv"
+                            _fig_sc.add_hline(y=0, line=dict(color='white', width=1, dash='dot'))
+                            _fig_sc.update_layout(
+                                plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                font=dict(color='white'),
+                                xaxis=dict(title='Velocidade (km/h)', gridcolor='#333', range=[-1, None]),
+                                yaxis=dict(title='Aceleração (m/s²)', gridcolor='#333'),
+                                legend=dict(font=dict(color='white'), bgcolor='rgba(0,0,0,0.5)'),
+                                height=420, margin=dict(t=20, b=10),
                             )
-                    elif not _acwr_ats_sel:
-                        st.info("Selecione as atividades do microciclo acima.")
+                            st.plotly_chart(_fig_sc, use_container_width=True)
+
+                            st.markdown("---")
+
+                            # ════════════════════════════════════════════════
+                            # SEÇÃO 2 — PERFIL TEÓRICO (regressão linear)
+                            # ════════════════════════════════════════════════
+                            st.markdown("### 📐 Perfil Mecânico Individual (Samozino & Morin)")
+                            st.caption(
+                                "Regressão linear sobre os pontos de aceleração positiva (fase de aceleração). "
+                                "Extrai Amax (aceleração teórica máxima), Vmax (velocidade teórica máxima) e "
+                                "a inclinação (taxa de declínio força-velocidade)."
+                            )
+
+                            _av_perfis = {}
+                            _fig_perfil = go.Figure()
+
+                            for _av_atl, _d in _av_dados.items():
+                                # Filtra fase de aceleração: v > 2 km/h e a > 0.3 m/s²
+                                _mask_ac = (_d['vel'] > 2.0) & (_d['acc'] > 0.3)
+                                _v_ac = _d['vel'][_mask_ac]
+                                _a_ac = _d['acc'][_mask_ac]
+
+                                if len(_v_ac) < 20:
+                                    continue
+
+                                # Regressão linear: a = Amax + slope × v
+                                _slope, _intercept, _r, _pval, _se = _scipy_stats.linregress(_v_ac, _a_ac)
+
+                                if _slope >= 0 or _intercept <= 0:
+                                    # Perfil inválido (slope deve ser negativo)
+                                    continue
+
+                                _amax_th  = float(_intercept)           # y-intercept = Amax
+                                _vmax_th  = float(-_intercept / _slope) # x-intercept = Vmax
+                                _pmax_th  = (_amax_th * _vmax_th) / 4   # Pmax relativo (W/kg aprox.)
+                                _r2       = float(_r ** 2)
+
+                                _av_perfis[_av_atl] = {
+                                    'Amax (m/s²)':  round(_amax_th, 2),
+                                    'Vmax (km/h)':  round(_vmax_th, 1),
+                                    'Slope':        round(_slope, 4),
+                                    'Pmax (rel.)':  round(_pmax_th, 2),
+                                    'R²':           round(_r2, 3),
+                                    'Vmax real':    round(float(_d['vel'].max()), 1),
+                                }
+
+                                # Linha do perfil teórico
+                                _v_line = np.linspace(0, min(_vmax_th, _d['vel'].max() * 1.1), 80)
+                                _a_line = _intercept + _slope * _v_line
+                                _fig_perfil.add_trace(go.Scatter(
+                                    x=_v_line, y=np.clip(_a_line, 0, None),
+                                    mode='lines',
+                                    line=dict(color=_av_cores[_av_atl], width=2.5),
+                                    name=f'{_av_atl} (R²={_r2:.2f})',
+                                    hovertemplate=(
+                                        f'{_av_atl}<br>Vel: %{{x:.1f}} km/h'
+                                        f'<br>Acc teórica: %{{y:.2f}} m/s²<extra></extra>'
+                                    ),
+                                ))
+                                # Ponto Amax
+                                _fig_perfil.add_trace(go.Scatter(
+                                    x=[0], y=[_amax_th], mode='markers+text',
+                                    marker=dict(color=_av_cores[_av_atl], size=10, symbol='diamond'),
+                                    text=[f'Amax={_amax_th:.1f}'],
+                                    textposition='middle right',
+                                    textfont=dict(color=_av_cores[_av_atl], size=10),
+                                    showlegend=False,
+                                    hoverinfo='skip',
+                                ))
+                                # Ponto Vmax
+                                _fig_perfil.add_trace(go.Scatter(
+                                    x=[_vmax_th], y=[0], mode='markers+text',
+                                    marker=dict(color=_av_cores[_av_atl], size=10, symbol='diamond'),
+                                    text=[f'Vmax={_vmax_th:.1f}'],
+                                    textposition='top center',
+                                    textfont=dict(color=_av_cores[_av_atl], size=10),
+                                    showlegend=False,
+                                    hoverinfo='skip',
+                                ))
+
+                            _fig_perfil.add_hline(y=0, line=dict(color='white', width=1, dash='dot'))
+                            _fig_perfil.update_layout(
+                                plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                font=dict(color='white'),
+                                xaxis=dict(title='Velocidade (km/h)', gridcolor='#333', range=[-0.5, None]),
+                                yaxis=dict(title='Aceleração (m/s²)', gridcolor='#333', range=[-0.2, None]),
+                                legend=dict(font=dict(color='white'), bgcolor='rgba(0,0,0,0.5)'),
+                                height=380, margin=dict(t=20, b=10),
+                            )
+                            st.plotly_chart(_fig_perfil, use_container_width=True)
+
+                            # Tabela de parâmetros do perfil
+                            if _av_perfis:
+                                _df_perfil = pd.DataFrame(_av_perfis).T.reset_index()
+                                _df_perfil.rename(columns={'index': 'Atleta'}, inplace=True)
+                                st.dataframe(_df_perfil, use_container_width=True, hide_index=True)
+
+                                # Cards de destaque
+                                st.markdown("**🏆 Destaques do Grupo:**")
+                                _av_kpi_cols = st.columns(4)
+                                if 'Amax (m/s²)' in _df_perfil.columns:
+                                    _idx_amax = _df_perfil['Amax (m/s²)'].idxmax()
+                                    _av_kpi_cols[0].metric("💪 Maior Amax",
+                                        f"{_df_perfil.loc[_idx_amax,'Amax (m/s²)']} m/s²",
+                                        _df_perfil.loc[_idx_amax,'Atleta'])
+                                if 'Vmax (km/h)' in _df_perfil.columns:
+                                    _idx_vmax = _df_perfil['Vmax (km/h)'].idxmax()
+                                    _av_kpi_cols[1].metric("💨 Maior Vmax teórico",
+                                        f"{_df_perfil.loc[_idx_vmax,'Vmax (km/h)']} km/h",
+                                        _df_perfil.loc[_idx_vmax,'Atleta'])
+                                if 'Vmax real' in _df_perfil.columns:
+                                    _idx_vreal = _df_perfil['Vmax real'].idxmax()
+                                    _av_kpi_cols[2].metric("🛰️ Maior Vel. Real",
+                                        f"{_df_perfil.loc[_idx_vreal,'Vmax real']} km/h",
+                                        _df_perfil.loc[_idx_vreal,'Atleta'])
+                                if 'Pmax (rel.)' in _df_perfil.columns:
+                                    _idx_pmax = _df_perfil['Pmax (rel.)'].idxmax()
+                                    _av_kpi_cols[3].metric("⚡ Maior Pmax",
+                                        f"{_df_perfil.loc[_idx_pmax,'Pmax (rel.)']}",
+                                        _df_perfil.loc[_idx_pmax,'Atleta'])
+
+                            st.markdown("---")
+
+                            # ════════════════════════════════════════════════
+                            # SEÇÃO 3 — COMPARAÇÃO AMAX × VMAX (barras)
+                            # ════════════════════════════════════════════════
+                            if _av_perfis:
+                                st.markdown("### 📊 Comparação Amax × Vmax entre Atletas")
+                                _av_c1, _av_c2 = st.columns(2)
+
+                                # Amax
+                                with _av_c1:
+                                    _df_p = pd.DataFrame(_av_perfis).T.reset_index()
+                                    _df_p.rename(columns={'index':'Atleta'}, inplace=True)
+                                    _fig_amax = go.Figure(go.Bar(
+                                        x=_df_p['Atleta'], y=_df_p['Amax (m/s²)'],
+                                        marker_color=[_av_cores.get(a,'#888') for a in _df_p['Atleta']],
+                                        text=_df_p['Amax (m/s²)'].round(2), textposition='outside',
+                                    ))
+                                    _fig_amax.update_layout(
+                                        title=dict(text='Amax Teórico (m/s²)', font=dict(color='white',size=13)),
+                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                        font=dict(color='white'),
+                                        xaxis=dict(gridcolor='#333'),
+                                        yaxis=dict(gridcolor='#333', title='m/s²'),
+                                        height=320, margin=dict(t=45,b=10,l=10,r=10),
+                                        showlegend=False,
+                                    )
+                                    st.plotly_chart(_fig_amax, use_container_width=True)
+
+                                # Vmax teórico vs real
+                                with _av_c2:
+                                    _fig_vmax = go.Figure()
+                                    _fig_vmax.add_trace(go.Bar(
+                                        x=_df_p['Atleta'], y=_df_p['Vmax (km/h)'],
+                                        name='Vmax Teórico',
+                                        marker_color=[_av_cores.get(a,'#888') for a in _df_p['Atleta']],
+                                        text=_df_p['Vmax (km/h)'].round(1), textposition='outside',
+                                    ))
+                                    _fig_vmax.add_trace(go.Bar(
+                                        x=_df_p['Atleta'], y=_df_p['Vmax real'],
+                                        name='Vmax Real',
+                                        marker_color='rgba(255,255,255,0.3)',
+                                        text=_df_p['Vmax real'].round(1), textposition='outside',
+                                    ))
+                                    _fig_vmax.update_layout(
+                                        title=dict(text='Vmax Teórico vs Real (km/h)', font=dict(color='white',size=13)),
+                                        barmode='group',
+                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                        font=dict(color='white'),
+                                        xaxis=dict(gridcolor='#333'),
+                                        yaxis=dict(gridcolor='#333', title='km/h'),
+                                        legend=dict(font=dict(color='white')),
+                                        height=320, margin=dict(t=45,b=10,l=10,r=10),
+                                    )
+                                    st.plotly_chart(_fig_vmax, use_container_width=True)
+
+                            st.markdown("---")
+
+                            # ════════════════════════════════════════════════
+                            # SEÇÃO 4 — HISTOGRAMA DE ACELERAÇÕES POR ZONA
+                            # ════════════════════════════════════════════════
+                            st.markdown("### 📊 Distribuição de Acelerações por Zona")
+                            _av_c3, _av_c4 = st.columns(2)
+
+                            _ZONAS_ACC = [
+                                ('Muito intensa (>3)', 3.0, 99, '#F44336'),
+                                ('Intensa (2–3)',       2.0, 3.0,'#FF9800'),
+                                ('Moderada (1–2)',      1.0, 2.0,'#FFEB3B'),
+                                ('Leve (0–1)',          0.0, 1.0,'#4CAF50'),
+                                ('Desac. leve (0–-1)', -1.0, 0.0,'#26C6DA'),
+                                ('Desac. mod. (-1–-2)',-2.0,-1.0,'#1565C0'),
+                                ('Desac. int. (-2–-3)',-3.0,-2.0,'#7B1FA2'),
+                                ('Desac. muito int. (<-3)',-99,-3.0,'#880E4F'),
+                            ]
+
+                            with _av_c3:
+                                _fig_hist = go.Figure()
+                                for _av_atl, _d in _av_dados.items():
+                                    _fig_hist.add_trace(go.Histogram(
+                                        x=_d['acc'], name=_av_atl,
+                                        marker_color=_av_cores[_av_atl],
+                                        opacity=0.65, nbinsx=60,
+                                        hovertemplate='Acc: %{x:.2f} m/s²<br>Freq: %{y}<extra></extra>',
+                                    ))
+                                _fig_hist.update_layout(
+                                    title=dict(text='Histograma de Aceleração', font=dict(color='white',size=13)),
+                                    barmode='overlay',
+                                    plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                    font=dict(color='white'),
+                                    xaxis=dict(title='Aceleração (m/s²)', gridcolor='#333'),
+                                    yaxis=dict(title='Frequência', gridcolor='#333'),
+                                    legend=dict(font=dict(color='white')),
+                                    height=320, margin=dict(t=45,b=10,l=10,r=10),
+                                )
+                                st.plotly_chart(_fig_hist, use_container_width=True)
+
+                            with _av_c4:
+                                # Proporção por zona para o primeiro atleta selecionado
+                                _av_atl_zona = _av_atls_sel[0]
+                                if _av_atl_zona in _av_dados:
+                                    _acc_z = _av_dados[_av_atl_zona]['acc']
+                                    _zona_counts, _zona_labels, _zona_cores = [], [], []
+                                    for _zl, _zmin, _zmax, _zc in _ZONAS_ACC:
+                                        _n = int(np.sum((_acc_z >= _zmin) & (_acc_z < _zmax)))
+                                        _zona_counts.append(_n)
+                                        _zona_labels.append(_zl)
+                                        _zona_cores.append(_zc)
+                                    _fig_pie = go.Figure(go.Pie(
+                                        labels=_zona_labels, values=_zona_counts,
+                                        marker=dict(colors=_zona_cores),
+                                        textfont=dict(color='white', size=10),
+                                        hole=0.4,
+                                    ))
+                                    _fig_pie.update_layout(
+                                        title=dict(text=f'Distribuição por Zona — {_av_atl_zona}',
+                                                   font=dict(color='white',size=13)),
+                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                        font=dict(color='white'),
+                                        legend=dict(font=dict(color='white',size=9)),
+                                        height=320, margin=dict(t=45,b=10,l=10,r=10),
+                                    )
+                                    st.plotly_chart(_fig_pie, use_container_width=True)
+
+                            st.markdown("---")
+
+                            # ════════════════════════════════════════════════
+                            # SEÇÃO 5 — DENSIDADE NO ESPAÇO ACC × VEL (heatmap 2D)
+                            # ════════════════════════════════════════════════
+                            st.markdown("### 🌡️ Mapa de Densidade Acc × Vel")
+                            st.caption(
+                                "Mostra onde o atleta passa a maior parte do tempo no espaço aceleração-velocidade. "
+                                "Regiões quentes = maior acúmulo de esforço."
+                            )
+                            _av_atl_hm = st.selectbox("Atleta para mapa de densidade:",
+                                                       _av_atls_sel, key="av_hm_atl")
+                            if _av_atl_hm in _av_dados:
+                                _v_hm = _av_dados[_av_atl_hm]['vel']
+                                _a_hm = _av_dados[_av_atl_hm]['acc']
+                                _H2d, _xe2, _ye2 = np.histogram2d(
+                                    _v_hm, _a_hm, bins=[50, 40],
+                                    range=[[0, max(35, float(_v_hm.max()))], [-6, 6]]
+                                )
+                                _H2d = _gf(_H2d, sigma=1.5)
+                                _xc2 = (_xe2[:-1] + _xe2[1:]) / 2
+                                _yc2 = (_ye2[:-1] + _ye2[1:]) / 2
+                                _fig_hm2 = go.Figure(go.Heatmap(
+                                    x=_xc2, y=_yc2, z=_H2d.T,
+                                    colorscale=[[0,'rgba(0,0,0,0)'],[0.0001,'#0D47A1'],
+                                                [0.3,'#1565C0'],[0.6,'#FFEB3B'],
+                                                [0.85,'#FF9800'],[1,'#F44336']],
+                                    opacity=0.85, showscale=True,
+                                    colorbar=dict(
+                                        title=dict(text='Densidade', font=dict(color='white')),
+                                        tickfont=dict(color='white'),
+                                    ),
+                                    hovertemplate='Vel: %{x:.1f} km/h<br>Acc: %{y:.2f} m/s²<br>Freq: %{z:.0f}<extra></extra>',
+                                ))
+                                _fig_hm2.add_hline(y=0, line=dict(color='white', width=1, dash='dot'))
+                                _fig_hm2.add_hline(y=3,  line=dict(color='#F44336', width=1, dash='dash'))
+                                _fig_hm2.add_hline(y=-3, line=dict(color='#F44336', width=1, dash='dash'))
+                                _fig_hm2.update_layout(
+                                    plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                    font=dict(color='white'),
+                                    xaxis=dict(title='Velocidade (km/h)', gridcolor='#333'),
+                                    yaxis=dict(title='Aceleração (m/s²)', gridcolor='#333'),
+                                    height=400, margin=dict(t=20,b=10),
+                                )
+                                st.plotly_chart(_fig_hm2, use_container_width=True)
+
                     else:
-                        st.info("Carregue os dados de atletas antes de calcular o ACWR.")
+                        st.info("Selecione pelo menos 1 atleta para ver o perfil Acc × Vel.")
                 else:
-                    st.info("Carregue os dados da API para usar esta funcionalidade.")
+                    st.info("Busque os dados de atletas na sessão antes de usar esta análise.")
 
             # ══════════════════════════════════════════════════════════════
             # ABA 7: TABELA DESCRITIVA
