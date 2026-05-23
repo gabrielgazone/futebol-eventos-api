@@ -438,9 +438,10 @@ class CatapultAPI:
 
     # PARTE 2 - FUNÇÕES DE EXTRAÇÃO, CONVERSÃO E CÁLCULO
 
-# ── Parâmetro global de duração mínima de esforço (segundos) ──────────────────
-# Padrão 0.6 s (Catapult OpenField) — configurável pelo usuário na sidebar
-_DEFAULT_MIN_DUR_S = 0.6
+# ── Parâmetros globais de duração mínima de esforço (segundos) ────────────────
+# Acc/Dec: 0.6 s (Catapult OpenField)  |  Velocidade: 1.0 s
+_DEFAULT_MIN_DUR_S     = 0.6   # acc / dec
+_DEFAULT_MIN_DUR_VEL_S = 1.0   # esforços de velocidade
 _SENSOR_HZ = 10  # frequência de amostragem Catapult (10 Hz)
 
 
@@ -473,8 +474,12 @@ def detectar_eventos_acc(acc_arr, limiar, min_dur_s=0.6, acima=True, freq_hz=10)
 
 
 def get_min_dur_s():
-    """Lê o slider de duração mínima do session_state (com fallback para padrão)."""
+    """Lê o slider de duração mínima de acc/dec do session_state."""
     return float(st.session_state.get('min_dur_esforco', _DEFAULT_MIN_DUR_S))
+
+def get_min_dur_vel_s():
+    """Lê o slider de duração mínima de velocidade do session_state."""
+    return float(st.session_state.get('min_dur_vel', _DEFAULT_MIN_DUR_VEL_S))
 
 
 def extrair_dados_sensor(response_data):
@@ -2439,6 +2444,182 @@ def combinar_periodos(resultados_por_periodo: dict) -> list:
     return combinados
 
 
+def _segmentos_de_mask(mask):
+    """Retorna lista de (start, end) para segmentos contínuos True em mask."""
+    segs, n, i = [], len(mask), 0
+    while i < n:
+        if mask[i]:
+            s = i
+            while i < n and mask[i]:
+                i += 1
+            segs.append((s, i))
+        else:
+            i += 1
+    return segs
+
+
+def calcular_efforts_velocidade_sensor(
+        xn, yn, vel_arr, ts_pos=None, min_dur_s=1.0, freq_hz=10):
+    """
+    Detecta esforços de velocidade diretamente dos dados do sensor Catapult.
+    Usa os mesmos dados de posição/velocidade que calcular_metricas(),
+    garantindo totais idênticos com a Tabela Descritiva.
+
+    Para cada banda de BANDAS_VEL, detecta segmentos contínuos onde a
+    velocidade permanece dentro da banda por pelo menos min_dur_s.
+    Retorna DataFrame com mesma estrutura de processar_efforts_velocidade().
+    """
+    if not vel_arr or not xn or not yn:
+        return pd.DataFrame()
+
+    n          = len(vel_arr)
+    min_frames = max(1, round(min_dur_s * freq_hz))
+
+    # Distâncias ponto-a-ponto
+    dists = [0.0] * n
+    for i in range(1, min(n, len(xn), len(yn))):
+        dx = xn[i] - xn[i - 1]
+        dy = yn[i] - yn[i - 1]
+        dists[i] = (dx * dx + dy * dy) ** 0.5
+
+    max_vel_global = max(vel_arr) if vel_arr else 1.0
+
+    records = []
+    esf_num = 1
+
+    for banda_id, bcfg in BANDAS_VEL.items():
+        bmin, bmax = bcfg['min'], bcfg['max']
+
+        # Máscara booleana: ponto dentro da banda
+        mask = np.array([(bmin <= v < bmax) for v in vel_arr], dtype=bool)
+        for seg_s, seg_e in _segmentos_de_mask(mask):
+            dur_frames = seg_e - seg_s
+            if dur_frames < min_frames:
+                continue
+
+            seg_vel  = vel_arr[seg_s:seg_e]
+            seg_dist = sum(dists[seg_s:seg_e])
+            dur_s    = dur_frames / freq_hz
+            vel_max  = max(seg_vel)
+            vel_ini  = seg_vel[0]
+            pct_max  = round(vel_max / max_vel_global * 100, 1) if max_vel_global > 0 else 0
+
+            # Timestamps
+            _ts_s = _ts_e_val = 0.0
+            hora_str = f"{seg_s / freq_hz:.1f}s"
+            if ts_pos and len(ts_pos) > seg_s and ts_pos[seg_s] and ts_pos[seg_s] > 0:
+                _ts_s   = float(ts_pos[seg_s])
+                _ts_e_val = float(ts_pos[seg_e - 1]) if seg_e - 1 < len(ts_pos) else _ts_s + dur_s
+                try:
+                    hora_str = datetime.fromtimestamp(_ts_s).strftime('%H:%M:%S')
+                except Exception:
+                    pass
+
+            records.append({
+                'Esforço':            esf_num,
+                'Início':             hora_str,
+                'Duração (s)':        round(dur_s, 1),
+                'Vel. Máx (km/h)':    round(vel_max, 1),
+                'Vel. Inicial (km/h)': round(vel_ini, 1),
+                'Distância (m)':      round(seg_dist, 1),
+                '% do Máximo':        pct_max,
+                'Banda':              banda_id,
+                '_start_ts':          _ts_s,
+                '_end_ts':            _ts_e_val,
+            })
+            esf_num += 1
+
+    if not records:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(records)
+    if df['_start_ts'].sum() > 0:
+        df = df.sort_values('_start_ts').reset_index(drop=True)
+    df['Esforço'] = range(1, len(df) + 1)
+    return df
+
+
+def calcular_efforts_aceleracao_sensor(
+        xn, yn, acc_arr, vel_arr=None, ts_pos=None, min_dur_s=0.6, freq_hz=10):
+    """
+    Detecta esforços de aceleração/desaceleração diretamente dos dados do sensor.
+    Usa os mesmos dados de aceleração que calcular_metricas(), garantindo
+    totais idênticos com a Tabela Descritiva.
+    Retorna DataFrame com mesma estrutura de processar_efforts_aceleracao().
+    """
+    if not acc_arr or not xn or not yn:
+        return pd.DataFrame()
+
+    n          = len(acc_arr)
+    min_frames = max(1, round(min_dur_s * freq_hz))
+
+    dists = [0.0] * n
+    for i in range(1, min(n, len(xn), len(yn))):
+        dx = xn[i] - xn[i - 1]
+        dy = yn[i] - yn[i - 1]
+        dists[i] = (dx * dx + dy * dy) ** 0.5
+
+    max_acc_global = max((abs(a) for a in acc_arr), default=1.0)
+    vel_arr = vel_arr or [0.0] * n
+
+    records = []
+    esf_num = 1
+
+    for banda_id, bcfg in BANDAS_ACC.items():
+        bmin, bmax = bcfg['min'], bcfg['max']
+        # Ordenar para uso uniforme
+        lo, hi = min(bmin, bmax), max(bmin, bmax)
+
+        mask = np.array([(lo <= a <= hi) for a in acc_arr], dtype=bool)
+        # Aplica mínimo de frames (contínuo)
+        for seg_s, seg_e in _segmentos_de_mask(mask):
+            dur_frames = seg_e - seg_s
+            if dur_frames < min_frames:
+                continue
+
+            seg_acc  = acc_arr[seg_s:seg_e]
+            dur_s    = dur_frames / freq_hz
+            acc_max  = max(abs(a) for a in seg_acc)
+            acc_avg  = sum(seg_acc) / len(seg_acc)
+            pct_max  = round(acc_max / max_acc_global * 100, 1) if max_acc_global > 0 else 0
+            tipo     = 'Aceleração' if acc_avg >= 0 else 'Desaceleração'
+
+            _ts_s = _ts_e_val = 0.0
+            hora_str = f"{seg_s / freq_hz:.1f}s"
+            if ts_pos and len(ts_pos) > seg_s and ts_pos[seg_s] and ts_pos[seg_s] > 0:
+                _ts_s   = float(ts_pos[seg_s])
+                _ts_e_val = float(ts_pos[seg_e - 1]) if seg_e - 1 < len(ts_pos) else _ts_s + dur_s
+                try:
+                    hora_str = datetime.fromtimestamp(_ts_s).strftime('%H:%M:%S')
+                except Exception:
+                    pass
+
+            records.append({
+                'Esforço':        esf_num,
+                'Início':         hora_str,
+                'Duração (s)':    round(dur_s, 1),
+                'Acc. Máx (m/s²)': round(acc_max, 2),
+                'Acc. Médio (m/s²)': round(acc_avg, 2),
+                'Vel. Máx (km/h)': round(max(vel_arr[seg_s:seg_e]), 1)
+                                   if vel_arr else 0,
+                '% do Máximo':    pct_max,
+                'Tipo':           tipo,
+                'Banda':          banda_id,
+                '_start_ts':      _ts_s,
+                '_end_ts':        _ts_e_val,
+            })
+            esf_num += 1
+
+    if not records:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(records)
+    if df['_start_ts'].sum() > 0:
+        df = df.sort_values('_start_ts').reset_index(drop=True)
+    df['Esforço'] = range(1, len(df) + 1)
+    return df
+
+
 # PARTE 4 - FUNÇÕES DE GRÁFICOS, INTENSIDADE E CLASSIFICAÇÃO
 
 def criar_grafico_velocidade_tempo(sensor_points, athlete_name, window_size=31, show_trend=True, intensity_filter=None):
@@ -3433,6 +3614,25 @@ def main():
                 f"**{max(1, round(_dur_atual * _SENSOR_HZ))} frames** a 10 Hz"
             )
 
+            st.slider(
+                "⏱️ Duração mínima de velocidade (s):",
+                min_value=0.1, max_value=3.0,
+                value=float(st.session_state.get('min_dur_vel', _DEFAULT_MIN_DUR_VEL_S)),
+                step=0.1,
+                key="min_dur_vel",
+                help=(
+                    "Tempo mínimo contínuo dentro de uma banda de velocidade para "
+                    "que o segmento seja contabilizado como um esforço.\n\n"
+                    "💡 Valores maiores filtram movimentos breves e capturam "
+                    "apenas esforços sustentados. Padrão: 1.0 s."
+                )
+            )
+            _dur_vel_atual = st.session_state.get('min_dur_vel', _DEFAULT_MIN_DUR_VEL_S)
+            st.caption(
+                f"Mínimo: **{_dur_vel_atual:.1f} s** = "
+                f"**{max(1, round(_dur_vel_atual * _SENSOR_HZ))} frames** a 10 Hz"
+            )
+
         # ── Seletor de Eventos Futebol ────────────────────────────────
         if not st.session_state.get('df_activities', pd.DataFrame()).empty and token:
             st.markdown("---")
@@ -3913,32 +4113,20 @@ def main():
                             # ── ETAPA 2: Análise de esforços ─────────────────────
                             st.markdown("### 2️⃣ Análise de Esforços no Campo")
 
-                            # Esforços combinados de todos os períodos selecionados
-                            vel_raw, acc_raw = [], []
+                            # Extrai dados de sensor dos períodos selecionados
+                            # (mesma fonte que calcular_metricas → consistência com Tabela Descritiva)
+                            _xn_e, _yn_e, _vel_e, _acc_e, _ts_e = [], [], [], [], []
                             for _pm in periodos_mapa_sel:
-                                vel_raw += dados_efforts_vel_por_periodo.get(_pm, {}).get(atleta_mapa, [])
-                                acc_raw += dados_efforts_acc_por_periodo.get(_pm, {}).get(atleta_mapa, [])
+                                _dc_e = dados_posicao_por_periodo.get(_pm, {}).get(atleta_mapa, {})
+                                if _dc_e.get('xs') and _dc_e.get('ys'):
+                                    _xn_e  += list(_dc_e['xs'])
+                                    _yn_e  += list(_dc_e['ys'])
+                                    _vel_e += list(_dc_e.get('vel', []))
+                                    _acc_e += list(_dc_e.get('acc', [0.0] * len(_dc_e['xs'])))
+                                    _ts_e  += list(_dc_e.get('ts_pos', []))
 
-                            # ── Filtrar esforços pelo intervalo de timestamps do período ──
-                            # A API Catapult às vezes retorna esforços de toda a atividade
-                            # mesmo quando um period_id é passado. Usamos os timestamps do
-                            # sensor (ts_pos ou ts_gps) como referência do janela válida.
-                            _ts_ref = []
-                            for _pm in periodos_mapa_sel:
-                                _dp = dados_posicao_por_periodo.get(_pm, {}).get(atleta_mapa, {})
-                                _ts_ref += [t for t in _dp.get('ts_pos', []) if t and t > 0]
-                                _ts_ref += [t for t in _dp.get('ts_gps', []) if t and t > 0]
-                            if _ts_ref:
-                                _ts_ef_min = min(_ts_ref)
-                                _ts_ef_max = max(_ts_ref)
-                                vel_raw = [
-                                    e for e in vel_raw
-                                    if _ts_ef_min <= float(e.get('start_time') or 0) <= _ts_ef_max
-                                ]
-                                acc_raw = [
-                                    e for e in acc_raw
-                                    if _ts_ef_min <= float(e.get('start_time') or 0) <= _ts_ef_max
-                                ]
+                            _min_dur_vel_s = get_min_dur_vel_s()
+                            _min_dur_acc_s = get_min_dur_s()
 
                             tipo_esf = st.radio(
                                 "Tipo de esforço:",
@@ -3946,26 +4134,31 @@ def main():
                                 horizontal=True, key="tipo_esf_campo"
                             )
 
-                            raw_list = vel_raw if tipo_esf == "⚡ Velocidade" else acc_raw
+                            efforts_df_full = pd.DataFrame()
+                            if _xn_e:
+                                if tipo_esf == "⚡ Velocidade":
+                                    efforts_df_full = calcular_efforts_velocidade_sensor(
+                                        _xn_e, _yn_e, _vel_e, _ts_e, min_dur_s=_min_dur_vel_s)
+                                else:
+                                    efforts_df_full = calcular_efforts_aceleracao_sensor(
+                                        _xn_e, _yn_e, _acc_e, _vel_e, _ts_e, min_dur_s=_min_dur_acc_s)
 
-                            if raw_list:
-                                efforts_df_full = (processar_efforts_velocidade(raw_list)
-                                                   if tipo_esf == "⚡ Velocidade"
-                                                   else processar_efforts_aceleracao(raw_list))
+                            if not efforts_df_full.empty:
+                                # Filtro de bandas
+                                if 'Banda' in efforts_df_full.columns:
+                                    bandas_disp = sorted(efforts_df_full['Banda'].dropna().unique())
+                                    if bandas_disp:
+                                        bandas_sel = st.multiselect(
+                                            "Filtrar por bandas:", bandas_disp,
+                                            default=bandas_disp, key="bandas_campo"
+                                        )
+                                        efforts_df_full = efforts_df_full[
+                                            efforts_df_full['Banda'].isin(bandas_sel)
+                                        ] if bandas_sel else efforts_df_full
 
-                                if not efforts_df_full.empty:
-                                    # Filtro de bandas
-                                    if 'Banda' in efforts_df_full.columns:
-                                        bandas_disp = sorted(efforts_df_full['Banda'].dropna().unique())
-                                        if bandas_disp:
-                                            bandas_sel = st.multiselect(
-                                                "Filtrar por bandas:", bandas_disp,
-                                                default=bandas_disp, key="bandas_campo"
-                                            )
-                                            efforts_df_full = efforts_df_full[
-                                                efforts_df_full['Banda'].isin(bandas_sel)
-                                            ] if bandas_sel else efforts_df_full
-
+                                if efforts_df_full.empty:
+                                    st.info("Nenhum esforço encontrado após aplicar os filtros.")
+                                else:
                                     # Colunas visíveis (esconde _start_ts / _end_ts)
                                     cols_show = [c for c in efforts_df_full.columns
                                                  if not c.startswith('_')]
@@ -4005,8 +4198,7 @@ def main():
                                         _anim_effort_row = _ae_row
 
                                     if sel_rows and ts_gps:
-                                        sel_idx = sel_rows[0]
-                                        # Recupera os timestamps brutos da linha selecionada
+                                        sel_idx  = sel_rows[0]
                                         row_full = efforts_df_full.iloc[sel_idx]
                                         start_ts = row_full.get('_start_ts', 0)
                                         end_ts   = row_full.get('_end_ts', 0)
@@ -4027,7 +4219,7 @@ def main():
                                             else:
                                                 st.warning("⚠️ Nenhum ponto GPS encontrado na janela de tempo deste esforço.")
                                         elif not ts_gps:
-                                            st.info("ℹ️ Timestamps GPS não disponíveis. Recarregue os dados para ativar o filtro de esforço no mapa.")
+                                            st.info("ℹ️ Timestamps GPS não disponíveis.")
 
                                     # Download da tabela
                                     st.download_button(
@@ -4035,10 +4227,9 @@ def main():
                                         efforts_df_show.to_csv(index=False),
                                         file_name=f"esforcos_{atleta_mapa}_{_label_periodos.replace(' + ','_')}.csv"
                                     )
-                                else:
-                                    st.info("Nenhum esforço encontrado após aplicar os filtros.")
                             else:
-                                st.info("Nenhum dado de esforço disponível para este atleta neste período.")
+                                st.info("ℹ️ Sem dados de posição (x/y) para calcular esforços. "
+                                        "Os dados de sensor precisam incluir coordenadas de campo.")
 
                             # Renderiza o mapa fixo (com ou sem esforço destacado)
                             with mapa_placeholder:
