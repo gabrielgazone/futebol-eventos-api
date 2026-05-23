@@ -3808,8 +3808,11 @@ def main():
                                     del st.session_state[campo_key]
                                     st.rerun()
 
-                            # ── Esforço selecionado (para filtrar GPS no mapa) ──
+                            # ── Esforço selecionado (para filtrar GPS no mapa e animação) ──
                             lats_eff, lons_eff, vels_eff, eff_desc = [], [], [], ""
+                            _anim_start_ts  = 0.0
+                            _anim_end_ts    = 0.0
+                            _anim_effort_row = None
 
                             # Mapa fixo (atualizado abaixo se houver esforço selecionado)
                             mapa_placeholder = st.empty()
@@ -3882,6 +3885,13 @@ def main():
 
                                     sel_rows = evt.selection.rows if evt.selection else []
 
+                                    # Captura timestamps do esforço selecionado (para animação)
+                                    if sel_rows:
+                                        _ae_row = efforts_df_full.iloc[sel_rows[0]]
+                                        _anim_start_ts   = float(_ae_row.get('_start_ts') or 0)
+                                        _anim_end_ts     = float(_ae_row.get('_end_ts')   or 0)
+                                        _anim_effort_row = _ae_row
+
                                     if sel_rows and ts_gps:
                                         sel_idx = sel_rows[0]
                                         # Recupera os timestamps brutos da linha selecionada
@@ -3940,7 +3950,7 @@ def main():
                             st.markdown("### 3️⃣ Análise de Movimentação no Campo")
 
                             # Combina coordenadas de todos os períodos selecionados
-                            xn, yn, vel_raw_campo, acc_raw_campo = [], [], [], []
+                            xn, yn, vel_raw_campo, acc_raw_campo, ts_pos_campo = [], [], [], [], []
                             _fonte_xy = False
                             for _pm in periodos_mapa_sel:
                                 _dc = dados_posicao_por_periodo.get(_pm, {}).get(atleta_mapa, {})
@@ -3949,6 +3959,7 @@ def main():
                                     yn  += list(_dc['ys'])
                                     vel_raw_campo += list(_dc['vel'])
                                     acc_raw_campo += list(_dc.get('acc', [0.0]*len(_dc['xs'])))
+                                    ts_pos_campo  += list(_dc.get('ts_pos', []))
                                     _fonte_xy = True
                                 elif lats_gps and cfg:
                                     _lats_pm = _dc.get('lats', [])
@@ -4099,6 +4110,210 @@ def main():
                                             fig_campo, _dados_ev_campo, _ev_tipos_sel)
 
                                     st.plotly_chart(fig_campo, use_container_width=True)
+
+                                    # ══════════════════════════════════════════════
+                                    # ANIMAÇÃO DO ESFORÇO SELECIONADO
+                                    # ══════════════════════════════════════════════
+                                    if _anim_effort_row is not None and _anim_start_ts > 0 and _anim_end_ts > 0:
+                                        st.markdown("---")
+                                        st.markdown(
+                                            f"### 🎬 Animação — Esforço **#{int(_anim_effort_row['Esforço'])}** &nbsp;|&nbsp; "
+                                            f"Início: **{_anim_effort_row['Início']}** &nbsp;|&nbsp; "
+                                            f"Duração: **{_anim_effort_row['Duração (s)']}s** &nbsp;|&nbsp; "
+                                            f"Vel. Máx: **{_anim_effort_row['Vel. Máx (km/h)']} km/h**"
+                                        )
+
+                                        # Encontra pontos de campo correspondentes ao esforço
+                                        _ts_arr_c = np.array(ts_pos_campo) if ts_pos_campo else np.array([])
+                                        if len(_ts_arr_c) > 0 and len(_ts_arr_c) == len(xn):
+                                            _eff_mask = (_ts_arr_c >= _anim_start_ts) & (_ts_arr_c <= _anim_end_ts)
+                                            xs_a  = np.array(xn)[_eff_mask].tolist()
+                                            ys_a  = np.array(yn)[_eff_mask].tolist()
+                                            vel_a = np.array(vel_raw)[_eff_mask].tolist() if len(vel_raw) == len(xn) else [0]*len(xs_a)
+                                            acc_a = np.array(acc_raw)[_eff_mask].tolist() if len(acc_raw) == len(xn) else [0]*len(xs_a)
+                                        else:
+                                            xs_a, ys_a, vel_a, acc_a = [], [], [], []
+
+                                        def _vc_anim(v):
+                                            if v < 7:  return '#2196F3'
+                                            if v < 14: return '#4CAF50'
+                                            if v < 19: return '#FFEB3B'
+                                            if v < 24: return '#FF9800'
+                                            return '#F44336'
+
+                                        if len(xs_a) >= 2:
+                                            _n_pts = len(xs_a)
+                                            _step_a = max(1, _n_pts // 80)  # máx 80 frames
+
+                                            # ── Campo base (estático) ─────────────────
+                                            _fig_a = desenhar_campo_futebol_bonito(
+                                                title=(
+                                                    f"Esforço #{int(_anim_effort_row['Esforço'])} | "
+                                                    f"{_anim_effort_row['Início']} | "
+                                                    f"Vel. Máx {_anim_effort_row['Vel. Máx (km/h)']} km/h"
+                                                )
+                                            )
+                                            _n_base_a = len(_fig_a.data)
+
+                                            # Trajetória completa (fundo desbotado)
+                                            _sbg = max(1, len(xn) // 5000)
+                                            _fig_a.add_trace(go.Scatter(
+                                                x=xn[::_sbg], y=yn[::_sbg], mode='markers',
+                                                marker=dict(size=1.5, color='rgba(255,255,255,0.10)'),
+                                                name='Trajetória', showlegend=False, hoverinfo='skip'
+                                            ))
+                                            # Marcadores início / fim do esforço (estáticos)
+                                            _fig_a.add_trace(go.Scatter(
+                                                x=[xs_a[0]], y=[ys_a[0]], mode='markers+text',
+                                                marker=dict(size=13, color='#4CAF50', symbol='circle',
+                                                            line=dict(color='white', width=2)),
+                                                text=['▶'], textposition='top center',
+                                                textfont=dict(color='#4CAF50', size=11),
+                                                name='Início', showlegend=False, hoverinfo='skip'
+                                            ))
+                                            _fig_a.add_trace(go.Scatter(
+                                                x=[xs_a[-1]], y=[ys_a[-1]], mode='markers+text',
+                                                marker=dict(size=13, color='#F44336', symbol='x',
+                                                            line=dict(color='white', width=2)),
+                                                text=['■'], textposition='top center',
+                                                textfont=dict(color='#F44336', size=11),
+                                                name='Fim', showlegend=False, hoverinfo='skip'
+                                            ))
+                                            # Traço do esforço (animado)
+                                            _fig_a.add_trace(go.Scatter(
+                                                x=[xs_a[0]], y=[ys_a[0]], mode='lines',
+                                                line=dict(color='#FF9800', width=4),
+                                                name='Esforço', showlegend=False
+                                            ))
+                                            # Marcador de posição atual (animado)
+                                            _fig_a.add_trace(go.Scatter(
+                                                x=[xs_a[0]], y=[ys_a[0]], mode='markers',
+                                                marker=dict(
+                                                    size=18, color=_vc_anim(vel_a[0]),
+                                                    symbol='circle',
+                                                    line=dict(color='white', width=3)
+                                                ),
+                                                name='Posição', showlegend=False
+                                            ))
+
+                                            _idx_trace  = _n_base_a + 3  # traço do esforço
+                                            _idx_dot    = _n_base_a + 4  # marcador posição
+
+                                            # ── Frames de animação ────────────────────
+                                            _frames_a = []
+                                            for _k in range(0, _n_pts, _step_a):
+                                                _t  = _k * 0.1
+                                                _v  = vel_a[_k] if _k < len(vel_a) else 0
+                                                _ac = acc_a[_k] if _k < len(acc_a) else 0
+                                                _col = _vc_anim(_v)
+                                                _frames_a.append(go.Frame(
+                                                    data=[
+                                                        go.Scatter(
+                                                            x=xs_a[:_k+1], y=ys_a[:_k+1],
+                                                            mode='lines',
+                                                            line=dict(color=_col, width=4),
+                                                        ),
+                                                        go.Scatter(
+                                                            x=[xs_a[_k]], y=[ys_a[_k]],
+                                                            mode='markers',
+                                                            marker=dict(
+                                                                size=18, color=_col, symbol='circle',
+                                                                line=dict(color='white', width=3)
+                                                            ),
+                                                        ),
+                                                    ],
+                                                    traces=[_idx_trace, _idx_dot],
+                                                    name=str(_k),
+                                                    layout=go.Layout(title=dict(
+                                                        text=(
+                                                            f"⏱️ {_t:.1f}s / {_anim_effort_row['Duração (s)']}s"
+                                                            f"   |   💨 {_v:.1f} km/h"
+                                                            f"   |   ⚡ {_ac:+.2f} m/s²"
+                                                            f"   |   📍 x={xs_a[_k]:.1f}m y={ys_a[_k]:.1f}m"
+                                                        ),
+                                                        font=dict(color='white', size=12)
+                                                    ))
+                                                ))
+                                            _fig_a.frames = _frames_a
+
+                                            # ── Controles Play/Pause + Slider ─────────
+                                            _slider_steps = [
+                                                {
+                                                    'args': [[f.name],
+                                                             {'frame': {'duration': 0, 'redraw': True},
+                                                              'mode': 'immediate',
+                                                              'transition': {'duration': 0}}],
+                                                    'label': f"{int(f.name)*0.1:.0f}s",
+                                                    'method': 'animate',
+                                                }
+                                                for f in _frames_a[::max(1, len(_frames_a)//15)]
+                                            ]
+                                            _fig_a.update_layout(
+                                                height=560,
+                                                margin=dict(t=55, b=110, l=10, r=10),
+                                                updatemenus=[{
+                                                    'buttons': [
+                                                        {
+                                                            'args': [None, {
+                                                                'frame': {'duration': 80, 'redraw': True},
+                                                                'fromcurrent': True,
+                                                                'transition': {'duration': 0},
+                                                            }],
+                                                            'label': '▶  Play',
+                                                            'method': 'animate',
+                                                        },
+                                                        {
+                                                            'args': [[None], {
+                                                                'frame': {'duration': 0, 'redraw': False},
+                                                                'mode': 'immediate',
+                                                                'transition': {'duration': 0},
+                                                            }],
+                                                            'label': '⏸  Pause',
+                                                            'method': 'animate',
+                                                        },
+                                                    ],
+                                                    'direction': 'left',
+                                                    'pad': {'r': 10, 't': 10},
+                                                    'showactive': True,
+                                                    'type': 'buttons',
+                                                    'x': 0.0, 'y': -0.07,
+                                                    'bgcolor': '#1565C0',
+                                                    'font': {'color': 'white', 'size': 13},
+                                                    'bordercolor': '#0D47A1',
+                                                }],
+                                                sliders=[{
+                                                    'active': 0,
+                                                    'steps': _slider_steps,
+                                                    'currentvalue': {
+                                                        'prefix': '⏱️ ',
+                                                        'visible': True,
+                                                        'font': {'color': 'white', 'size': 12},
+                                                    },
+                                                    'tickcolor': 'white',
+                                                    'font': {'color': 'white'},
+                                                    'y': -0.02,
+                                                    'len': 0.88,
+                                                    'x': 0.1,
+                                                    'bgcolor': '#1a1a2e',
+                                                    'bordercolor': '#555',
+                                                }],
+                                            )
+                                            st.plotly_chart(_fig_a, use_container_width=True)
+
+                                            # Painel de info abaixo
+                                            _ai1, _ai2, _ai3, _ai4, _ai5 = st.columns(5)
+                                            _ai1.metric("⏱️ Duração",       f"{_anim_effort_row['Duração (s)']}s")
+                                            _ai2.metric("💨 Vel. Máx",      f"{_anim_effort_row['Vel. Máx (km/h)']} km/h")
+                                            _ai3.metric("🏁 Vel. Inicial",  f"{_anim_effort_row['Vel. Inicial (km/h)']} km/h")
+                                            _ai4.metric("📏 Distância",     f"{_anim_effort_row['Distância (m)']} m")
+                                            _ai5.metric("📊 % do Máximo",   f"{_anim_effort_row['% do Máximo']}%")
+                                        else:
+                                            st.warning(
+                                                "⚠️ Pontos de campo insuficientes para animar este esforço. "
+                                                "Verifique se o campo foi aplicado e se os timestamps correspondem."
+                                            )
+                                    elif _anim_effort_row is None:
+                                        st.info("💡 Selecione um esforço na tabela acima para ver a **animação no campo**.")
 
                                     # ── Detalhes de zona selecionada ──────────────────
                                     if zona_sel and ov_grade:
