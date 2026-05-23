@@ -2365,6 +2365,80 @@ def processar_efforts_aceleracao(efforts_data):
     
     return pd.DataFrame(records)
 
+# ── Métricas que devem ser SOMADAS ao combinar períodos ──────────────────────
+_METRICAS_SUM = {
+    'Duração (min)', 'Distância (m)', 'Dist. 19-24 km/h (m)',
+    'Dist. > 19 km/h (m)', 'Dist. > 24 km/h (m)', 'PlayerLoad',
+    'Sprints (>24 km/h)', 'Esforços Alta Int.', 'Acc 2-3 (m/s²)',
+    'Dcc 2-3 (m/s²)', 'Acelerações (>3 m/s²)', 'Desacelerações (<-3 m/s²)',
+    'RHIE Blocos', 'Total Pontos',
+}
+# ── Métricas que devem manter o MÁXIMO registrado ────────────────────────────
+_METRICAS_MAX = {
+    'Velocidade Máx (km/h)', 'FC Máx (bpm)', 'Acc Max (m/s²)', 'Dcc Max (m/s²)',
+}
+
+
+def combinar_periodos(resultados_por_periodo: dict) -> list:
+    """
+    Combina os resultados de múltiplos períodos em uma lista única de atletas.
+    - Métricas quantitativas acumuláveis → soma
+    - Métricas de pico (máximos) → máximo
+    - 'Velocidade Média', 'FC Média', 'M/min' → recalculados a partir dos totais
+    - 'Posição', 'Equipe', 'Atleta' → mantidos do primeiro período com dado
+    Retorna lista de dicts no mesmo formato que resultados_por_periodo[periodo].
+    """
+    from collections import defaultdict
+    atleta_rows: dict[str, list] = defaultdict(list)
+    for resultados in resultados_por_periodo.values():
+        for row in resultados:
+            nome = row.get('Atleta', '')
+            if nome:
+                atleta_rows[nome].append(row)
+
+    combinados = []
+    for nome, rows in atleta_rows.items():
+        comb = {'Atleta': nome}
+        # Copia campos não-numéricos do primeiro registro disponível
+        for campo in ('Posição', 'Equipe'):
+            comb[campo] = next((r.get(campo, '') for r in rows if r.get(campo)), '')
+
+        # Coleta todas as chaves numéricas
+        todas_keys = set()
+        for r in rows:
+            todas_keys |= set(r.keys())
+        todas_keys -= {'Atleta', 'Posição', 'Equipe'}
+
+        for key in todas_keys:
+            vals = [r[key] for r in rows if key in r and r[key] is not None]
+            if not vals:
+                comb[key] = 0
+            elif key in _METRICAS_MAX:
+                comb[key] = max(vals)
+            elif key in _METRICAS_SUM:
+                comb[key] = round(sum(vals), 2)
+            else:
+                # Por padrão: soma (cobre novos campos quantitativos futuros)
+                try:
+                    comb[key] = round(sum(float(v) for v in vals), 2)
+                except (TypeError, ValueError):
+                    comb[key] = vals[0]
+
+        # Recalcula métricas derivadas a partir dos totais combinados
+        dur_min = comb.get('Duração (min)', 0)
+        dist_m  = comb.get('Distância (m)', 0)
+        if dur_min and dur_min > 0:
+            comb['M/min'] = round(dist_m / dur_min, 1)
+        # FC Média e Velocidade Média: média simples dos períodos (aproximação)
+        for campo_avg in ('FC Média (bpm)', 'Velocidade Média (km/h)'):
+            vals_avg = [r.get(campo_avg, 0) for r in rows if r.get(campo_avg)]
+            if vals_avg:
+                comb[campo_avg] = round(sum(vals_avg) / len(vals_avg), 1)
+
+        combinados.append(comb)
+    return combinados
+
+
 # PARTE 4 - FUNÇÕES DE GRÁFICOS, INTENSIDADE E CLASSIFICAÇÃO
 
 def criar_grafico_velocidade_tempo(sensor_points, athlete_name, window_size=31, show_trend=True, intensity_filter=None):
@@ -3254,31 +3328,38 @@ def main():
                     api = st.session_state.api
                     periods_raw = api.get_activity_periods(activity_id)
                     
-                    period_options = ['Atividade Completa']
-                    period_ids = {'Atividade Completa': None}
+                    # Se a API retornou períodos individuais, usamos apenas eles.
+                    # "Atividade Completa" (period_id=None) é mantida APENAS como
+                    # fallback quando nenhum período é encontrado.
                     if periods_raw and isinstance(periods_raw, list):
+                        period_options = []
+                        period_ids = {}
                         for p in periods_raw:
                             period_options.append(p.get('name', 'Período'))
                             period_ids[p.get('name', 'Período')] = p.get('id')
                         st.session_state.period_options = period_options
                         st.session_state.period_ids = period_ids
-                        st.success(f"✅ {len(period_options)-1} períodos encontrados")
+                        st.success(f"✅ {len(period_options)} períodos encontrados")
                     else:
+                        # Sem períodos — fallback para atividade completa
+                        period_options = ['Atividade Completa']
+                        period_ids = {'Atividade Completa': None}
                         st.session_state.period_options = period_options
-                        st.session_state.period_ids = {'Atividade Completa': None}
-                
+                        st.session_state.period_ids = period_ids
+
                 st.subheader("📊 Selecionar Período(s)")
+                _default_periodos = st.session_state.period_options  # todos por padrão
                 periodos_selecionados = st.multiselect(
                     "Selecione um ou mais períodos para análise:",
                     options=st.session_state.period_options,
-                    default=['Atividade Completa']
+                    default=_default_periodos
                 )
                 st.session_state.periodos_selecionados = periodos_selecionados
-                
+
                 if st.button("🔍 Buscar Atletas da Atividade"):
                     with st.spinner("Buscando atletas..."):
                         api = st.session_state.api
-                        primeiro_periodo = periodos_selecionados[0] if periodos_selecionados else 'Atividade Completa'
+                        primeiro_periodo = periodos_selecionados[0] if periodos_selecionados else (st.session_state.period_options[0] if st.session_state.period_options else 'Atividade Completa')
                         period_id = st.session_state.period_ids.get(primeiro_periodo)
                         
                         if period_id:
@@ -3537,7 +3618,17 @@ def main():
             dados_efforts_acc_por_periodo[periodo_nome] = dados_efforts_acc
             dados_posicao_por_periodo[periodo_nome] = dados_posicao
             dados_eventos_por_periodo[periodo_nome] = dados_eventos
-        
+
+        # ── Gerar "Períodos Combinados" quando há mais de 1 período ──────────
+        _CHAVE_COMBINADO = '📊 Períodos Combinados'
+        _periodos_reais = [k for k in resultados_por_periodo if k != _CHAVE_COMBINADO]
+        if len(_periodos_reais) > 1:
+            _res_combinado = combinar_periodos(
+                {k: resultados_por_periodo[k] for k in _periodos_reais}
+            )
+            if _res_combinado:
+                resultados_por_periodo[_CHAVE_COMBINADO] = _res_combinado
+
         if resultados_por_periodo:
             st.subheader("📊 Métricas Biométricas")
             col1, col2, col3, col4 = st.columns(4)
@@ -3827,6 +3918,27 @@ def main():
                             for _pm in periodos_mapa_sel:
                                 vel_raw += dados_efforts_vel_por_periodo.get(_pm, {}).get(atleta_mapa, [])
                                 acc_raw += dados_efforts_acc_por_periodo.get(_pm, {}).get(atleta_mapa, [])
+
+                            # ── Filtrar esforços pelo intervalo de timestamps do período ──
+                            # A API Catapult às vezes retorna esforços de toda a atividade
+                            # mesmo quando um period_id é passado. Usamos os timestamps do
+                            # sensor (ts_pos ou ts_gps) como referência do janela válida.
+                            _ts_ref = []
+                            for _pm in periodos_mapa_sel:
+                                _dp = dados_posicao_por_periodo.get(_pm, {}).get(atleta_mapa, {})
+                                _ts_ref += [t for t in _dp.get('ts_pos', []) if t and t > 0]
+                                _ts_ref += [t for t in _dp.get('ts_gps', []) if t and t > 0]
+                            if _ts_ref:
+                                _ts_ef_min = min(_ts_ref)
+                                _ts_ef_max = max(_ts_ref)
+                                vel_raw = [
+                                    e for e in vel_raw
+                                    if _ts_ef_min <= float(e.get('start_time') or 0) <= _ts_ef_max
+                                ]
+                                acc_raw = [
+                                    e for e in acc_raw
+                                    if _ts_ef_min <= float(e.get('start_time') or 0) <= _ts_ef_max
+                                ]
 
                             tipo_esf = st.radio(
                                 "Tipo de esforço:",
