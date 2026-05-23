@@ -1955,6 +1955,7 @@ def calcular_metricas(sensor_points, athlete_name, min_dur_s=None):
     distancia_total = 0
     dist_hi = 0
     dist_sprint = 0
+    dist_z4 = 0          # Zone 4: 19-24 km/h
     player_load = 0
     velocidades = []
     fcs = []
@@ -1965,6 +1966,9 @@ def calcular_metricas(sensor_points, athlete_name, min_dur_s=None):
     in_hi = False
     sprints = 0
     n_esforcos_hi = 0
+    rhie_effort_frames = []   # timestamps de cada entrada >19 km/h
+    _frame_idx = 0
+    _in_hi_rhie = False
 
     for ponto in sensor_points:
         if ponto.get('v') is not None:
@@ -1980,6 +1984,8 @@ def calcular_metricas(sensor_points, athlete_name, min_dur_s=None):
                     dist_hi += dist_seg
                 if v_kmh > 24:
                     dist_sprint += dist_seg
+                if 19 < v_kmh <= 24:
+                    dist_z4 += dist_seg
 
             if v_kmh > 24 and not in_sprint:
                 sprints += 1
@@ -1993,7 +1999,15 @@ def calcular_metricas(sensor_points, athlete_name, min_dur_s=None):
             elif v_kmh <= 19:
                 in_hi = False
 
+            # Registra frame de entrada em alta intensidade para RHIE
+            if v_kmh > 19 and not _in_hi_rhie:
+                rhie_effort_frames.append(_frame_idx)
+                _in_hi_rhie = True
+            elif v_kmh <= 19:
+                _in_hi_rhie = False
+
             prev_v = v_ms
+        _frame_idx += 1
 
         if ponto.get('a') is not None:
             acc = float(ponto['a'])
@@ -2009,28 +2023,58 @@ def calcular_metricas(sensor_points, athlete_name, min_dur_s=None):
 
     # Conta eventos de acc/dec com duração mínima sustentada
     acc_arr = np.array(acc_list)
-    mask_acel = detectar_eventos_acc(acc_arr, 3.0, min_dur_s=min_dur_s, acima=True)
-    mask_decel = detectar_eventos_acc(acc_arr, 3.0, min_dur_s=min_dur_s, acima=False)
-    acels_intensas = int(mask_acel.sum())
+    mask_acel   = detectar_eventos_acc(acc_arr, 3.0, min_dur_s=min_dur_s, acima=True)
+    mask_decel  = detectar_eventos_acc(acc_arr, 3.0, min_dur_s=min_dur_s, acima=False)
+    mask_acel23 = detectar_eventos_acc(acc_arr, 2.0, min_dur_s=min_dur_s, acima=True)  & ~mask_acel
+    mask_dec23  = detectar_eventos_acc(acc_arr, 2.0, min_dur_s=min_dur_s, acima=False) & ~mask_decel
+    acels_intensas    = int(mask_acel.sum())
     desacels_intensas = int(mask_decel.sum())
+    acels_23          = int(mask_acel23.sum())
+    desacels_23       = int(mask_dec23.sum())
+    acc_max = float(np.max(acc_arr))  if len(acc_arr) > 0 else 0.0
+    dcc_max = float(np.min(acc_arr))  if len(acc_arr) > 0 else 0.0  # valor mais negativo
+
+    # RHIE: blocos de esforços repetidos em alta intensidade (≥2 entradas >19 km/h separadas por <21s)
+    rhie_blocos = 0
+    if len(rhie_effort_frames) >= 2:
+        _cluster_size = 1
+        _in_cluster   = False
+        for _j in range(1, len(rhie_effort_frames)):
+            _gap = rhie_effort_frames[_j] - rhie_effort_frames[_j - 1]
+            if _gap <= 210:          # < 21 segundos a 10 Hz
+                _cluster_size += 1
+                if _cluster_size == 2 and not _in_cluster:
+                    rhie_blocos += 1
+                    _in_cluster = True
+            else:
+                _cluster_size = 1
+                _in_cluster   = False
 
     duracao_min = len(sensor_points) * 0.1 / 60
+    m_min = round(distancia_total / duracao_min, 1) if duracao_min > 0 else 0.0
 
     return {
         'Atleta': athlete_name,
         'Duração (min)': round(duracao_min, 1),
         'Distância (m)': round(distancia_total, 0),
+        'Dist. 19-24 km/h (m)': round(dist_z4, 0),
         'Dist. > 19 km/h (m)': round(dist_hi, 0),
         'Dist. > 24 km/h (m)': round(dist_sprint, 0),
         'PlayerLoad': round(player_load, 0),
         'Velocidade Máx (km/h)': round(max(velocidades), 1) if velocidades else 0,
         'Velocidade Média (km/h)': round(np.mean(velocidades), 1) if velocidades else 0,
+        'M/min': m_min,
         'FC Máx (bpm)': round(max(fcs), 0) if fcs else 0,
         'FC Média (bpm)': round(np.mean(fcs), 0) if fcs else 0,
         'Sprints (>24 km/h)': sprints,
         'Esforços Alta Int.': n_esforcos_hi,
+        'Acc 2-3 (m/s²)': acels_23,
+        'Dcc 2-3 (m/s²)': desacels_23,
         'Acelerações (>3 m/s²)': acels_intensas,
         'Desacelerações (<-3 m/s²)': desacels_intensas,
+        'Acc Max (m/s²)': round(acc_max, 2),
+        'Dcc Max (m/s²)': round(abs(dcc_max), 2),
+        'RHIE Blocos': rhie_blocos,
         'Total Pontos': len(sensor_points)
     }
 
@@ -3527,6 +3571,8 @@ def main():
                 "📊 Janelas Temporais Móveis",
                 "💪 Carga Neuromuscular",
                 "📅 Microciclo ACWR",
+                "📋 Tabela Descritiva",
+                "📊 Por Posição",
             ])
             
             # ==================== ABA 1: GRÁFICOS COMPARATIVOS ====================
@@ -4697,6 +4743,269 @@ def main():
                         st.info("Carregue os dados de atletas antes de calcular o ACWR.")
                 else:
                     st.info("Carregue os dados da API para usar esta funcionalidade.")
+
+            # ══════════════════════════════════════════════════════════════
+            # ABA 7: TABELA DESCRITIVA
+            # ══════════════════════════════════════════════════════════════
+            with abas[6]:
+                st.subheader("📋 Tabela Descritiva de Desempenho")
+                st.caption("Coloração por percentil do grupo: 🟢 Top 33% · 🟡 Médio · 🔴 Bottom 33%")
+
+                _td_periodos = list(resultados_por_periodo.keys())
+                if _td_periodos:
+                    _td_periodo_sel = st.selectbox("Período:", _td_periodos, key="td_periodo_sel")
+
+                    if resultados_por_periodo.get(_td_periodo_sel):
+                        _df_td = pd.DataFrame(resultados_por_periodo[_td_periodo_sel])
+
+                        # Calcula %Vmax relativo ao máximo do grupo
+                        if 'Velocidade Máx (km/h)' in _df_td.columns:
+                            _vmax_grupo = _df_td['Velocidade Máx (km/h)'].max()
+                            _df_td['%Vmax'] = (_df_td['Velocidade Máx (km/h)'] / _vmax_grupo * 100).round(1) if _vmax_grupo > 0 else 0
+
+                        # Colunas exibidas na tabela (ordem igual ao Power BI)
+                        _TD_COLS = [c for c in [
+                            'Atleta', 'Posição', 'Duração (min)', 'Distância (m)',
+                            'Dist. 19-24 km/h (m)', 'Dist. > 24 km/h (m)',
+                            'Dist. > 19 km/h (m)', 'Sprints (>24 km/h)',
+                            'Velocidade Máx (km/h)', '%Vmax', 'M/min',
+                            'Acc 2-3 (m/s²)', 'Dcc 2-3 (m/s²)',
+                            'Acelerações (>3 m/s²)', 'Desacelerações (<-3 m/s²)',
+                            'Acc Max (m/s²)', 'Dcc Max (m/s²)',
+                            'PlayerLoad', 'RHIE Blocos',
+                        ] if c in _df_td.columns]
+
+                        _df_td_show = _df_td[_TD_COLS].copy()
+
+                        # Colunas numéricas para coloração por percentil
+                        _TD_NUM = [c for c in _TD_COLS if c not in ('Atleta', 'Posição')]
+
+                        def _td_style_percentile(col):
+                            if col.name not in _TD_NUM:
+                                return [''] * len(col)
+                            p33 = col.quantile(0.33)
+                            p66 = col.quantile(0.66)
+                            out = []
+                            for v in col:
+                                try:
+                                    vf = float(v)
+                                    if vf >= p66:
+                                        out.append('background-color:#1a5c2e;color:white;font-weight:bold')
+                                    elif vf >= p33:
+                                        out.append('background-color:#7d6a08;color:white')
+                                    else:
+                                        out.append('background-color:#7b1a1a;color:white')
+                                except Exception:
+                                    out.append('')
+                            return out
+
+                        _styled_td = (
+                            _df_td_show.style
+                            .apply(_td_style_percentile, axis=0)
+                            .format({c: '{:.0f}' for c in _TD_NUM
+                                     if c not in ('M/min','%Vmax','Acc Max (m/s²)','Dcc Max (m/s²)')})
+                            .format({'M/min': '{:.1f}', '%Vmax': '{:.1f}%',
+                                     'Acc Max (m/s²)': '{:.2f}', 'Dcc Max (m/s²)': '{:.2f}'},
+                                    na_rep='—')
+                        )
+                        st.dataframe(_styled_td, use_container_width=True, hide_index=True)
+
+                        # ── Valores Médios do Grupo ──────────────────────────────
+                        st.markdown("---")
+                        st.markdown("### 📊 Valores Médios do Grupo")
+                        _td_med = _df_td[_TD_NUM].mean()
+                        _grp_cols = st.columns(6)
+                        _grp_kpis = [
+                            ('Distância (m)',          '📏', '{:,.0f} m'),
+                            ('M/min',                  '⚡', '{:.1f} m/min'),
+                            ('Dist. > 19 km/h (m)',    '🏃', '{:,.0f} m'),
+                            ('Sprints (>24 km/h)',      '💨', '{:.0f}'),
+                            ('Acelerações (>3 m/s²)',   '🔼', '{:.0f}'),
+                            ('PlayerLoad',             '⚙️', '{:,.0f}'),
+                        ]
+                        for _gi, (_mk, _ico, _fmt) in enumerate(_grp_kpis):
+                            if _mk in _td_med.index:
+                                _grp_cols[_gi].metric(f"{_ico} {_mk}", _fmt.format(_td_med[_mk]))
+
+                        # Segunda linha de médias
+                        _grp_cols2 = st.columns(6)
+                        _grp_kpis2 = [
+                            ('Acc 2-3 (m/s²)',         '🟡', '{:.0f}'),
+                            ('Dcc 2-3 (m/s²)',         '🟡', '{:.0f}'),
+                            ('Desacelerações (<-3 m/s²)', '🔽', '{:.0f}'),
+                            ('RHIE Blocos',             '🔁', '{:.0f}'),
+                            ('Velocidade Máx (km/h)',   '💨', '{:.1f} km/h'),
+                            ('%Vmax',                   '📈', '{:.1f}%'),
+                        ]
+                        for _gi2, (_mk2, _ico2, _fmt2) in enumerate(_grp_kpis2):
+                            if _mk2 in _td_med.index:
+                                _grp_cols2[_gi2].metric(f"{_ico2} {_mk2}", _fmt2.format(_td_med[_mk2]))
+
+                        # ── Download CSV ─────────────────────────────────────────
+                        st.download_button(
+                            "📥 Exportar Tabela (CSV)",
+                            _df_td_show.to_csv(index=False).encode('utf-8'),
+                            f"tabela_descritiva_{_td_periodo_sel}.csv",
+                            mime='text/csv'
+                        )
+                    else:
+                        st.info("Nenhum dado disponível para este período.")
+                else:
+                    st.info("Carregue os dados para visualizar a tabela descritiva.")
+
+            # ══════════════════════════════════════════════════════════════
+            # ABA 8: POR POSIÇÃO
+            # ══════════════════════════════════════════════════════════════
+            with abas[7]:
+                st.subheader("📊 Análise por Posição")
+                st.caption("Média das métricas agrupada por posição tática dos atletas.")
+
+                _pos_periodos = list(resultados_por_periodo.keys())
+                if _pos_periodos:
+                    _pos_periodo_sel = st.selectbox("Período:", _pos_periodos, key="pos_periodo_sel")
+
+                    if resultados_por_periodo.get(_pos_periodo_sel):
+                        _df_pos_raw = pd.DataFrame(resultados_por_periodo[_pos_periodo_sel])
+
+                        if 'Posição' not in _df_pos_raw.columns or _df_pos_raw['Posição'].replace('', np.nan).isna().all():
+                            st.warning("⚠️ Dados de posição não disponíveis. Verifique se as posições foram cadastradas na API Catapult.")
+                        else:
+                            _df_pos_raw = _df_pos_raw[_df_pos_raw['Posição'].notna() & (_df_pos_raw['Posição'] != '')]
+                            _df_pos_grp = _df_pos_raw.groupby('Posição', as_index=False).mean(numeric_only=True)
+
+                            # Paleta de cores por posição
+                            _POS_CORES = {
+                                'Zagueiro':    '#1565C0', 'Lateral':    '#0288D1',
+                                'Volante':     '#2E7D32', 'Meio campo': '#558B2F',
+                                'Atacante':    '#E53935', 'Goleiro':    '#6A1B9A',
+                            }
+                            _cores_pos = [_POS_CORES.get(p, '#546E7A') for p in _df_pos_grp['Posição']]
+
+                            def _bar_pos(y_col, title, suffix=''):
+                                if y_col not in _df_pos_grp.columns:
+                                    return None
+                                _f = go.Figure(go.Bar(
+                                    x=_df_pos_grp['Posição'], y=_df_pos_grp[y_col],
+                                    marker_color=_cores_pos, text=_df_pos_grp[y_col].round(1),
+                                    textposition='outside',
+                                    hovertemplate=f'%{{x}}<br>{y_col}: %{{y:.1f}}{suffix}<extra></extra>',
+                                ))
+                                _f.update_layout(
+                                    title=dict(text=title, font=dict(color='white', size=13)),
+                                    plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                    font=dict(color='white'),
+                                    xaxis=dict(gridcolor='#333'),
+                                    yaxis=dict(gridcolor='#333', title=y_col),
+                                    height=320, margin=dict(t=45, b=10, l=10, r=10),
+                                    showlegend=False,
+                                )
+                                return _f
+
+                            # Linha 1: Distância Total + M/min
+                            _c1, _c2 = st.columns(2)
+                            with _c1:
+                                _f = _bar_pos('Distância (m)', 'Média de Distância Total por Posição', ' m')
+                                if _f: st.plotly_chart(_f, use_container_width=True)
+                            with _c2:
+                                _f = _bar_pos('M/min', 'Média de M/min por Posição', ' m/min')
+                                if _f: st.plotly_chart(_f, use_container_width=True)
+
+                            # Linha 2: Zona 4 + Zona 5 (>24 km/h)
+                            _c3, _c4 = st.columns(2)
+                            with _c3:
+                                _f = _bar_pos('Dist. 19-24 km/h (m)', 'Média de Zona 4 (19-24 km/h) por Posição', ' m')
+                                if _f: st.plotly_chart(_f, use_container_width=True)
+                            with _c4:
+                                _f = _bar_pos('Dist. > 24 km/h (m)', 'Média de Zona 5 (>24 km/h) por Posição', ' m')
+                                if _f: st.plotly_chart(_f, use_container_width=True)
+
+                            # Linha 3: HSR (>19) + Sprints
+                            _c5, _c6 = st.columns(2)
+                            with _c5:
+                                _f = _bar_pos('Dist. > 19 km/h (m)', 'Média de HSR Distance (>19 km/h) por Posição', ' m')
+                                if _f: st.plotly_chart(_f, use_container_width=True)
+                            with _c6:
+                                _f = _bar_pos('Sprints (>24 km/h)', 'Média de Sprints por Posição')
+                                if _f: st.plotly_chart(_f, use_container_width=True)
+
+                            # Linha 4: Acc 2-3 + Dcc 2-3 (gráfico agrupado)
+                            _acc23_col = 'Acc 2-3 (m/s²)'
+                            _dcc23_col = 'Dcc 2-3 (m/s²)'
+                            if _acc23_col in _df_pos_grp.columns and _dcc23_col in _df_pos_grp.columns:
+                                _c7, _c8 = st.columns(2)
+                                with _c7:
+                                    _fig_acc = go.Figure()
+                                    _fig_acc.add_trace(go.Bar(
+                                        x=_df_pos_grp['Posição'], y=_df_pos_grp[_acc23_col],
+                                        name='Acc 2-3', marker_color='#FFA000',
+                                        text=_df_pos_grp[_acc23_col].round(1), textposition='outside',
+                                    ))
+                                    _fig_acc.add_trace(go.Bar(
+                                        x=_df_pos_grp['Posição'], y=_df_pos_grp[_dcc23_col],
+                                        name='Dcc 2-3', marker_color='#558B2F',
+                                        text=_df_pos_grp[_dcc23_col].round(1), textposition='outside',
+                                    ))
+                                    _fig_acc.update_layout(
+                                        title=dict(text='Média de Acc e Dcc 2-3 por Posição', font=dict(color='white', size=13)),
+                                        barmode='group', plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                        font=dict(color='white'), xaxis=dict(gridcolor='#333'),
+                                        yaxis=dict(gridcolor='#333'), height=320,
+                                        margin=dict(t=45, b=10, l=10, r=10),
+                                        legend=dict(font=dict(color='white')),
+                                    )
+                                    st.plotly_chart(_fig_acc, use_container_width=True)
+
+                                with _c8:
+                                    # Acc >3 + Dcc >3 agrupados
+                                    _fig_acc3 = go.Figure()
+                                    if 'Acelerações (>3 m/s²)' in _df_pos_grp.columns:
+                                        _fig_acc3.add_trace(go.Bar(
+                                            x=_df_pos_grp['Posição'], y=_df_pos_grp['Acelerações (>3 m/s²)'],
+                                            name='Acc >3', marker_color='#E53935',
+                                            text=_df_pos_grp['Acelerações (>3 m/s²)'].round(1), textposition='outside',
+                                        ))
+                                    if 'Desacelerações (<-3 m/s²)' in _df_pos_grp.columns:
+                                        _fig_acc3.add_trace(go.Bar(
+                                            x=_df_pos_grp['Posição'], y=_df_pos_grp['Desacelerações (<-3 m/s²)'],
+                                            name='Dcc >3', marker_color='#1565C0',
+                                            text=_df_pos_grp['Desacelerações (<-3 m/s²)'].round(1), textposition='outside',
+                                        ))
+                                    _fig_acc3.update_layout(
+                                        title=dict(text='Média de Acc e Dcc >3 por Posição', font=dict(color='white', size=13)),
+                                        barmode='group', plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                        font=dict(color='white'), xaxis=dict(gridcolor='#333'),
+                                        yaxis=dict(gridcolor='#333'), height=320,
+                                        margin=dict(t=45, b=10, l=10, r=10),
+                                        legend=dict(font=dict(color='white')),
+                                    )
+                                    st.plotly_chart(_fig_acc3, use_container_width=True)
+
+                            # Linha 5: PlayerLoad + RHIE Blocos
+                            _c9, _c10 = st.columns(2)
+                            with _c9:
+                                _f = _bar_pos('PlayerLoad', 'Média de PlayerLoad por Posição')
+                                if _f: st.plotly_chart(_f, use_container_width=True)
+                            with _c10:
+                                _f = _bar_pos('RHIE Blocos', 'Média de RHIE Blocos por Posição')
+                                if _f: st.plotly_chart(_f, use_container_width=True)
+
+                            # Tabela resumo por posição
+                            st.markdown("---")
+                            st.markdown("### 📋 Resumo por Posição")
+                            _TD_POS_COLS = [c for c in [
+                                'Posição', 'Distância (m)', 'M/min', 'Dist. 19-24 km/h (m)',
+                                'Dist. > 24 km/h (m)', 'Sprints (>24 km/h)', 'Velocidade Máx (km/h)',
+                                'Acc 2-3 (m/s²)', 'Dcc 2-3 (m/s²)', 'Acelerações (>3 m/s²)',
+                                'Desacelerações (<-3 m/s²)', 'PlayerLoad', 'RHIE Blocos',
+                            ] if c in _df_pos_grp.columns]
+                            st.dataframe(
+                                _df_pos_grp[_TD_POS_COLS].round(1),
+                                use_container_width=True, hide_index=True
+                            )
+                    else:
+                        st.info("Nenhum dado disponível para este período.")
+                else:
+                    st.info("Carregue os dados para visualizar a análise por posição.")
 
         else:
             st.warning("Nenhum dado encontrado")
