@@ -2526,6 +2526,8 @@ def calcular_efforts_velocidade_sensor(
                 'Banda':              banda_id,
                 '_start_ts':          _ts_s,
                 '_end_ts':            _ts_e_val,
+                '_seg_start_idx':     seg_s,
+                '_seg_end_idx':       seg_e,
             })
             esf_num += 1
 
@@ -2607,6 +2609,8 @@ def calcular_efforts_aceleracao_sensor(
                 'Banda':          banda_id,
                 '_start_ts':      _ts_s,
                 '_end_ts':        _ts_e_val,
+                '_seg_start_idx': seg_s,
+                '_seg_end_idx':   seg_e,
             })
             esf_num += 1
 
@@ -4289,23 +4293,38 @@ def main():
                             # ── Computar coords do esforço ANTECIPADO ──────────────
                             # (usado no highlight do fig_campo E na animação abaixo)
                             xs_a, ys_a, vel_a, acc_a = [], [], [], []
-                            if (_anim_effort_row is not None
-                                    and _anim_start_ts > 0
-                                    and _anim_end_ts > 0
-                                    and xn):
-                                # Tentativa 1: matching por timestamp exato
-                                if ts_pos_campo and len(ts_pos_campo) == len(xn):
-                                    _ts_c = np.array(ts_pos_campo)
-                                    _m    = (_ts_c >= _anim_start_ts) & (_ts_c <= _anim_end_ts)
-                                    if _m.any():
-                                        xs_a  = np.array(xn)[_m].tolist()
-                                        ys_a  = np.array(yn)[_m].tolist()
-                                        vel_a = (np.array(vel_raw_campo)[_m].tolist()
-                                                 if len(vel_raw_campo) == len(xn) else [0]*int(_m.sum()))
-                                        acc_a = (np.array(acc_raw_campo)[_m].tolist()
-                                                 if len(acc_raw_campo) == len(xn) else [0]*int(_m.sum()))
-                                # Tentativa 2: fallback proporcional quando ts não bate
-                                if len(xs_a) < 2 and ts_pos_campo:
+                            if _anim_effort_row is not None and xn:
+                                # ── Tier 0: índices de segmento armazenados pelas
+                                #    funções de sensor — sempre corretos, sem depender
+                                #    de timestamps que podem ser zero.
+                                _seg_si = int(_anim_effort_row.get('_seg_start_idx', -1))
+                                _seg_ei = int(_anim_effort_row.get('_seg_end_idx',   -1))
+                                if 0 <= _seg_si < _seg_ei <= len(xn):
+                                    xs_a  = xn[_seg_si:_seg_ei]
+                                    ys_a  = yn[_seg_si:_seg_ei]
+                                    vel_a = (vel_raw_campo[_seg_si:_seg_ei]
+                                             if len(vel_raw_campo) == len(xn)
+                                             else [0.0] * (_seg_ei - _seg_si))
+                                    acc_a = (acc_raw_campo[_seg_si:_seg_ei]
+                                             if len(acc_raw_campo) == len(xn)
+                                             else [0.0] * (_seg_ei - _seg_si))
+
+                                # ── Tier 1: matching por timestamp exato (fallback)
+                                if len(xs_a) < 2 and _anim_start_ts > 0 and _anim_end_ts > 0:
+                                    if ts_pos_campo and len(ts_pos_campo) == len(xn):
+                                        _ts_c = np.array(ts_pos_campo)
+                                        _m    = (_ts_c >= _anim_start_ts) & (_ts_c <= _anim_end_ts)
+                                        if _m.any():
+                                            xs_a  = np.array(xn)[_m].tolist()
+                                            ys_a  = np.array(yn)[_m].tolist()
+                                            vel_a = (np.array(vel_raw_campo)[_m].tolist()
+                                                     if len(vel_raw_campo) == len(xn) else [0]*int(_m.sum()))
+                                            acc_a = (np.array(acc_raw_campo)[_m].tolist()
+                                                     if len(acc_raw_campo) == len(xn) else [0]*int(_m.sum()))
+
+                                # ── Tier 2: fallback proporcional por timestamp
+                                if (len(xs_a) < 2 and _anim_start_ts > 0
+                                        and _anim_end_ts > 0 and ts_pos_campo):
                                     _ts_min = min(ts_pos_campo)
                                     _ts_max = max(ts_pos_campo)
                                     if _ts_max > _ts_min:
@@ -4320,15 +4339,23 @@ def main():
                                                      if len(vel_raw_campo) == len(xn) else [0]*(_ei-_si))
                                             acc_a = (acc_raw_campo[_si:_ei]
                                                      if len(acc_raw_campo) == len(xn) else [0]*(_ei-_si))
-                                # Tentativa 3: fallback final — use duração como fração do total
-                                if len(xs_a) < 2 and xn:
+
+                                # ── Tier 3: fallback por string de início + duração
+                                if len(xs_a) < 2:
                                     try:
-                                        _dur_s = float(_anim_effort_row.get('Duração (s)', 5))
-                                        _ini_s = 0.0
+                                        _dur_s   = float(_anim_effort_row.get('Duração (s)', 5))
+                                        _ini_s   = 0.0
                                         _ini_str = str(_anim_effort_row.get('Início', ''))
                                         if ':' in _ini_str:
-                                            _parts = _ini_str.split(':')
-                                            _ini_s = int(_parts[0])*60 + float(_parts[1])
+                                            # formato HH:MM:SS ou MM:SS
+                                            _parts = _ini_str.replace('s', '').split(':')
+                                            if len(_parts) == 3:
+                                                _ini_s = int(_parts[0])*3600 + int(_parts[1])*60 + float(_parts[2])
+                                            else:
+                                                _ini_s = int(_parts[0])*60 + float(_parts[1])
+                                        elif _ini_str.endswith('s'):
+                                            # formato "12.3s" — segundos relativos ao início da concatenação
+                                            _ini_s = float(_ini_str[:-1])
                                         _total_s = len(xn) / 10.0  # sensor a 10 Hz
                                         if _total_s > 0:
                                             _sp = max(0.0, min(1.0, _ini_s / _total_s))
@@ -4339,9 +4366,11 @@ def main():
                                                 xs_a  = xn[_si:_ei]
                                                 ys_a  = yn[_si:_ei]
                                                 vel_a = (vel_raw_campo[_si:_ei]
-                                                         if len(vel_raw_campo) == len(xn) else [0]*(_ei-_si))
+                                                         if len(vel_raw_campo) == len(xn)
+                                                         else [0]*(_ei-_si))
                                                 acc_a = (acc_raw_campo[_si:_ei]
-                                                         if len(acc_raw_campo) == len(xn) else [0]*(_ei-_si))
+                                                         if len(acc_raw_campo) == len(xn)
+                                                         else [0]*(_ei-_si))
                                     except Exception:
                                         pass
 
@@ -4555,13 +4584,21 @@ def main():
                                     # ══════════════════════════════════════════════
                                     # ANIMAÇÃO DO ESFORÇO SELECIONADO
                                     # ══════════════════════════════════════════════
-                                    if _anim_effort_row is not None and _anim_start_ts > 0 and _anim_end_ts > 0:
+                                    if _anim_effort_row is not None and len(xs_a) >= 2:
                                         st.markdown("---")
+                                        _vel_max_hdr = _anim_effort_row.get(
+                                            'Vel. Máx (km/h)',
+                                            _anim_effort_row.get('Acc. Máx (m/s²)', '—')
+                                        )
+                                        _vel_unit_hdr = (
+                                            'km/h' if 'Vel. Máx (km/h)' in _anim_effort_row.index
+                                            else 'm/s²'
+                                        )
                                         st.markdown(
                                             f"### 🎬 Animação — Esforço **#{int(_anim_effort_row['Esforço'])}** &nbsp;|&nbsp; "
                                             f"Início: **{_anim_effort_row['Início']}** &nbsp;|&nbsp; "
                                             f"Duração: **{_anim_effort_row['Duração (s)']}s** &nbsp;|&nbsp; "
-                                            f"Vel. Máx: **{_anim_effort_row['Vel. Máx (km/h)']} km/h**"
+                                            f"Vel. Máx: **{_vel_max_hdr} {_vel_unit_hdr}**"
                                         )
 
                                         # xs_a / ys_a já foram calculados acima com fallbacks
