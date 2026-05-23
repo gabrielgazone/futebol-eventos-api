@@ -3995,7 +3995,16 @@ def main():
                                 if _a not in _ats_disponiveis:
                                     _ats_disponiveis.append(_a)
                         if _ats_disponiveis:
-                            atleta_mapa = st.selectbox("Selecione o atleta:", _ats_disponiveis, key="atleta_mapa")
+                            atletas_mapa = st.multiselect(
+                                "Selecione o(s) atleta(s):",
+                                _ats_disponiveis,
+                                default=_ats_disponiveis[:1],
+                                key="atletas_mapa"
+                            )
+                        else:
+                            atletas_mapa = []
+                    # Atleta primário: usado para GPS, calibração do campo e ETAPA 2
+                    atleta_mapa = atletas_mapa[0] if atletas_mapa else None
 
                     if not periodos_mapa_sel:
                         st.info("Selecione pelo menos um período.")
@@ -4446,8 +4455,12 @@ def main():
                                                 zona_sel = None
 
                                     # ── Construir figura ──────────────────────────────
-                                    fig_campo = desenhar_campo_futebol_bonito(
-                                        title=f"📍 {atleta_mapa} — {_label_periodos}")
+                                    _titulo_campo = (
+                                        f"📍 {' + '.join(atletas_mapa)} — {_label_periodos}"
+                                        if len(atletas_mapa) > 1
+                                        else f"📍 {atleta_mapa} — {_label_periodos}"
+                                    )
+                                    fig_campo = desenhar_campo_futebol_bonito(title=_titulo_campo)
 
                                     if modo_viz == "🗺️ Trajetória":
                                         adicionar_trajetoria_campo(fig_campo, xn, yn, vel_raw, atleta_mapa)
@@ -4470,6 +4483,29 @@ def main():
                                     if ov_eventos and _dados_ev_campo and _ev_tipos_sel:
                                         adicionar_eventos_campo(
                                             fig_campo, _dados_ev_campo, _ev_tipos_sel)
+
+                                    # ── Atletas adicionais (trajetória sobreposta) ────
+                                    _PALETTE_EXTRA = [
+                                        '#FF4081','#69F0AE','#FFEB3B',
+                                        '#CE93D8','#FF8A65','#80DEEA'
+                                    ]
+                                    for _ai, _atl_extra in enumerate(
+                                            [a for a in atletas_mapa if a != atleta_mapa]):
+                                        _cor_ex = _PALETTE_EXTRA[_ai % len(_PALETTE_EXTRA)]
+                                        _xn_ex, _yn_ex = [], []
+                                        for _pm in periodos_mapa_sel:
+                                            _dc_ex = dados_posicao_por_periodo.get(
+                                                _pm, {}).get(_atl_extra, {})
+                                            _xn_ex += list(_dc_ex.get('xs', []))
+                                            _yn_ex += list(_dc_ex.get('ys', []))
+                                        if _xn_ex:
+                                            _sbg_ex = max(1, len(_xn_ex) // 3000)
+                                            fig_campo.add_trace(go.Scatter(
+                                                x=_xn_ex[::_sbg_ex], y=_yn_ex[::_sbg_ex],
+                                                mode='markers', name=_atl_extra,
+                                                marker=dict(size=2.5, color=_cor_ex, opacity=0.6),
+                                                showlegend=True
+                                            ))
 
                                     # ── Highlight do esforço selecionado ─────────────
                                     if xs_a and len(xs_a) >= 2:
@@ -4765,51 +4801,106 @@ def main():
                                         except Exception:
                                             st.metric("Área (bbox)", f"{xr*yr:.0f} m²")
 
-                                    # ── Comparação entre períodos ─────────────────────
-                                    if len(dados_posicao_por_periodo) > 1:
-                                        st.markdown("---")
-                                        st.markdown("#### 🔄 Comparação entre Períodos")
-                                        periodos_lista = list(dados_posicao_por_periodo.keys())
-                                        cp1, cp2 = st.columns(2)
-                                        with cp1:
-                                            per1 = st.selectbox("Período A:", periodos_lista,
-                                                                 index=0, key="cmp_p1")
-                                        with cp2:
-                                            per2 = st.selectbox("Período B:", periodos_lista,
-                                                                 index=min(1, len(periodos_lista)-1),
-                                                                 key="cmp_p2")
+                                    # ── Comparação (Períodos ou Atletas) ─────────────
+                                    st.markdown("---")
+                                    st.markdown("#### 🔄 Comparação")
+                                    _cmp_modo = st.radio(
+                                        "Comparar:",
+                                        ["📅 Períodos", "👤 Atletas"],
+                                        horizontal=True, key="cmp_modo"
+                                    )
 
-                                        if per1 != per2:
-                                            d1c = dados_posicao_por_periodo.get(per1, {}).get(atleta_mapa, {})
-                                            d2c = dados_posicao_por_periodo.get(per2, {}).get(atleta_mapa, {})
-                                            # Catapult x/y prioritário; cai para GPS fallback
-                                            cfg1 = st.session_state.get(
-                                                f"campo_cfg__{atleta_mapa}", cfg)
-                                            cfg2 = cfg1  # mesmo campo físico para todos os períodos
-                                            if d1c.get('xs') and d2c.get('xs'):
-                                                x1c, y1c = list(d1c['xs']), list(d1c['ys'])
-                                                x2c, y2c = list(d2c['xs']), list(d2c['ys'])
-                                            elif d1c.get('lats') and d2c.get('lats') and cfg1 and cfg2:
-                                                x1c, y1c = gps_para_campo_coords(
-                                                    d1c['lats'], d1c['lons'], cfg1)
-                                                x2c, y2c = gps_para_campo_coords(
-                                                    d2c['lats'], d2c['lons'], cfg2)
-                                            else:
-                                                x1c = x2c = []
-                                            if x1c and x2c:
-                                                fig_cmp = desenhar_campo_futebol_bonito(
-                                                    title=f"Comparação: {per1} (azul) vs {per2} (rosa)")
-                                                fig_cmp.add_trace(go.Scatter(
-                                                    x=x1c, y=y1c, mode='markers', name=per1,
-                                                    marker=dict(size=2, color='#00E5FF', opacity=0.5)))
-                                                fig_cmp.add_trace(go.Scatter(
-                                                    x=x2c, y=y2c, mode='markers', name=per2,
-                                                    marker=dict(size=2, color='#FF4081', opacity=0.5)))
-                                                st.plotly_chart(fig_cmp, use_container_width=True)
-                                            else:
-                                                st.info("Dados de posição não disponíveis em um dos períodos selecionados.")
+                                    if _cmp_modo == "📅 Períodos":
+                                        periodos_lista = list(dados_posicao_por_periodo.keys())
+                                        if len(periodos_lista) < 2:
+                                            st.info("Carregue pelo menos 2 períodos para usar esta comparação.")
                                         else:
-                                            st.info("Selecione dois períodos diferentes para comparar.")
+                                            cp1, cp2 = st.columns(2)
+                                            with cp1:
+                                                per1 = st.selectbox("Período A:", periodos_lista,
+                                                                     index=0, key="cmp_p1")
+                                            with cp2:
+                                                per2 = st.selectbox("Período B:", periodos_lista,
+                                                                     index=min(1, len(periodos_lista)-1),
+                                                                     key="cmp_p2")
+
+                                            if per1 != per2:
+                                                d1c = dados_posicao_por_periodo.get(per1, {}).get(atleta_mapa, {})
+                                                d2c = dados_posicao_por_periodo.get(per2, {}).get(atleta_mapa, {})
+                                                cfg_ref = st.session_state.get(f"campo_cfg__{atleta_mapa}", cfg)
+                                                if d1c.get('xs') and d2c.get('xs'):
+                                                    x1c, y1c = list(d1c['xs']), list(d1c['ys'])
+                                                    x2c, y2c = list(d2c['xs']), list(d2c['ys'])
+                                                elif d1c.get('lats') and d2c.get('lats') and cfg_ref:
+                                                    x1c, y1c = gps_para_campo_coords(d1c['lats'], d1c['lons'], cfg_ref)
+                                                    x2c, y2c = gps_para_campo_coords(d2c['lats'], d2c['lons'], cfg_ref)
+                                                else:
+                                                    x1c = x2c = []
+                                                if x1c and x2c:
+                                                    fig_cmp = desenhar_campo_futebol_bonito(
+                                                        title=f"Comparação: {per1} (azul) vs {per2} (rosa)")
+                                                    _s1 = max(1, len(x1c)//3000)
+                                                    _s2 = max(1, len(x2c)//3000)
+                                                    fig_cmp.add_trace(go.Scatter(
+                                                        x=x1c[::_s1], y=y1c[::_s1], mode='markers', name=per1,
+                                                        marker=dict(size=2, color='#00E5FF', opacity=0.5)))
+                                                    fig_cmp.add_trace(go.Scatter(
+                                                        x=x2c[::_s2], y=y2c[::_s2], mode='markers', name=per2,
+                                                        marker=dict(size=2, color='#FF4081', opacity=0.5)))
+                                                    st.plotly_chart(fig_cmp, use_container_width=True)
+                                                else:
+                                                    st.info("Dados de posição não disponíveis em um dos períodos.")
+                                            else:
+                                                st.info("Selecione dois períodos diferentes para comparar.")
+
+                                    else:  # Comparar Atletas
+                                        _ats_cmp = _ats_disponiveis if _ats_disponiveis else [atleta_mapa]
+                                        if len(_ats_cmp) < 2:
+                                            st.info("Carregue pelo menos 2 atletas para usar esta comparação.")
+                                        else:
+                                            ca1, ca2 = st.columns(2)
+                                            with ca1:
+                                                atl_A = st.selectbox("Atleta A:", _ats_cmp,
+                                                                      index=0, key="cmp_a1")
+                                            with ca2:
+                                                atl_B = st.selectbox("Atleta B:", _ats_cmp,
+                                                                      index=min(1, len(_ats_cmp)-1),
+                                                                      key="cmp_a2")
+
+                                            if atl_A != atl_B:
+                                                # Combina todos os períodos selecionados para cada atleta
+                                                xa, ya, xb, yb = [], [], [], []
+                                                for _pm in periodos_mapa_sel:
+                                                    _dA = dados_posicao_por_periodo.get(_pm, {}).get(atl_A, {})
+                                                    _dB = dados_posicao_por_periodo.get(_pm, {}).get(atl_B, {})
+                                                    cfg_ref = st.session_state.get(f"campo_cfg__{atleta_mapa}", cfg)
+                                                    if _dA.get('xs'):
+                                                        xa += list(_dA['xs']); ya += list(_dA['ys'])
+                                                    elif _dA.get('lats') and cfg_ref:
+                                                        _gxa, _gya = gps_para_campo_coords(_dA['lats'], _dA['lons'], cfg_ref)
+                                                        xa += _gxa; ya += _gya
+                                                    if _dB.get('xs'):
+                                                        xb += list(_dB['xs']); yb += list(_dB['ys'])
+                                                    elif _dB.get('lats') and cfg_ref:
+                                                        _gxb, _gyb = gps_para_campo_coords(_dB['lats'], _dB['lons'], cfg_ref)
+                                                        xb += _gxb; yb += _gyb
+
+                                                if xa and xb:
+                                                    fig_cmp = desenhar_campo_futebol_bonito(
+                                                        title=f"Comparação: {atl_A} (azul) vs {atl_B} (rosa)")
+                                                    _sa = max(1, len(xa)//3000)
+                                                    _sb = max(1, len(xb)//3000)
+                                                    fig_cmp.add_trace(go.Scatter(
+                                                        x=xa[::_sa], y=ya[::_sa], mode='markers', name=atl_A,
+                                                        marker=dict(size=2, color='#00E5FF', opacity=0.5)))
+                                                    fig_cmp.add_trace(go.Scatter(
+                                                        x=xb[::_sb], y=yb[::_sb], mode='markers', name=atl_B,
+                                                        marker=dict(size=2, color='#FF4081', opacity=0.5)))
+                                                    st.plotly_chart(fig_cmp, use_container_width=True)
+                                                else:
+                                                    st.info("Dados de posição não disponíveis para um dos atletas selecionados.")
+                                            else:
+                                                st.info("Selecione dois atletas diferentes para comparar.")
                                 else:
                                     st.error("❌ Não foi possível calcular as coordenadas de campo.")
                             else:
@@ -4822,103 +4913,7 @@ def main():
                                 )
 
                     elif periodos_mapa_sel:
-                        st.info("Selecione um atleta para continuar.")
-
-                    # ══════════════════════════════════════════════════════
-                    # FEATURE 1 — HEATMAP TEMPORAL SEGMENTADO
-                    # ══════════════════════════════════════════════════════
-                    st.markdown("---")
-                    st.markdown("### 🕐 Heatmap por Fase da Partida")
-                    st.caption("Visualize onde o atleta atuou em cada bloco de tempo da sessão.")
-
-                    _per_ht = list(dados_posicao_por_periodo.keys())
-                    if _per_ht:
-                        _col_ht1, _col_ht2, _col_ht3 = st.columns([2, 2, 2])
-                        with _col_ht1:
-                            _per_ht_sel = st.selectbox("Período:", _per_ht, key="ht_periodo")
-                        with _col_ht2:
-                            _ats_ht = list(dados_posicao_por_periodo.get(_per_ht_sel, {}).keys())
-                            _atl_ht = st.selectbox("Atleta:", _ats_ht, key="ht_atleta") if _ats_ht else None
-                        with _col_ht3:
-                            _bloco_min_ht = st.selectbox("Duração do bloco:", [5, 10, 15, 20, 30],
-                                                          index=2, key="ht_bloco")
-
-                        if _atl_ht:
-                            _dp_ht = dados_posicao_por_periodo[_per_ht_sel].get(_atl_ht, {})
-                            _xs_ht  = _dp_ht.get('xs', [])
-                            _ys_ht  = _dp_ht.get('ys', [])
-                            _ts_ht  = _dp_ht.get('ts_pos', [])
-
-                            if _xs_ht and _ts_ht:
-                                _ts_rel_ht = np.array(_ts_ht, dtype=float)
-                                _ts_rel_ht -= _ts_rel_ht.min()
-                                _dur_min    = int(_ts_rel_ht.max() / 60)
-                                _n_blocos   = max(1, -(-_dur_min // _bloco_min_ht))  # ceil div
-
-                                _col_sl, _col_bt = st.columns([4, 1])
-                                with _col_sl:
-                                    _bloco_idx = st.slider(
-                                        "Selecione o bloco:", 0, _n_blocos - 1, 0,
-                                        format=f"Bloco %d de {_n_blocos}",
-                                        key="ht_bloco_idx"
-                                    )
-                                with _col_bt:
-                                    st.metric("Total de blocos", _n_blocos)
-
-                                _fig_ht, _n_pts_ht, _lbl_ht = gerar_heatmap_segmentado(
-                                    _xs_ht, _ys_ht, _ts_ht,
-                                    _bloco_min_ht, _bloco_idx,
-                                    field_length=105, field_width=68
-                                )
-                                if _fig_ht:
-                                    st.caption(f"📍 {_n_pts_ht} pontos GPS neste bloco ({_lbl_ht})")
-                                    st.plotly_chart(_fig_ht, use_container_width=True)
-                                else:
-                                    st.info(f"Nenhum ponto de campo disponível no bloco {_lbl_ht}. "
-                                            "Tente outro bloco ou reduza a duração.")
-                            else:
-                                st.info("Dados de posição com timestamp não disponíveis para este atleta.")
-
-                    # ══════════════════════════════════════════════════════
-                    # FEATURE 2 — DIAGRAMA DE VORONOI
-                    # ══════════════════════════════════════════════════════
-                    st.markdown("---")
-                    st.markdown("### 🔷 Diagrama de Voronoi — Raio de Ação Coletivo")
-                    st.caption(
-                        "Mostra a zona de domínio espacial de cada atleta com base na sua posição mediana. "
-                        "Útil para identificar cobertura coletiva e gaps táticos."
-                    )
-
-                    _per_vor = list(dados_posicao_por_periodo.keys())
-                    if _per_vor:
-                        _per_vor_sel = st.selectbox("Período para Voronoi:", _per_vor, key="vor_periodo")
-                        _dp_vor_all  = dados_posicao_por_periodo.get(_per_vor_sel, {})
-                        _ats_vor_all = list(_dp_vor_all.keys())
-
-                        if len(_ats_vor_all) >= 2:
-                            _ats_vor_sel = st.multiselect(
-                                "Atletas a incluir no diagrama:",
-                                _ats_vor_all, default=_ats_vor_all,
-                                key="vor_atletas"
-                            )
-                            if len(_ats_vor_sel) >= 2:
-                                _pos_vor = {a: _dp_vor_all[a] for a in _ats_vor_sel if a in _dp_vor_all}
-                                _fig_vor = calcular_voronoi_campo(_pos_vor)
-                                if _fig_vor:
-                                    st.plotly_chart(_fig_vor, use_container_width=True)
-                                    with st.expander("ℹ️ Como interpretar o Voronoi"):
-                                        st.markdown("""
-                                        - Cada **cor** representa a zona de domínio espacial de um atleta.
-                                        - O **losango** indica a posição mediana do atleta na sessão.
-                                        - Zonas **grandes** indicam que o jogador cobriu mais espaço sem apoio próximo.
-                                        - Zonas **sobrepostas** (pequenas) sugerem concentração de jogadores em uma área.
-                                        """)
-                                else:
-                                    st.info("Dados de posição insuficientes para gerar o diagrama.")
-                            else:
-                                st.info("Selecione pelo menos 2 atletas para gerar o Voronoi.")
-                        else:
-                            st.info("É necessário ter pelo menos 2 atletas com dados de posição no período selecionado.")
+                        st.info("Selecione pelo menos um atleta para continuar.")
 
                 else:
                     st.info("Dados de posição não disponíveis. Verifique se o sensor GPS estava ativo durante a sessão.")
@@ -5670,14 +5665,25 @@ def main():
                                     out.append('')
                             return out
 
+                        # Montar dict de formato num único .format() — dois .format()
+                        # encadeados sobrescrevem um ao outro em versões antigas do pandas.
+                        _1dec_cols = {
+                            'Velocidade Máx (km/h)', 'Velocidade Média (km/h)',
+                            'M/min', 'Acc Max (m/s²)', 'Dcc Max (m/s²)',
+                        }
+                        _td_fmt = {}
+                        for _c in _TD_NUM:
+                            if _c == '%Vmax':
+                                _td_fmt[_c] = '{:.1f}%'
+                            elif _c in _1dec_cols:
+                                _td_fmt[_c] = '{:.1f}'
+                            else:
+                                _td_fmt[_c] = '{:.0f}'
+
                         _styled_td = (
                             _df_td_show.style
                             .apply(_td_style_percentile, axis=0)
-                            .format({c: '{:.0f}' for c in _TD_NUM
-                                     if c not in ('M/min','%Vmax','Acc Max (m/s²)','Dcc Max (m/s²)')})
-                            .format({'M/min': '{:.1f}', '%Vmax': '{:.1f}%',
-                                     'Acc Max (m/s²)': '{:.2f}', 'Dcc Max (m/s²)': '{:.2f}'},
-                                    na_rep='—')
+                            .format(_td_fmt, na_rep='—')
                         )
                         st.dataframe(_styled_td, use_container_width=True, hide_index=True)
 
