@@ -4263,6 +4263,41 @@ def main():
                             _has_xy  = bool(xn and yn)
                             _has_gps = bool(lats_gps and lons_gps and cfg)
 
+                            # ── Coordenadas de campo + GPS por atleta (ETAPA 2) ──
+                            # Necessário para calcular esforços de todos os atletas e
+                            # recuperar o segmento correto ao selecionar uma linha.
+                            _coords_atletas = {}
+                            for _atl in atletas_mapa:
+                                _xna, _yna, _vela, _acca, _tsa = [], [], [], [], []
+                                _latsa, _lonsa, _vgpsa, _tgpsa = [], [], [], []
+                                for _pm in periodos_mapa_sel:
+                                    _dca = dados_posicao_por_periodo.get(_pm, {}).get(_atl, {})
+                                    if _dca.get('xs') and _dca.get('ys') and _dca.get('vel'):
+                                        _xna  += list(_dca['xs'])
+                                        _yna  += list(_dca['ys'])
+                                        _vela += list(_dca['vel'])
+                                        _acca += list(_dca.get('acc', [0.0]*len(_dca['xs'])))
+                                        _tsa  += list(_dca.get('ts_pos', []))
+                                    elif cfg:
+                                        _lp = _dca.get('lats', [])
+                                        _lo = _dca.get('lons', [])
+                                        if _lp:
+                                            _gx, _gy = gps_para_campo_coords(_lp, _lo, cfg)
+                                            _xna  += _gx;  _yna  += _gy
+                                            _vela += _dca.get('vels_gps', [0.0]*len(_gx))
+                                            _acca += [0.0]*len(_gx)
+                                    _latsa  += _dca.get('lats', [])
+                                    _lonsa  += _dca.get('lons', [])
+                                    _vgpsa  += _dca.get('vels_gps', [])
+                                    _tgpsa  += _dca.get('ts_gps', [])
+                                _coords_atletas[_atl] = dict(
+                                    xn=_xna, yn=_yna, vel=_vela, acc=_acca, ts=_tsa,
+                                    lats=_latsa, lons=_lonsa, vels_gps=_vgpsa, ts_gps=_tgpsa,
+                                )
+
+                            # Atleta do esforço selecionado (atualizado na seleção de linha)
+                            _sel_atleta = atleta_mapa
+
                             # Mapa fixo (atualizado abaixo se houver esforço selecionado)
                             mapa_placeholder = st.empty()
 
@@ -4270,11 +4305,6 @@ def main():
 
                             # ── ETAPA 2: Análise de esforços ─────────────────────
                             st.markdown("### 2️⃣ Análise de Esforços no Campo")
-
-                            # Usa os mesmos arrays xn/yn (já construídos acima) para que
-                            # _seg_start_idx dos esforços indexe diretamente xn — sem offset.
-                            _xn_e, _yn_e, _vel_e, _acc_e, _ts_e = (
-                                xn, yn, vel_raw_campo, acc_raw_campo, ts_pos_campo)
 
                             _min_dur_vel_s = get_min_dur_vel_s()
                             _min_dur_acc_s = get_min_dur_s()
@@ -4285,52 +4315,60 @@ def main():
                                 horizontal=True, key="tipo_esf_campo"
                             )
 
+                            # ── Detecção de esforços para TODOS os atletas ──────────
                             efforts_df_full = pd.DataFrame()
-                            _esf_fonte = "sensor"  # rastreia a origem dos dados
+                            _esf_usou_api = False
+                            _frames_esf = []
 
-                            # ── Tentativa 1: detecção baseada em sensor (x/y) ──────
-                            # Consistente com a Tabela Descritiva
-                            if _xn_e:
-                                if tipo_esf == "⚡ Velocidade":
-                                    efforts_df_full = calcular_efforts_velocidade_sensor(
-                                        _xn_e, _yn_e, _vel_e, _ts_e, min_dur_s=_min_dur_vel_s)
-                                else:
-                                    efforts_df_full = calcular_efforts_aceleracao_sensor(
-                                        _xn_e, _yn_e, _acc_e, _vel_e, _ts_e, min_dur_s=_min_dur_acc_s)
+                            for _atl in atletas_mapa:
+                                _c = _coords_atletas[_atl]
+                                _df_atl = pd.DataFrame()
 
-                            # ── Fallback: esforços pré-calculados pela API Catapult ─
-                            # Usado quando não há coordenadas x/y no sensor (GPS-only)
-                            if efforts_df_full.empty:
-                                _esf_fonte = "api"
-                                _raw_api: list = []
-                                for _pm in periodos_mapa_sel:
+                                # Tentativa 1: sensor com coords x/y
+                                if _c['xn']:
                                     if tipo_esf == "⚡ Velocidade":
-                                        _raw_api += dados_efforts_vel_por_periodo.get(
-                                            _pm, {}).get(atleta_mapa, [])
+                                        _df_atl = calcular_efforts_velocidade_sensor(
+                                            _c['xn'], _c['yn'], _c['vel'], _c['ts'],
+                                            min_dur_s=_min_dur_vel_s)
                                     else:
-                                        _raw_api += dados_efforts_acc_por_periodo.get(
-                                            _pm, {}).get(atleta_mapa, [])
-                                if _raw_api:
-                                    if tipo_esf == "⚡ Velocidade":
-                                        efforts_df_full = processar_efforts_velocidade(_raw_api)
-                                    else:
-                                        efforts_df_full = processar_efforts_aceleracao(_raw_api)
-                                    # Reordenar e renumerar após concat de vários períodos
-                                    if not efforts_df_full.empty:
-                                        if '_start_ts' in efforts_df_full.columns and \
-                                                efforts_df_full['_start_ts'].sum() > 0:
-                                            efforts_df_full = efforts_df_full.sort_values(
-                                                '_start_ts').reset_index(drop=True)
-                                        efforts_df_full['Esforço'] = range(
-                                            1, len(efforts_df_full) + 1)
+                                        _df_atl = calcular_efforts_aceleracao_sensor(
+                                            _c['xn'], _c['yn'], _c['acc'], _c['vel'], _c['ts'],
+                                            min_dur_s=_min_dur_acc_s)
+
+                                # Fallback API Catapult
+                                if _df_atl.empty:
+                                    _esf_usou_api = True
+                                    _raw_api: list = []
+                                    for _pm in periodos_mapa_sel:
+                                        if tipo_esf == "⚡ Velocidade":
+                                            _raw_api += dados_efforts_vel_por_periodo.get(
+                                                _pm, {}).get(_atl, [])
+                                        else:
+                                            _raw_api += dados_efforts_acc_por_periodo.get(
+                                                _pm, {}).get(_atl, [])
+                                    if _raw_api:
+                                        _df_atl = (processar_efforts_velocidade(_raw_api)
+                                                   if tipo_esf == "⚡ Velocidade"
+                                                   else processar_efforts_aceleracao(_raw_api))
+
+                                if not _df_atl.empty:
+                                    _df_atl['Atleta'] = _atl
+                                    _frames_esf.append(_df_atl)
+
+                            if _frames_esf:
+                                efforts_df_full = pd.concat(_frames_esf, ignore_index=True)
+                                if '_start_ts' in efforts_df_full.columns and \
+                                        efforts_df_full['_start_ts'].sum() > 0:
+                                    efforts_df_full = efforts_df_full.sort_values(
+                                        '_start_ts').reset_index(drop=True)
+                                efforts_df_full['Esforço'] = range(1, len(efforts_df_full) + 1)
 
                             if not efforts_df_full.empty:
-                                # Aviso de fonte
-                                if _esf_fonte == "api":
+                                # Aviso de fonte API
+                                if _esf_usou_api:
                                     st.caption(
-                                        "ℹ️ Esforços fornecidos pela API Catapult "
-                                        "(sensor sem coordenadas x/y). "
-                                        "Valores podem diferir levemente da Tabela Descritiva."
+                                        "ℹ️ Alguns atletas usam esforços da API Catapult "
+                                        "(sensor sem x/y). Valores podem diferir levemente."
                                     )
 
                                 # Filtro de bandas
@@ -4348,9 +4386,14 @@ def main():
                                 if efforts_df_full.empty:
                                     st.info("Nenhum esforço encontrado após aplicar os filtros.")
                                 else:
-                                    # Colunas visíveis (esconde _start_ts / _end_ts / _seg_*)
-                                    cols_show = [c for c in efforts_df_full.columns
-                                                 if not c.startswith('_')]
+                                    # Colunas visíveis — "Atleta" primeiro, depois as demais
+                                    _cols_ocultas = {c for c in efforts_df_full.columns
+                                                     if c.startswith('_')}
+                                    _cols_base = [c for c in efforts_df_full.columns
+                                                  if c not in _cols_ocultas and c != 'Atleta']
+                                    cols_show = (['Atleta'] + _cols_base
+                                                 if 'Atleta' in efforts_df_full.columns
+                                                 else _cols_base)
                                     efforts_df_show = efforts_df_full[cols_show]
 
                                     # Métricas resumidas
@@ -4379,23 +4422,35 @@ def main():
 
                                     sel_rows = evt.selection.rows if evt.selection else []
 
-                                    # Captura timestamps do esforço selecionado (para animação)
+                                    # Captura esforço selecionado + atleta correto
                                     if sel_rows:
                                         _ae_row = efforts_df_full.iloc[sel_rows[0]]
                                         _anim_start_ts   = float(_ae_row.get('_start_ts') or 0)
                                         _anim_end_ts     = float(_ae_row.get('_end_ts')   or 0)
                                         _anim_effort_row = _ae_row
+                                        # Atleta dono do esforço selecionado
+                                        _sel_atleta = str(_ae_row.get('Atleta', atleta_mapa))
 
-                                    if sel_rows and ts_gps:
+                                    # Highlight GPS no mapa satélite (usa GPS do atleta correto)
+                                    if sel_rows:
                                         sel_idx  = sel_rows[0]
                                         row_full = efforts_df_full.iloc[sel_idx]
                                         start_ts = row_full.get('_start_ts', 0)
                                         end_ts   = row_full.get('_end_ts', 0)
+                                        _c_sel   = _coords_atletas.get(_sel_atleta,
+                                                       _coords_atletas[atleta_mapa])
+                                        _ts_gps_sel   = _c_sel['ts_gps']
+                                        _lats_gps_sel = _c_sel['lats']
+                                        _lons_gps_sel = _c_sel['lons']
+                                        _vels_gps_sel = _c_sel['vels_gps']
 
-                                        if start_ts and end_ts and len(ts_gps) == len(lats_gps):
+                                        if start_ts and end_ts and \
+                                                len(_ts_gps_sel) == len(_lats_gps_sel):
                                             filtered = [
                                                 (la, lo, ve)
-                                                for la, lo, ve, ts in zip(lats_gps, lons_gps, vels_gps, ts_gps)
+                                                for la, lo, ve, ts in zip(
+                                                    _lats_gps_sel, _lons_gps_sel,
+                                                    _vels_gps_sel, _ts_gps_sel)
                                                 if start_ts <= ts <= end_ts
                                             ]
                                             if filtered:
@@ -4404,17 +4459,21 @@ def main():
                                                 vels_eff = [p[2] for p in filtered]
                                                 inicio_str = row_full.get('Início', '')
                                                 dur_str    = row_full.get('Duração (s)', '')
-                                                eff_desc   = f"Esforço #{row_full['Esforço']} — {inicio_str} — {dur_str}s"
+                                                eff_desc   = (
+                                                    f"Esforço #{row_full['Esforço']} "
+                                                    f"({_sel_atleta}) — {inicio_str} — {dur_str}s"
+                                                )
                                             else:
                                                 st.warning("⚠️ Nenhum ponto GPS encontrado na janela de tempo deste esforço.")
-                                        elif not ts_gps:
+                                        elif not _ts_gps_sel:
                                             st.info("ℹ️ Timestamps GPS não disponíveis.")
 
                                     # Download da tabela
+                                    _atls_str = "_".join(a.replace(' ', '') for a in atletas_mapa)
                                     st.download_button(
                                         "📥 Exportar esforços",
                                         efforts_df_show.to_csv(index=False),
-                                        file_name=f"esforcos_{atleta_mapa}_{_label_periodos.replace(' + ','_')}.csv"
+                                        file_name=f"esforcos_{_atls_str}_{_label_periodos.replace(' + ','_')}.csv"
                                     )
                             else:
                                 st.info("ℹ️ Sem dados de posição (x/y) para calcular esforços. "
@@ -4445,53 +4504,60 @@ def main():
 
                             # ── Computar coords do esforço ANTECIPADO ──────────────
                             # (usado no highlight do fig_campo E na animação abaixo)
+                            # Usa arrays do atleta dono do esforço selecionado.
+                            _c_eff  = _coords_atletas.get(_sel_atleta, _coords_atletas[atleta_mapa])
+                            _xn_eff = _c_eff['xn'] or xn
+                            _yn_eff = _c_eff['yn'] or yn
+                            _vel_eff = _c_eff['vel'] or vel_raw_campo
+                            _acc_eff = _c_eff['acc'] or acc_raw_campo
+                            _ts_eff  = _c_eff['ts']  or ts_pos_campo
+
                             xs_a, ys_a, vel_a, acc_a = [], [], [], []
-                            if _anim_effort_row is not None and xn:
+                            if _anim_effort_row is not None and _xn_eff:
                                 # ── Tier 0: índices de segmento armazenados pelas
-                                #    funções de sensor — sempre corretos, sem depender
-                                #    de timestamps que podem ser zero.
+                                #    funções de sensor — indexam o array do atleta correto.
                                 _seg_si = int(_anim_effort_row.get('_seg_start_idx', -1))
                                 _seg_ei = int(_anim_effort_row.get('_seg_end_idx',   -1))
-                                if 0 <= _seg_si < _seg_ei <= len(xn):
-                                    xs_a  = xn[_seg_si:_seg_ei]
-                                    ys_a  = yn[_seg_si:_seg_ei]
-                                    vel_a = (vel_raw_campo[_seg_si:_seg_ei]
-                                             if len(vel_raw_campo) == len(xn)
+                                if 0 <= _seg_si < _seg_ei <= len(_xn_eff):
+                                    xs_a  = _xn_eff[_seg_si:_seg_ei]
+                                    ys_a  = _yn_eff[_seg_si:_seg_ei]
+                                    vel_a = (_vel_eff[_seg_si:_seg_ei]
+                                             if len(_vel_eff) == len(_xn_eff)
                                              else [0.0] * (_seg_ei - _seg_si))
-                                    acc_a = (acc_raw_campo[_seg_si:_seg_ei]
-                                             if len(acc_raw_campo) == len(xn)
+                                    acc_a = (_acc_eff[_seg_si:_seg_ei]
+                                             if len(_acc_eff) == len(_xn_eff)
                                              else [0.0] * (_seg_ei - _seg_si))
 
                                 # ── Tier 1: matching por timestamp exato (fallback)
                                 if len(xs_a) < 2 and _anim_start_ts > 0 and _anim_end_ts > 0:
-                                    if ts_pos_campo and len(ts_pos_campo) == len(xn):
-                                        _ts_c = np.array(ts_pos_campo)
+                                    if _ts_eff and len(_ts_eff) == len(_xn_eff):
+                                        _ts_c = np.array(_ts_eff)
                                         _m    = (_ts_c >= _anim_start_ts) & (_ts_c <= _anim_end_ts)
                                         if _m.any():
-                                            xs_a  = np.array(xn)[_m].tolist()
-                                            ys_a  = np.array(yn)[_m].tolist()
-                                            vel_a = (np.array(vel_raw_campo)[_m].tolist()
-                                                     if len(vel_raw_campo) == len(xn) else [0]*int(_m.sum()))
-                                            acc_a = (np.array(acc_raw_campo)[_m].tolist()
-                                                     if len(acc_raw_campo) == len(xn) else [0]*int(_m.sum()))
+                                            xs_a  = np.array(_xn_eff)[_m].tolist()
+                                            ys_a  = np.array(_yn_eff)[_m].tolist()
+                                            vel_a = (np.array(_vel_eff)[_m].tolist()
+                                                     if len(_vel_eff) == len(_xn_eff) else [0]*int(_m.sum()))
+                                            acc_a = (np.array(_acc_eff)[_m].tolist()
+                                                     if len(_acc_eff) == len(_xn_eff) else [0]*int(_m.sum()))
 
                                 # ── Tier 2: fallback proporcional por timestamp
                                 if (len(xs_a) < 2 and _anim_start_ts > 0
-                                        and _anim_end_ts > 0 and ts_pos_campo):
-                                    _ts_min = min(ts_pos_campo)
-                                    _ts_max = max(ts_pos_campo)
+                                        and _anim_end_ts > 0 and _ts_eff):
+                                    _ts_min = min(_ts_eff)
+                                    _ts_max = max(_ts_eff)
                                     if _ts_max > _ts_min:
                                         _sp = max(0.0, (_anim_start_ts - _ts_min) / (_ts_max - _ts_min))
                                         _ep = min(1.0, (_anim_end_ts   - _ts_min) / (_ts_max - _ts_min))
-                                        _si = int(_sp * len(xn))
-                                        _ei = min(len(xn), int(_ep * len(xn)) + 1)
+                                        _si = int(_sp * len(_xn_eff))
+                                        _ei = min(len(_xn_eff), int(_ep * len(_xn_eff)) + 1)
                                         if _ei > _si + 1:
-                                            xs_a  = xn[_si:_ei]
-                                            ys_a  = yn[_si:_ei]
-                                            vel_a = (vel_raw_campo[_si:_ei]
-                                                     if len(vel_raw_campo) == len(xn) else [0]*(_ei-_si))
-                                            acc_a = (acc_raw_campo[_si:_ei]
-                                                     if len(acc_raw_campo) == len(xn) else [0]*(_ei-_si))
+                                            xs_a  = _xn_eff[_si:_ei]
+                                            ys_a  = _yn_eff[_si:_ei]
+                                            vel_a = (_vel_eff[_si:_ei]
+                                                     if len(_vel_eff) == len(_xn_eff) else [0]*(_ei-_si))
+                                            acc_a = (_acc_eff[_si:_ei]
+                                                     if len(_acc_eff) == len(_xn_eff) else [0]*(_ei-_si))
 
                                 # ── Tier 3: fallback por string de início + duração
                                 if len(xs_a) < 2:
@@ -4500,29 +4566,27 @@ def main():
                                         _ini_s   = 0.0
                                         _ini_str = str(_anim_effort_row.get('Início', ''))
                                         if ':' in _ini_str:
-                                            # formato HH:MM:SS ou MM:SS
                                             _parts = _ini_str.replace('s', '').split(':')
                                             if len(_parts) == 3:
                                                 _ini_s = int(_parts[0])*3600 + int(_parts[1])*60 + float(_parts[2])
                                             else:
                                                 _ini_s = int(_parts[0])*60 + float(_parts[1])
                                         elif _ini_str.endswith('s'):
-                                            # formato "12.3s" — segundos relativos ao início da concatenação
                                             _ini_s = float(_ini_str[:-1])
-                                        _total_s = len(xn) / 10.0  # sensor a 10 Hz
+                                        _total_s = len(_xn_eff) / 10.0
                                         if _total_s > 0:
                                             _sp = max(0.0, min(1.0, _ini_s / _total_s))
                                             _ep = max(0.0, min(1.0, (_ini_s + _dur_s) / _total_s))
-                                            _si = int(_sp * len(xn))
-                                            _ei = min(len(xn), int(_ep * len(xn)) + 1)
+                                            _si = int(_sp * len(_xn_eff))
+                                            _ei = min(len(_xn_eff), int(_ep * len(_xn_eff)) + 1)
                                             if _ei > _si + 1:
-                                                xs_a  = xn[_si:_ei]
-                                                ys_a  = yn[_si:_ei]
-                                                vel_a = (vel_raw_campo[_si:_ei]
-                                                         if len(vel_raw_campo) == len(xn)
+                                                xs_a  = _xn_eff[_si:_ei]
+                                                ys_a  = _yn_eff[_si:_ei]
+                                                vel_a = (_vel_eff[_si:_ei]
+                                                         if len(_vel_eff) == len(_xn_eff)
                                                          else [0]*(_ei-_si))
-                                                acc_a = (acc_raw_campo[_si:_ei]
-                                                         if len(acc_raw_campo) == len(xn)
+                                                acc_a = (_acc_eff[_si:_ei]
+                                                         if len(_acc_eff) == len(_xn_eff)
                                                          else [0]*(_ei-_si))
                                     except Exception:
                                         pass
