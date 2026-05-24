@@ -1103,11 +1103,13 @@ def _segmentos_continuos(idxs, gap_max=8):
 
 
 def adicionar_pontos_velocidade_bandas(fig, x_coords, y_coords, velocidades,
-                                       bandas_sel, mostrar_setas=False):
+                                       bandas_sel, mostrar_setas=False,
+                                       atleta_prefix=''):
     """Pontos coloridos por bandas de velocidade selecionadas.
 
     Se mostrar_setas=True, desenha uma seta direcional ao final de cada
     esforço contínuo dentro de cada banda (direção ofensiva/defensiva).
+    atleta_prefix: se fornecido, é adicionado ao início do nome da legenda.
     """
     if not x_coords or not bandas_sel:
         return
@@ -1119,10 +1121,11 @@ def adicionar_pontos_velocidade_bandas(fig, x_coords, y_coords, velocidades,
         mask = (vs >= b['min']) & (vs < b['max'])
         if mask.sum() == 0:
             continue
+        _nome = f"{atleta_prefix}: {b['label']}" if atleta_prefix else b['label']
         fig.add_trace(go.Scatter(
-            x=xs[mask], y=ys[mask], mode='markers', name=b['label'],
+            x=xs[mask], y=ys[mask], mode='markers', name=_nome,
             marker=dict(size=3, color=b['color'], opacity=0.8),
-            hovertemplate='x=%{x:.1f}m y=%{y:.1f}m<extra>' + b['label'] + '</extra>'))
+            hovertemplate='x=%{x:.1f}m y=%{y:.1f}m<extra>' + _nome + '</extra>'))
 
         if not mostrar_setas:
             continue
@@ -1157,11 +1160,13 @@ def adicionar_pontos_velocidade_bandas(fig, x_coords, y_coords, velocidades,
 
 
 def adicionar_pontos_aceleracao_bandas(fig, x_coords, y_coords, aceleracoes,
-                                       bandas_sel, mostrar_setas=False):
+                                       bandas_sel, mostrar_setas=False,
+                                       atleta_prefix=''):
     """Pontos coloridos por bandas de aceleração/desaceleração selecionadas.
 
     Se mostrar_setas=True, desenha uma seta direcional ao final de cada
     esforço contínuo dentro de cada banda.
+    atleta_prefix: se fornecido, é adicionado ao início do nome da legenda.
     """
     if not x_coords or not bandas_sel:
         return
@@ -1173,10 +1178,11 @@ def adicionar_pontos_aceleracao_bandas(fig, x_coords, y_coords, aceleracoes,
         mask = (acc >= b['min']) & (acc < b['max'])
         if mask.sum() == 0:
             continue
+        _nome = f"{atleta_prefix}: {b['label']}" if atleta_prefix else b['label']
         fig.add_trace(go.Scatter(
-            x=xs[mask], y=ys[mask], mode='markers', name=b['label'],
+            x=xs[mask], y=ys[mask], mode='markers', name=_nome,
             marker=dict(size=3, color=b['color'], opacity=0.8),
-            hovertemplate='x=%{x:.1f}m y=%{y:.1f}m<extra>' + b['label'] + '</extra>'))
+            hovertemplate='x=%{x:.1f}m y=%{y:.1f}m<extra>' + _nome + '</extra>'))
 
         if not mostrar_setas:
             continue
@@ -4708,27 +4714,44 @@ def main():
                                     )
                                     fig_campo = desenhar_campo_futebol_bonito(title=_titulo_campo)
 
-                                    if modo_viz == "🗺️ Trajetória":
-                                        adicionar_trajetoria_campo(fig_campo, xn, yn, vel_raw, atleta_mapa)
-                                    elif modo_viz == "⚡ Bandas de Velocidade" and bandas_vel_sel:
-                                        adicionar_pontos_velocidade_bandas(
-                                            fig_campo, xn, yn, vel_raw, bandas_vel_sel,
-                                            mostrar_setas=ov_setas)
-                                    elif modo_viz == "🔁 Bandas de Aceleração" and bandas_acc_sel:
-                                        adicionar_pontos_aceleracao_bandas(
-                                            fig_campo, xn, yn, acc_raw, bandas_acc_sel,
-                                            mostrar_setas=ov_setas)
-
-                                    # Seta única no modo Trajetória, ou seta do esforço
-                                    # destacado em qualquer modo (laranja sobre tudo)
-                                    if ov_setas:
+                                    # ── Plota TODOS os atletas com o mesmo modo ───────
+                                    # Usa _coords_atletas para garantir que cada atleta
+                                    # receba exatamente o mesmo tratamento visual.
+                                    # Prefixo do nome = atleta (visível na legenda).
+                                    _n_atls = len(atletas_mapa)
+                                    for _atl_i, _atl_viz in enumerate(atletas_mapa):
+                                        _cv = _coords_atletas.get(_atl_viz, {})
+                                        _xv = _cv.get('xn', [])
+                                        _yv = _cv.get('yn', [])
+                                        _velv = _cv.get('vel', [])
+                                        _accv = _cv.get('acc', [])
+                                        if not _xv:
+                                            continue
+                                        # Prefixo apenas quando há mais de 1 atleta
+                                        _pfx = _atl_viz if _n_atls > 1 else ''
                                         if modo_viz == "🗺️ Trajetória":
-                                            adicionar_setas_direcao(fig_campo, xn, yn)
-                                        if xs_a and len(xs_a) >= 2:
-                                            adicionar_setas_direcao(
-                                                fig_campo, xn, yn,
-                                                xs_effort=xs_a, ys_effort=ys_a,
-                                            )
+                                            adicionar_trajetoria_campo(
+                                                fig_campo, _xv, _yv, _velv, _atl_viz)
+                                        elif modo_viz == "⚡ Bandas de Velocidade" and bandas_vel_sel:
+                                            adicionar_pontos_velocidade_bandas(
+                                                fig_campo, _xv, _yv, _velv, bandas_vel_sel,
+                                                mostrar_setas=ov_setas,
+                                                atleta_prefix=_pfx)
+                                        elif modo_viz == "🔁 Bandas de Aceleração" and bandas_acc_sel:
+                                            adicionar_pontos_aceleracao_bandas(
+                                                fig_campo, _xv, _yv, _accv, bandas_acc_sel,
+                                                mostrar_setas=ov_setas,
+                                                atleta_prefix=_pfx)
+                                        # Seta de trajetória por atleta
+                                        if ov_setas and modo_viz == "🗺️ Trajetória":
+                                            adicionar_setas_direcao(fig_campo, _xv, _yv)
+
+                                    # Seta do esforço destacado (laranja, sobre tudo)
+                                    if ov_setas and xs_a and len(xs_a) >= 2:
+                                        adicionar_setas_direcao(
+                                            fig_campo, xn, yn,
+                                            xs_effort=xs_a, ys_effort=ys_a,
+                                        )
                                     if ov_hull:
                                         adicionar_convex_hull(fig_campo, xn, yn)
                                     if ov_tercos:
@@ -4739,29 +4762,6 @@ def main():
                                     if ov_eventos and _dados_ev_campo and _ev_tipos_sel:
                                         adicionar_eventos_campo(
                                             fig_campo, _dados_ev_campo, _ev_tipos_sel)
-
-                                    # ── Atletas adicionais (trajetória sobreposta) ────
-                                    _PALETTE_EXTRA = [
-                                        '#FF4081','#69F0AE','#FFEB3B',
-                                        '#CE93D8','#FF8A65','#80DEEA'
-                                    ]
-                                    for _ai, _atl_extra in enumerate(
-                                            [a for a in atletas_mapa if a != atleta_mapa]):
-                                        _cor_ex = _PALETTE_EXTRA[_ai % len(_PALETTE_EXTRA)]
-                                        _xn_ex, _yn_ex = [], []
-                                        for _pm in periodos_mapa_sel:
-                                            _dc_ex = dados_posicao_por_periodo.get(
-                                                _pm, {}).get(_atl_extra, {})
-                                            _xn_ex += list(_dc_ex.get('xs', []))
-                                            _yn_ex += list(_dc_ex.get('ys', []))
-                                        if _xn_ex:
-                                            _sbg_ex = max(1, len(_xn_ex) // 3000)
-                                            fig_campo.add_trace(go.Scatter(
-                                                x=_xn_ex[::_sbg_ex], y=_yn_ex[::_sbg_ex],
-                                                mode='markers', name=_atl_extra,
-                                                marker=dict(size=2.5, color=_cor_ex, opacity=0.6),
-                                                showlegend=True
-                                            ))
 
                                     # ── Highlight do esforço selecionado ─────────────
                                     if xs_a and len(xs_a) >= 2:
