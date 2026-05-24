@@ -4118,6 +4118,33 @@ def main():
                             _anim_end_ts    = 0.0
                             _anim_effort_row = None
 
+                            # ── Arrays de coordenadas (fonte única para ETAPA 2 e ETAPA 3) ──
+                            # Construídos aqui para que detecção de esforços e visualização
+                            # do campo usem exatamente os mesmos dados — garantindo que
+                            # _seg_start_idx dos esforços indexe corretamente xn/yn.
+                            xn, yn, vel_raw_campo, acc_raw_campo, ts_pos_campo = [], [], [], [], []
+                            _fonte_xy = False
+                            for _pm in periodos_mapa_sel:
+                                _dc = dados_posicao_por_periodo.get(_pm, {}).get(atleta_mapa, {})
+                                if _dc.get('xs') and _dc.get('ys') and _dc.get('vel'):
+                                    xn  += list(_dc['xs'])
+                                    yn  += list(_dc['ys'])
+                                    vel_raw_campo += list(_dc['vel'])
+                                    acc_raw_campo += list(_dc.get('acc', [0.0]*len(_dc['xs'])))
+                                    ts_pos_campo  += list(_dc.get('ts_pos', []))
+                                    _fonte_xy = True
+                                elif lats_gps and cfg:
+                                    _lats_pm = _dc.get('lats', [])
+                                    _lons_pm = _dc.get('lons', [])
+                                    if _lats_pm:
+                                        _gx, _gy = gps_para_campo_coords(_lats_pm, _lons_pm, cfg)
+                                        xn  += _gx
+                                        yn  += _gy
+                                        vel_raw_campo += _dc.get('vels_gps', [0.0]*len(_gx))
+                                        acc_raw_campo += [0.0]*len(_gx)
+                            _has_xy  = bool(xn and yn)
+                            _has_gps = bool(lats_gps and lons_gps and cfg)
+
                             # Mapa fixo (atualizado abaixo se houver esforço selecionado)
                             mapa_placeholder = st.empty()
 
@@ -4126,17 +4153,10 @@ def main():
                             # ── ETAPA 2: Análise de esforços ─────────────────────
                             st.markdown("### 2️⃣ Análise de Esforços no Campo")
 
-                            # Extrai dados de sensor dos períodos selecionados
-                            # (mesma fonte que calcular_metricas → consistência com Tabela Descritiva)
-                            _xn_e, _yn_e, _vel_e, _acc_e, _ts_e = [], [], [], [], []
-                            for _pm in periodos_mapa_sel:
-                                _dc_e = dados_posicao_por_periodo.get(_pm, {}).get(atleta_mapa, {})
-                                if _dc_e.get('xs') and _dc_e.get('ys'):
-                                    _xn_e  += list(_dc_e['xs'])
-                                    _yn_e  += list(_dc_e['ys'])
-                                    _vel_e += list(_dc_e.get('vel', []))
-                                    _acc_e += list(_dc_e.get('acc', [0.0] * len(_dc_e['xs'])))
-                                    _ts_e  += list(_dc_e.get('ts_pos', []))
+                            # Usa os mesmos arrays xn/yn (já construídos acima) para que
+                            # _seg_start_idx dos esforços indexe diretamente xn — sem offset.
+                            _xn_e, _yn_e, _vel_e, _acc_e, _ts_e = (
+                                xn, yn, vel_raw_campo, acc_raw_campo, ts_pos_campo)
 
                             _min_dur_vel_s = get_min_dur_vel_s()
                             _min_dur_acc_s = get_min_dur_s()
@@ -4302,31 +4322,8 @@ def main():
 
                             # ── ETAPA 3: Campo bonito + análise avançada ─────────
                             st.markdown("### 3️⃣ Análise de Movimentação no Campo")
-
-                            # Combina coordenadas de todos os períodos selecionados
-                            xn, yn, vel_raw_campo, acc_raw_campo, ts_pos_campo = [], [], [], [], []
-                            _fonte_xy = False
-                            for _pm in periodos_mapa_sel:
-                                _dc = dados_posicao_por_periodo.get(_pm, {}).get(atleta_mapa, {})
-                                if _dc.get('xs') and _dc.get('ys') and _dc.get('vel'):
-                                    xn  += list(_dc['xs'])
-                                    yn  += list(_dc['ys'])
-                                    vel_raw_campo += list(_dc['vel'])
-                                    acc_raw_campo += list(_dc.get('acc', [0.0]*len(_dc['xs'])))
-                                    ts_pos_campo  += list(_dc.get('ts_pos', []))
-                                    _fonte_xy = True
-                                elif lats_gps and cfg:
-                                    _lats_pm = _dc.get('lats', [])
-                                    _lons_pm = _dc.get('lons', [])
-                                    if _lats_pm:
-                                        _gx, _gy = gps_para_campo_coords(_lats_pm, _lons_pm, cfg)
-                                        xn  += _gx
-                                        yn  += _gy
-                                        vel_raw_campo += _dc.get('vels_gps', [0.0]*len(_gx))
-                                        acc_raw_campo += [0.0]*len(_gx)
-
-                            _has_xy  = bool(xn and yn)
-                            _has_gps = bool(lats_gps and lons_gps and cfg)
+                            # xn, yn, vel_raw_campo, etc. já foram construídos antes
+                            # de ETAPA 2 para garantir consistência de índices.
 
                             # ── Computar coords do esforço ANTECIPADO ──────────────
                             # (usado no highlight do fig_campo E na animação abaixo)
@@ -4976,6 +4973,392 @@ def main():
                                                     st.info("Dados de posição não disponíveis para um dos atletas selecionados.")
                                             else:
                                                 st.info("Selecione dois atletas diferentes para comparar.")
+
+                                    # ══════════════════════════════════════════════
+                                    # ANÁLISE 4 — PERFIL FORÇA-VELOCIDADE
+                                    # ══════════════════════════════════════════════
+                                    st.markdown("---")
+                                    with st.expander("📊 Perfil Força-Velocidade Individual", expanded=False):
+                                        st.markdown(
+                                            "Estima a **capacidade de geração de força** em cada faixa de velocidade. "
+                                            "Para cada bin de velocidade, calcula o **pico de aceleração** (95º percentil). "
+                                            "A regressão linear revela o perfil F-V: "
+                                            "inclinação acentuada = atleta de **força**; "
+                                            "mais plana = atleta de **velocidade**."
+                                        )
+                                        _fv_vel = np.array(vel_raw_campo, dtype=float)
+                                        _fv_acc = np.array(acc_raw_campo, dtype=float)
+
+                                        if len(_fv_vel) > 200 and _fv_vel.max() > 5:
+                                            _bin_w   = 2.0
+                                            _v_top   = min(float(_fv_vel.max()), 36.0)
+                                            _bins    = np.arange(0, _v_top + _bin_w, _bin_w)
+                                            _fv_pv, _fv_pa, _fv_pn = [], [], []
+                                            for _bi in range(len(_bins) - 1):
+                                                _lo2, _hi2 = _bins[_bi], _bins[_bi + 1]
+                                                _mk = (_fv_vel >= _lo2) & (_fv_vel < _hi2) & (_fv_acc > 0)
+                                                if _mk.sum() >= 5:
+                                                    _fv_pv.append((_lo2 + _hi2) / 2)
+                                                    _fv_pa.append(float(np.percentile(_fv_acc[_mk], 95)))
+                                                    _fv_pn.append(int(_mk.sum()))
+
+                                            if len(_fv_pv) >= 3:
+                                                _fv_pv  = np.array(_fv_pv)
+                                                _fv_pa  = np.array(_fv_pa)
+                                                _fv_cf  = np.polyfit(_fv_pv, _fv_pa, 1)
+                                                _sl, _ic = float(_fv_cf[0]), float(_fv_cf[1])
+                                                _F0  = max(_ic, 0.0)
+                                                _V0  = ((-_ic / _sl) if _sl < -1e-6
+                                                        else float(_fv_pv[-1]) * 1.3)
+                                                _V0  = max(_V0, float(_fv_pv[-1]))
+                                                _Pmax = (_F0 * (_V0 / 3.6)) / 4.0
+
+                                                if _sl < -0.12:
+                                                    _pfil = "💪 Força-Dominante"
+                                                    _pdesc = "Alta acc. inicial, queda acentuada com a velocidade."
+                                                elif _sl > -0.06:
+                                                    _pfil = "⚡ Velocidade-Dominante"
+                                                    _pdesc = "Mantém aceleração nas altas velocidades."
+                                                else:
+                                                    _pfil = "⚖️ Equilibrado"
+                                                    _pdesc = "Balanço entre força inicial e velocidade de pico."
+
+                                                _v_line = np.linspace(0, _V0 * 1.05, 120)
+                                                _a_line = np.clip(np.polyval(_fv_cf, _v_line), 0, None)
+
+                                                _fig_fv = go.Figure()
+                                                _fig_fv.add_trace(go.Scatter(
+                                                    x=_fv_pv, y=_fv_pa,
+                                                    mode='markers+text',
+                                                    marker=dict(
+                                                        size=[max(9, min(22, n // 40)) for n in _fv_pn],
+                                                        color='#FF9800',
+                                                        line=dict(color='white', width=1.5)
+                                                    ),
+                                                    text=[f"{v:.0f}" for v in _fv_pv],
+                                                    textposition='top center',
+                                                    textfont=dict(color='rgba(255,255,255,0.75)', size=9),
+                                                    name='Pico acc (95p) / bin',
+                                                    hovertemplate=(
+                                                        'Vel: %{x:.1f} km/h<br>'
+                                                        'Acc 95p: %{y:.2f} m/s²<extra></extra>'
+                                                    )
+                                                ))
+                                                _fig_fv.add_trace(go.Scatter(
+                                                    x=_v_line, y=_a_line,
+                                                    mode='lines',
+                                                    line=dict(color='#00E5FF', width=2.5, dash='dash'),
+                                                    name='Regressão F-V',
+                                                    hoverinfo='skip'
+                                                ))
+                                                _fig_fv.add_annotation(
+                                                    x=0, y=_F0,
+                                                    text=f"<b>F₀ = {_F0:.2f} m/s²</b>",
+                                                    showarrow=True, arrowhead=2,
+                                                    arrowcolor='#4CAF50',
+                                                    font=dict(color='#4CAF50', size=11),
+                                                    ax=55, ay=-35
+                                                )
+                                                _fig_fv.add_annotation(
+                                                    x=_V0, y=0,
+                                                    text=f"<b>V₀ = {_V0:.1f} km/h</b>",
+                                                    showarrow=True, arrowhead=2,
+                                                    arrowcolor='#FF4081',
+                                                    font=dict(color='#FF4081', size=11),
+                                                    ax=-55, ay=-35
+                                                )
+                                                _fig_fv.update_layout(
+                                                    title=dict(
+                                                        text=(f"Perfil F-V — {atleta_mapa} "
+                                                              f"| {_pfil}"),
+                                                        font=dict(color='white', size=14)
+                                                    ),
+                                                    xaxis=dict(
+                                                        title='Velocidade (km/h)',
+                                                        range=[0, _V0 * 1.1],
+                                                        gridcolor='rgba(255,255,255,0.1)',
+                                                        color='white'
+                                                    ),
+                                                    yaxis=dict(
+                                                        title='Pico de Aceleração (m/s²)',
+                                                        range=[0, _F0 * 1.25],
+                                                        gridcolor='rgba(255,255,255,0.1)',
+                                                        color='white'
+                                                    ),
+                                                    paper_bgcolor='rgba(0,0,0,0)',
+                                                    plot_bgcolor='rgba(20,20,30,0.85)',
+                                                    legend=dict(font=dict(color='white')),
+                                                    height=390
+                                                )
+                                                st.plotly_chart(_fig_fv, use_container_width=True)
+
+                                                _fvc1, _fvc2, _fvc3, _fvc4 = st.columns(4)
+                                                with _fvc1:
+                                                    st.metric("F₀ — acc teórica em v=0",
+                                                              f"{_F0:.2f} m/s²",
+                                                              help="Aceleração máxima extrapolada para velocidade zero.")
+                                                with _fvc2:
+                                                    st.metric("V₀ — vel. máx teórica",
+                                                              f"{_V0:.1f} km/h",
+                                                              help="Velocidade onde a força propulsora cai a zero.")
+                                                with _fvc3:
+                                                    st.metric("Pmax (potência rel.)",
+                                                              f"{_Pmax:.2f} m²/s³",
+                                                              help="Potência máxima relativa: F₀ × V₀ / 4.")
+                                                with _fvc4:
+                                                    st.metric("Perfil", _pfil)
+                                                st.caption(
+                                                    f"{_pdesc}  |  "
+                                                    f"Slope F-V: {_sl:.3f} (m/s²)/(km/h)  |  "
+                                                    f"{len(_fv_pv)} bins usados"
+                                                )
+                                            else:
+                                                st.info("Dados insuficientes para o perfil F-V "
+                                                        "(mínimo: 3 bins de velocidade com aceleração positiva).")
+                                        else:
+                                            st.info("Dados de velocidade/aceleração insuficientes "
+                                                    "para este período.")
+
+                                    # ══════════════════════════════════════════════
+                                    # ANÁLISE 5 — DISTÂNCIA ENTRE ATLETAS
+                                    # ══════════════════════════════════════════════
+                                    if len(atletas_mapa) >= 2:
+                                        st.markdown("---")
+                                        with st.expander(
+                                            f"📏 Distância Entre Atletas "
+                                            f"({len(atletas_mapa)} selecionados)",
+                                            expanded=False
+                                        ):
+                                            st.markdown(
+                                                "Distância Euclidiana entre os atletas selecionados "
+                                                "ao longo do tempo, a partir das coordenadas de campo. "
+                                                "Útil para analisar **compactação defensiva**, "
+                                                "**pressing em dupla** e **cobertura de espaço**."
+                                            )
+                                            _cfg_dist = st.session_state.get(
+                                                f"campo_cfg__{atleta_mapa}", cfg)
+                                            _DCORES = ['#00E5FF','#FF4081','#FFEB3B',
+                                                       '#69F0AE','#FF9800','#CE93D8']
+
+                                            # Coleta arrays por atleta
+                                            _dist_dados = {}
+                                            for _atl_d in atletas_mapa:
+                                                _xd, _yd, _tsd = [], [], []
+                                                for _pm in periodos_mapa_sel:
+                                                    _dd = dados_posicao_por_periodo.get(
+                                                        _pm, {}).get(_atl_d, {})
+                                                    if _dd.get('xs') and _dd.get('ys'):
+                                                        _xd  += list(_dd['xs'])
+                                                        _yd  += list(_dd['ys'])
+                                                        _tsd += list(_dd.get('ts_pos', []))
+                                                    elif _dd.get('lats') and _cfg_dist:
+                                                        _gxd, _gyd = gps_para_campo_coords(
+                                                            _dd['lats'], _dd['lons'], _cfg_dist)
+                                                        _xd  += _gxd
+                                                        _yd  += _gyd
+                                                        _tsd += [0.0] * len(_gxd)
+                                                if _xd:
+                                                    _dist_dados[_atl_d] = {
+                                                        'x': np.array(_xd, dtype=float),
+                                                        'y': np.array(_yd, dtype=float),
+                                                        'ts': np.array(_tsd, dtype=float)
+                                                    }
+
+                                            _pares_d = [
+                                                (atletas_mapa[_ii], atletas_mapa[_jj])
+                                                for _ii in range(len(atletas_mapa))
+                                                for _jj in range(_ii + 1, len(atletas_mapa))
+                                            ]
+
+                                            if len(_dist_dados) >= 2:
+                                                _fig_dist = go.Figure()
+                                                _resumo_d = []
+
+                                                for _pi_d, (_na, _nb) in enumerate(_pares_d):
+                                                    if _na not in _dist_dados or _nb not in _dist_dados:
+                                                        continue
+                                                    _dA = _dist_dados[_na]
+                                                    _dB = _dist_dados[_nb]
+                                                    _tsA, _tsB = _dA['ts'], _dB['ts']
+                                                    _has_ts_d = (
+                                                        _tsA.sum() > 0 and _tsB.sum() > 0)
+
+                                                    if _has_ts_d:
+                                                        _tsA_v = _tsA[_tsA > 0]
+                                                        _tsB_v = _tsB[_tsB > 0]
+                                                        _tc = np.arange(
+                                                            max(_tsA_v.min(), _tsB_v.min()),
+                                                            min(_tsA_v.max(), _tsB_v.max()),
+                                                            0.1
+                                                        )
+                                                        if len(_tc) < 10:
+                                                            _has_ts_d = False
+
+                                                    if _has_ts_d:
+                                                        _xA_i = np.interp(_tc, _tsA_v, _dA['x'][_tsA > 0])
+                                                        _yA_i = np.interp(_tc, _tsA_v, _dA['y'][_tsA > 0])
+                                                        _xB_i = np.interp(_tc, _tsB_v, _dB['x'][_tsB > 0])
+                                                        _yB_i = np.interp(_tc, _tsB_v, _dB['y'][_tsB > 0])
+                                                        _t_ax = _tc - _tc[0]
+                                                    else:
+                                                        _nn = min(len(_dA['x']), len(_dB['x']))
+                                                        _xA_i = _dA['x'][:_nn]
+                                                        _yA_i = _dA['y'][:_nn]
+                                                        _xB_i = _dB['x'][:_nn]
+                                                        _yB_i = _dB['y'][:_nn]
+                                                        _t_ax = np.arange(_nn) / 10.0
+
+                                                    _dist_v = np.sqrt(
+                                                        (_xA_i - _xB_i)**2 +
+                                                        (_yA_i - _yB_i)**2
+                                                    )
+                                                    _sbgd = max(1, len(_dist_v) // 3000)
+                                                    _lbl = f"{_na.split()[0]} ↔ {_nb.split()[0]}"
+                                                    _cor_d = _DCORES[_pi_d % len(_DCORES)]
+
+                                                    _fig_dist.add_trace(go.Scatter(
+                                                        x=_t_ax[::_sbgd] / 60,
+                                                        y=_dist_v[::_sbgd],
+                                                        mode='lines',
+                                                        name=_lbl,
+                                                        line=dict(color=_cor_d, width=1.5),
+                                                        hovertemplate=(
+                                                            '%{x:.1f} min | '
+                                                            '%{y:.1f} m<extra>'
+                                                            + _lbl + '</extra>'
+                                                        )
+                                                    ))
+                                                    _resumo_d.append({
+                                                        'Par': _lbl,
+                                                        'Dist. Média (m)':
+                                                            round(float(_dist_v.mean()), 1),
+                                                        'Mediana (m)':
+                                                            round(float(np.median(_dist_v)), 1),
+                                                        'Mín (m)':
+                                                            round(float(_dist_v.min()), 1),
+                                                        'Máx (m)':
+                                                            round(float(_dist_v.max()), 1),
+                                                        '% Tempo < 5 m':
+                                                            round(100 * ((_dist_v < 5).sum()
+                                                                         / len(_dist_v)), 1),
+                                                        '% Tempo < 10 m':
+                                                            round(100 * ((_dist_v < 10).sum()
+                                                                         / len(_dist_v)), 1),
+                                                    })
+
+                                                    # Campo de proximidade (apenas 1º par)
+                                                    if _pi_d == 0 and _dist_v.min() < 15:
+                                                        _prox_mk = _dist_v < 10
+                                                        if _prox_mk.sum() > 5:
+                                                            _st_prox = _dist_dados
+                                                            _xmid = ((_xA_i[_prox_mk] +
+                                                                       _xB_i[_prox_mk]) / 2)
+                                                            _ymid = ((_yA_i[_prox_mk] +
+                                                                       _yB_i[_prox_mk]) / 2)
+                                                            _fig_prox = desenhar_campo_futebol_bonito(
+                                                                title=(f"Zonas de Proximidade "
+                                                                       f"(< 10 m) — {_lbl}")
+                                                            )
+                                                            _sbgp = max(1, len(_xA_i) // 3000)
+                                                            _fig_prox.add_trace(go.Scatter(
+                                                                x=_xA_i[::_sbgp],
+                                                                y=_yA_i[::_sbgp],
+                                                                mode='markers',
+                                                                marker=dict(size=1.5,
+                                                                    color='rgba(0,229,255,0.18)'),
+                                                                name=_na, showlegend=True
+                                                            ))
+                                                            _fig_prox.add_trace(go.Scatter(
+                                                                x=_xB_i[::_sbgp],
+                                                                y=_yB_i[::_sbgp],
+                                                                mode='markers',
+                                                                marker=dict(size=1.5,
+                                                                    color='rgba(255,64,129,0.18)'),
+                                                                name=_nb, showlegend=True
+                                                            ))
+                                                            _sbgpr = max(1, len(_xmid) // 1500)
+                                                            _fig_prox.add_trace(go.Scatter(
+                                                                x=_xmid[::_sbgpr],
+                                                                y=_ymid[::_sbgpr],
+                                                                mode='markers',
+                                                                marker=dict(
+                                                                    size=5,
+                                                                    color='rgba(255,82,82,0.65)',
+                                                                    symbol='circle'
+                                                                ),
+                                                                name='Proximidade < 10 m',
+                                                                showlegend=True
+                                                            ))
+                                                            _fig_prox.update_layout(height=430)
+                                                            _prox_fig_final = _fig_prox
+
+                                                # Linhas de referência
+                                                _fig_dist.add_hline(
+                                                    y=5, line_dash='dot',
+                                                    line_color='rgba(255,235,59,0.45)',
+                                                    annotation_text='5 m',
+                                                    annotation_font_color='#FFEB3B',
+                                                    annotation_position='right'
+                                                )
+                                                _fig_dist.add_hline(
+                                                    y=10, line_dash='dot',
+                                                    line_color='rgba(255,152,0,0.45)',
+                                                    annotation_text='10 m',
+                                                    annotation_font_color='#FF9800',
+                                                    annotation_position='right'
+                                                )
+                                                _fig_dist.update_layout(
+                                                    title=dict(
+                                                        text="Distância Entre Atletas ao Longo do Tempo",
+                                                        font=dict(color='white', size=14)
+                                                    ),
+                                                    xaxis=dict(
+                                                        title='Tempo (min)',
+                                                        gridcolor='rgba(255,255,255,0.1)',
+                                                        color='white'
+                                                    ),
+                                                    yaxis=dict(
+                                                        title='Distância (m)',
+                                                        gridcolor='rgba(255,255,255,0.1)',
+                                                        color='white'
+                                                    ),
+                                                    paper_bgcolor='rgba(0,0,0,0)',
+                                                    plot_bgcolor='rgba(20,20,30,0.85)',
+                                                    legend=dict(
+                                                        font=dict(color='white'),
+                                                        bgcolor='rgba(0,0,0,0.45)'
+                                                    ),
+                                                    height=390
+                                                )
+                                                st.plotly_chart(_fig_dist,
+                                                                use_container_width=True)
+
+                                                if _resumo_d:
+                                                    st.markdown("**📋 Resumo por Par**")
+                                                    st.dataframe(
+                                                        pd.DataFrame(_resumo_d).set_index('Par'),
+                                                        use_container_width=True
+                                                    )
+
+                                                if 'prox_fig_final' in dir() and _prox_fig_final:
+                                                    st.markdown("---")
+                                                    st.plotly_chart(_prox_fig_final,
+                                                                    use_container_width=True)
+                                                    st.caption(
+                                                        "🔴 Pontos vermelhos = posição média "
+                                                        "entre os atletas quando distância < 10 m"
+                                                    )
+                                            else:
+                                                st.warning(
+                                                    "Dados de posição insuficientes "
+                                                    "para os atletas selecionados.")
+                                    else:
+                                        st.markdown("---")
+                                        st.info(
+                                            "ℹ️ Selecione **2 ou mais atletas** no topo desta "
+                                            "seção para ativar a análise de distância entre eles."
+                                        )
+
                                 else:
                                     st.error("❌ Não foi possível calcular as coordenadas de campo.")
                             else:
