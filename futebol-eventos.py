@@ -1119,25 +1119,54 @@ def adicionar_pontos_aceleracao_bandas(fig, x_coords, y_coords, aceleracoes, ban
                 hovertemplate='x=%{x:.1f}m y=%{y:.1f}m<extra>' + b['label'] + '</extra>'))
 
 
-def adicionar_setas_direcao(fig, x_coords, y_coords, sample=40):
-    """Setas de direção do movimento ao longo da trajetória."""
-    xs = np.array(x_coords)
-    ys = np.array(y_coords)
+def adicionar_setas_direcao(fig, x_coords, y_coords,
+                           xs_effort=None, ys_effort=None):
+    """Uma única seta de direção no final do esforço (ou da trajetória).
+
+    Se xs_effort/ys_effort forem fornecidos, a seta é laranja e posicionada
+    no final da linha de esforço. Caso contrário, uma seta branca é colocada
+    no final da trajetória completa.
+    """
+    # Escolhe a fonte de coordenadas
+    _use_effort = xs_effort is not None and len(xs_effort) >= 2
+    xs = np.array(xs_effort if _use_effort else x_coords)
+    ys = np.array(ys_effort if _use_effort else y_coords)
+
     if len(xs) < 2:
         return
-    for i in range(0, len(xs)-1, sample):
-        j = min(i + sample, len(xs)-1)
-        dx, dy = xs[j]-xs[i], ys[j]-ys[i]
+
+    # Calcula direção média dos últimos ~20% dos pontos (robustez contra noise)
+    n_tail = max(2, min(len(xs) // 5, 12))
+    dx = float(xs[-1] - xs[-n_tail])
+    dy = float(ys[-1] - ys[-n_tail])
+    norm = np.hypot(dx, dy)
+    if norm < 0.3:
+        # Fallback: direção global (início → fim)
+        dx = float(xs[-1] - xs[0])
+        dy = float(ys[-1] - ys[0])
         norm = np.hypot(dx, dy)
-        if norm < 0.5:
-            continue
-        dx /= norm; dy /= norm
-        fig.add_annotation(
-            x=float(xs[i]+dx*2), y=float(ys[i]+dy*2),
-            ax=float(xs[i]),     ay=float(ys[i]),
-            xref='x', yref='y', axref='x', ayref='y',
-            showarrow=True, arrowhead=2, arrowsize=1.4,
-            arrowwidth=1.5, arrowcolor='rgba(255,255,255,0.55)')
+        if norm < 0.3:
+            return
+    dx /= norm; dy /= norm
+
+    tip_x = float(xs[-1])
+    tip_y = float(ys[-1])
+    tail_len = 5.0   # comprimento do cabo da seta (m)
+
+    cor = '#FF9800' if _use_effort else 'rgba(255,255,255,0.85)'
+
+    fig.add_annotation(
+        x=tip_x + dx * 1.5,
+        y=tip_y + dy * 1.5,
+        ax=tip_x - dx * tail_len,
+        ay=tip_y - dy * tail_len,
+        xref='x', yref='y', axref='x', ayref='y',
+        showarrow=True,
+        arrowhead=3,
+        arrowsize=2.2,
+        arrowwidth=3.0 if _use_effort else 2.0,
+        arrowcolor=cor,
+    )
 
 
 def adicionar_convex_hull(fig, x_coords, y_coords):
@@ -4536,7 +4565,11 @@ def main():
                                             fig_campo, xn, yn, acc_raw, bandas_acc_sel)
 
                                     if ov_setas:
-                                        adicionar_setas_direcao(fig_campo, xn, yn)
+                                        adicionar_setas_direcao(
+                                            fig_campo, xn, yn,
+                                            xs_effort=xs_a if (xs_a and len(xs_a) >= 2) else None,
+                                            ys_effort=ys_a if (ys_a and len(ys_a) >= 2) else None,
+                                        )
                                     if ov_hull:
                                         adicionar_convex_hull(fig_campo, xn, yn)
                                     if ov_tercos:
@@ -5381,10 +5414,31 @@ def main():
                 st.subheader("⏱️ Esforços ao Longo do Tempo")
                 
                 if dados_sensor_por_atleta_por_periodo:
-                    periodo_escolhido = st.selectbox("Selecione o período:", list(dados_sensor_por_atleta_por_periodo.keys()), key="periodo_esforcos")
-                    if dados_sensor_por_atleta_por_periodo[periodo_escolhido]:
-                        atleta_escolhido = st.selectbox("Selecione o atleta:", list(dados_sensor_por_atleta_por_periodo[periodo_escolhido].keys()), key="atleta_esforcos")
-                        sensor_points = dados_sensor_por_atleta_por_periodo[periodo_escolhido][atleta_escolhido]
+                    _ESF_TODOS = "🔀 Todos os períodos (combinado)"
+                    _esf_opcoes = [_ESF_TODOS] + list(dados_sensor_por_atleta_por_periodo.keys())
+                    periodo_escolhido = st.selectbox("Selecione o período:", _esf_opcoes, key="periodo_esforcos")
+                    _esf_modo_todos = (periodo_escolhido == _ESF_TODOS)
+
+                    if _esf_modo_todos:
+                        _esf_ats_set = set()
+                        for _pv in dados_sensor_por_atleta_por_periodo.values():
+                            _esf_ats_set.update(_pv.keys())
+                        _esf_atletas = sorted(_esf_ats_set)
+                    else:
+                        _esf_atletas = list(dados_sensor_por_atleta_por_periodo.get(periodo_escolhido, {}).keys())
+
+                    if _esf_atletas:
+                        atleta_escolhido = st.selectbox("Selecione o atleta:", _esf_atletas, key="atleta_esforcos")
+                        if _esf_modo_todos:
+                            sensor_points = []
+                            for _pv2 in dados_sensor_por_atleta_por_periodo.values():
+                                sensor_points += _pv2.get(atleta_escolhido, [])
+                            st.caption(
+                                f"📊 Combinando **{len(dados_sensor_por_atleta_por_periodo)} períodos** "
+                                f"→ {len(sensor_points):,} amostras para **{atleta_escolhido}**."
+                            )
+                        else:
+                            sensor_points = dados_sensor_por_atleta_por_periodo[periodo_escolhido].get(atleta_escolhido, [])
                         
                         col_config1, col_config2 = st.columns(2)
                         with col_config1:
@@ -5417,12 +5471,24 @@ def main():
                         tipo_esforco = st.radio("Tipo de esforço:", ["Velocidade", "Aceleração"], horizontal=True)
                         
                         efforts_df = pd.DataFrame()
-                        if tipo_esforco == "Velocidade":
-                            if atleta_escolhido in dados_efforts_vel_por_periodo.get(periodo_escolhido, {}):
-                                efforts_df = processar_efforts_velocidade(dados_efforts_vel_por_periodo[periodo_escolhido][atleta_escolhido])
+                        if _esf_modo_todos:
+                            _esf_raw = []
+                            for _pk in dados_sensor_por_atleta_por_periodo.keys():
+                                if tipo_esforco == "Velocidade":
+                                    _esf_raw += dados_efforts_vel_por_periodo.get(_pk, {}).get(atleta_escolhido, [])
+                                else:
+                                    _esf_raw += dados_efforts_acc_por_periodo.get(_pk, {}).get(atleta_escolhido, [])
+                            if _esf_raw:
+                                efforts_df = (processar_efforts_velocidade(_esf_raw)
+                                              if tipo_esforco == "Velocidade"
+                                              else processar_efforts_aceleracao(_esf_raw))
                         else:
-                            if atleta_escolhido in dados_efforts_acc_por_periodo.get(periodo_escolhido, {}):
-                                efforts_df = processar_efforts_aceleracao(dados_efforts_acc_por_periodo[periodo_escolhido][atleta_escolhido])
+                            if tipo_esforco == "Velocidade":
+                                if atleta_escolhido in dados_efforts_vel_por_periodo.get(periodo_escolhido, {}):
+                                    efforts_df = processar_efforts_velocidade(dados_efforts_vel_por_periodo[periodo_escolhido][atleta_escolhido])
+                            else:
+                                if atleta_escolhido in dados_efforts_acc_por_periodo.get(periodo_escolhido, {}):
+                                    efforts_df = processar_efforts_aceleracao(dados_efforts_acc_por_periodo[periodo_escolhido][atleta_escolhido])
                         
                         if not efforts_df.empty:
                             if 'Banda' in efforts_df.columns:
@@ -5447,8 +5513,15 @@ def main():
                         # ── Timeline técnico-físico com eventos futebol ───────
                         st.markdown("---")
                         st.markdown("### ⚽ Timeline Técnico-Físico")
-                        _ev_atleta = dados_eventos_por_periodo.get(
-                            periodo_escolhido, {}).get(atleta_escolhido, {})
+                        if _esf_modo_todos:
+                            _ev_atleta = {}
+                            for _pk in dados_sensor_por_atleta_por_periodo.keys():
+                                for _tipo_ev, _lista_ev in dados_eventos_por_periodo.get(_pk, {}).get(atleta_escolhido, {}).items():
+                                    _ev_atleta.setdefault(_tipo_ev, [])
+                                    _ev_atleta[_tipo_ev] += _lista_ev
+                        else:
+                            _ev_atleta = dados_eventos_por_periodo.get(
+                                periodo_escolhido, {}).get(atleta_escolhido, {})
 
                         if _ev_atleta:
                             _todos_tipos = list(_ev_atleta.keys())
@@ -5489,7 +5562,7 @@ def main():
                                     st.download_button(
                                         "📥 Exportar análise de fadiga",
                                         df_fadiga.to_csv(index=False),
-                                        f"fadiga_{atleta_escolhido}_{periodo_escolhido}.csv"
+                                        f"fadiga_{atleta_escolhido}_{'todos' if _esf_modo_todos else periodo_escolhido}.csv"
                                     )
                                 else:
                                     st.info("Nenhum dado de fadiga calculado para os eventos selecionados.")
@@ -5551,11 +5624,31 @@ def main():
                 """)
                 
                 if dados_sensor_por_atleta_por_periodo:
-                    periodo_janela = st.selectbox("Selecione o período:", list(dados_sensor_por_atleta_por_periodo.keys()), key="periodo_janela")
-                    
-                    if periodo_janela in dados_sensor_por_atleta_por_periodo:
-                        atleta_janela = st.selectbox("Selecione o atleta:", list(dados_sensor_por_atleta_por_periodo[periodo_janela].keys()), key="atleta_janela")
-                        sensor_points = dados_sensor_por_atleta_por_periodo[periodo_janela][atleta_janela]
+                    _JAN_TODOS = "🔀 Todos os períodos (combinado)"
+                    _jan_opcoes = [_JAN_TODOS] + list(dados_sensor_por_atleta_por_periodo.keys())
+                    periodo_janela = st.selectbox("Selecione o período:", _jan_opcoes, key="periodo_janela")
+                    _jan_modo_todos = (periodo_janela == _JAN_TODOS)
+
+                    if _jan_modo_todos:
+                        _jan_ats_set = set()
+                        for _pv in dados_sensor_por_atleta_por_periodo.values():
+                            _jan_ats_set.update(_pv.keys())
+                        _jan_atletas = sorted(_jan_ats_set)
+                    else:
+                        _jan_atletas = list(dados_sensor_por_atleta_por_periodo.get(periodo_janela, {}).keys())
+
+                    if _jan_atletas:
+                        atleta_janela = st.selectbox("Selecione o atleta:", _jan_atletas, key="atleta_janela")
+                        if _jan_modo_todos:
+                            sensor_points = []
+                            for _pv2 in dados_sensor_por_atleta_por_periodo.values():
+                                sensor_points += _pv2.get(atleta_janela, [])
+                            st.caption(
+                                f"📊 Combinando **{len(dados_sensor_por_atleta_por_periodo)} períodos** "
+                                f"→ {len(sensor_points):,} amostras para **{atleta_janela}**."
+                            )
+                        else:
+                            sensor_points = dados_sensor_por_atleta_por_periodo[periodo_janela].get(atleta_janela, [])
                         
                         if sensor_points:
                             _dur_s_aba4 = get_min_dur_s()
@@ -5628,10 +5721,20 @@ def main():
                 """)
 
                 if dados_sensor_por_atleta_por_periodo:
-                    _nm_per = st.selectbox("Período:", list(dados_sensor_por_atleta_por_periodo.keys()),
-                                           key="nm_periodo")
-                    if dados_sensor_por_atleta_por_periodo[_nm_per]:
-                        _nm_ats = list(dados_sensor_por_atleta_por_periodo[_nm_per].keys())
+                    _NM_TODOS = "🔀 Todos os períodos (combinado)"
+                    _nm_opcoes_per = [_NM_TODOS] + list(dados_sensor_por_atleta_por_periodo.keys())
+                    _nm_per = st.selectbox("Período:", _nm_opcoes_per, key="nm_periodo")
+
+                    # Monta lista de atletas disponíveis
+                    if _nm_per == _NM_TODOS:
+                        _nm_ats_set = set()
+                        for _pv in dados_sensor_por_atleta_por_periodo.values():
+                            _nm_ats_set.update(_pv.keys())
+                        _nm_ats = sorted(_nm_ats_set)
+                    else:
+                        _nm_ats = list(dados_sensor_por_atleta_por_periodo.get(_nm_per, {}).keys())
+
+                    if _nm_ats:
                         _nm_atl = st.selectbox("Atleta:", _nm_ats, key="nm_atleta")
                         _nm_lim = st.slider("Limiar de intensidade (m/s²):", 1.0, 4.0, 2.0, 0.5,
                                             key="nm_limiar",
@@ -5643,7 +5746,20 @@ def main():
                             f"({max(1, round(_nm_dur_s * _SENSOR_HZ))} frames a 10 Hz) — "
                             "ajuste na sidebar."
                         )
-                        _nm_sp = dados_sensor_por_atleta_por_periodo[_nm_per][_nm_atl]
+
+                        # Combina sensor_points de todos os períodos se necessário
+                        if _nm_per == _NM_TODOS:
+                            _nm_sp = []
+                            for _pv2 in dados_sensor_por_atleta_por_periodo.values():
+                                _nm_sp += _pv2.get(_nm_atl, [])
+                            if len(dados_sensor_por_atleta_por_periodo) > 1:
+                                st.caption(
+                                    f"📊 Combinando **{len(dados_sensor_por_atleta_por_periodo)} períodos** "
+                                    f"→ {len(_nm_sp):,} amostras para **{_nm_atl}**."
+                                )
+                        else:
+                            _nm_sp = dados_sensor_por_atleta_por_periodo[_nm_per].get(_nm_atl, [])
+
                         _nm_dados = calcular_carga_neuromuscular(_nm_sp, limiar=_nm_lim, min_dur_s=_nm_dur_s)
 
                         if _nm_dados:
@@ -5694,15 +5810,21 @@ def main():
                 )
                 st.markdown("---")
 
-                from scipy import stats as _scipy_stats
-
                 _av_periodos = list(dados_sensor_por_atleta_por_periodo.keys())
                 if _av_periodos and resultados_por_periodo:
+                    _AV_TODOS = "🔀 Todos os períodos (combinado)"
+                    _av_opcoes_per = [_AV_TODOS] + _av_periodos
                     _av_col1, _av_col2 = st.columns([2, 1])
                     with _av_col1:
-                        _av_per = st.selectbox("Período:", _av_periodos, key="av_periodo")
+                        _av_per = st.selectbox("Período:", _av_opcoes_per, key="av_periodo")
                     with _av_col2:
-                        _av_atletas_disp = list(dados_sensor_por_atleta_por_periodo.get(_av_per, {}).keys())
+                        if _av_per == _AV_TODOS:
+                            _av_ats_set = set()
+                            for _pv in dados_sensor_por_atleta_por_periodo.values():
+                                _av_ats_set.update(_pv.keys())
+                            _av_atletas_disp = sorted(_av_ats_set)
+                        else:
+                            _av_atletas_disp = list(dados_sensor_por_atleta_por_periodo.get(_av_per, {}).keys())
                         _av_atls_sel = st.multiselect(
                             "Atletas (até 6):", _av_atletas_disp,
                             default=_av_atletas_disp[:min(3, len(_av_atletas_disp))],
@@ -5717,7 +5839,12 @@ def main():
                         # ── Extrai (v, a) de todos os atletas selecionados ────
                         _av_dados = {}
                         for _av_atl in _av_atls_sel:
-                            _spts = dados_sensor_por_atleta_por_periodo.get(_av_per, {}).get(_av_atl, [])
+                            if _av_per == _AV_TODOS:
+                                _spts = []
+                                for _pv2 in dados_sensor_por_atleta_por_periodo.values():
+                                    _spts += _pv2.get(_av_atl, [])
+                            else:
+                                _spts = dados_sensor_por_atleta_por_periodo.get(_av_per, {}).get(_av_atl, [])
                             if not _spts:
                                 continue
                             _vels, _accs = [], []
@@ -5777,183 +5904,7 @@ def main():
                             st.markdown("---")
 
                             # ════════════════════════════════════════════════
-                            # SEÇÃO 2 — PERFIL TEÓRICO (regressão linear)
-                            # ════════════════════════════════════════════════
-                            st.markdown("### 📐 Perfil Mecânico Individual (Samozino & Morin)")
-                            st.caption(
-                                "Regressão linear sobre os pontos de aceleração positiva (fase de aceleração). "
-                                "Extrai Amax (aceleração teórica máxima), Vmax (velocidade teórica máxima) e "
-                                "a inclinação (taxa de declínio força-velocidade)."
-                            )
-
-                            _av_perfis = {}
-                            _fig_perfil = go.Figure()
-
-                            for _av_atl, _d in _av_dados.items():
-                                # Filtra fase de aceleração: v > 2 km/h e a > 0.3 m/s²
-                                _mask_ac = (_d['vel'] > 2.0) & (_d['acc'] > 0.3)
-                                _v_ac = _d['vel'][_mask_ac]
-                                _a_ac = _d['acc'][_mask_ac]
-
-                                if len(_v_ac) < 20:
-                                    continue
-
-                                # Regressão linear: a = Amax + slope × v
-                                _slope, _intercept, _r, _pval, _se = _scipy_stats.linregress(_v_ac, _a_ac)
-
-                                if _slope >= 0 or _intercept <= 0:
-                                    # Perfil inválido (slope deve ser negativo)
-                                    continue
-
-                                _amax_th  = float(_intercept)           # y-intercept = Amax
-                                _vmax_th  = float(-_intercept / _slope) # x-intercept = Vmax
-                                _pmax_th  = (_amax_th * _vmax_th) / 4   # Pmax relativo (W/kg aprox.)
-                                _r2       = float(_r ** 2)
-
-                                _av_perfis[_av_atl] = {
-                                    'Amax (m/s²)':  round(_amax_th, 2),
-                                    'Vmax (km/h)':  round(_vmax_th, 1),
-                                    'Slope':        round(_slope, 4),
-                                    'Pmax (rel.)':  round(_pmax_th, 2),
-                                    'R²':           round(_r2, 3),
-                                    'Vmax real':    round(float(_d['vel'].max()), 1),
-                                }
-
-                                # Linha do perfil teórico
-                                _v_line = np.linspace(0, min(_vmax_th, _d['vel'].max() * 1.1), 80)
-                                _a_line = _intercept + _slope * _v_line
-                                _fig_perfil.add_trace(go.Scatter(
-                                    x=_v_line, y=np.clip(_a_line, 0, None),
-                                    mode='lines',
-                                    line=dict(color=_av_cores[_av_atl], width=2.5),
-                                    name=f'{_av_atl} (R²={_r2:.2f})',
-                                    hovertemplate=(
-                                        f'{_av_atl}<br>Vel: %{{x:.1f}} km/h'
-                                        f'<br>Acc teórica: %{{y:.2f}} m/s²<extra></extra>'
-                                    ),
-                                ))
-                                # Ponto Amax
-                                _fig_perfil.add_trace(go.Scatter(
-                                    x=[0], y=[_amax_th], mode='markers+text',
-                                    marker=dict(color=_av_cores[_av_atl], size=10, symbol='diamond'),
-                                    text=[f'Amax={_amax_th:.1f}'],
-                                    textposition='middle right',
-                                    textfont=dict(color=_av_cores[_av_atl], size=10),
-                                    showlegend=False,
-                                    hoverinfo='skip',
-                                ))
-                                # Ponto Vmax
-                                _fig_perfil.add_trace(go.Scatter(
-                                    x=[_vmax_th], y=[0], mode='markers+text',
-                                    marker=dict(color=_av_cores[_av_atl], size=10, symbol='diamond'),
-                                    text=[f'Vmax={_vmax_th:.1f}'],
-                                    textposition='top center',
-                                    textfont=dict(color=_av_cores[_av_atl], size=10),
-                                    showlegend=False,
-                                    hoverinfo='skip',
-                                ))
-
-                            _fig_perfil.add_hline(y=0, line=dict(color='white', width=1, dash='dot'))
-                            _fig_perfil.update_layout(
-                                plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                font=dict(color='white'),
-                                xaxis=dict(title='Velocidade (km/h)', gridcolor='#333', range=[-0.5, None]),
-                                yaxis=dict(title='Aceleração (m/s²)', gridcolor='#333', range=[-0.2, None]),
-                                legend=dict(font=dict(color='white'), bgcolor='rgba(0,0,0,0.5)'),
-                                height=380, margin=dict(t=20, b=10),
-                            )
-                            st.plotly_chart(_fig_perfil, use_container_width=True)
-
-                            # Tabela de parâmetros do perfil
-                            if _av_perfis:
-                                _df_perfil = pd.DataFrame(_av_perfis).T.reset_index()
-                                _df_perfil.rename(columns={'index': 'Atleta'}, inplace=True)
-                                st.dataframe(_df_perfil, use_container_width=True, hide_index=True)
-
-                                # Cards de destaque
-                                st.markdown("**🏆 Destaques do Grupo:**")
-                                _av_kpi_cols = st.columns(4)
-                                if 'Amax (m/s²)' in _df_perfil.columns:
-                                    _idx_amax = _df_perfil['Amax (m/s²)'].idxmax()
-                                    _av_kpi_cols[0].metric("💪 Maior Amax",
-                                        f"{_df_perfil.loc[_idx_amax,'Amax (m/s²)']} m/s²",
-                                        _df_perfil.loc[_idx_amax,'Atleta'])
-                                if 'Vmax (km/h)' in _df_perfil.columns:
-                                    _idx_vmax = _df_perfil['Vmax (km/h)'].idxmax()
-                                    _av_kpi_cols[1].metric("💨 Maior Vmax teórico",
-                                        f"{_df_perfil.loc[_idx_vmax,'Vmax (km/h)']} km/h",
-                                        _df_perfil.loc[_idx_vmax,'Atleta'])
-                                if 'Vmax real' in _df_perfil.columns:
-                                    _idx_vreal = _df_perfil['Vmax real'].idxmax()
-                                    _av_kpi_cols[2].metric("🛰️ Maior Vel. Real",
-                                        f"{_df_perfil.loc[_idx_vreal,'Vmax real']} km/h",
-                                        _df_perfil.loc[_idx_vreal,'Atleta'])
-                                if 'Pmax (rel.)' in _df_perfil.columns:
-                                    _idx_pmax = _df_perfil['Pmax (rel.)'].idxmax()
-                                    _av_kpi_cols[3].metric("⚡ Maior Pmax",
-                                        f"{_df_perfil.loc[_idx_pmax,'Pmax (rel.)']}",
-                                        _df_perfil.loc[_idx_pmax,'Atleta'])
-
-                            st.markdown("---")
-
-                            # ════════════════════════════════════════════════
-                            # SEÇÃO 3 — COMPARAÇÃO AMAX × VMAX (barras)
-                            # ════════════════════════════════════════════════
-                            if _av_perfis:
-                                st.markdown("### 📊 Comparação Amax × Vmax entre Atletas")
-                                _av_c1, _av_c2 = st.columns(2)
-
-                                # Amax
-                                with _av_c1:
-                                    _df_p = pd.DataFrame(_av_perfis).T.reset_index()
-                                    _df_p.rename(columns={'index':'Atleta'}, inplace=True)
-                                    _fig_amax = go.Figure(go.Bar(
-                                        x=_df_p['Atleta'], y=_df_p['Amax (m/s²)'],
-                                        marker_color=[_av_cores.get(a,'#888') for a in _df_p['Atleta']],
-                                        text=_df_p['Amax (m/s²)'].round(2), textposition='outside',
-                                    ))
-                                    _fig_amax.update_layout(
-                                        title=dict(text='Amax Teórico (m/s²)', font=dict(color='white',size=13)),
-                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                        font=dict(color='white'),
-                                        xaxis=dict(gridcolor='#333'),
-                                        yaxis=dict(gridcolor='#333', title='m/s²'),
-                                        height=320, margin=dict(t=45,b=10,l=10,r=10),
-                                        showlegend=False,
-                                    )
-                                    st.plotly_chart(_fig_amax, use_container_width=True)
-
-                                # Vmax teórico vs real
-                                with _av_c2:
-                                    _fig_vmax = go.Figure()
-                                    _fig_vmax.add_trace(go.Bar(
-                                        x=_df_p['Atleta'], y=_df_p['Vmax (km/h)'],
-                                        name='Vmax Teórico',
-                                        marker_color=[_av_cores.get(a,'#888') for a in _df_p['Atleta']],
-                                        text=_df_p['Vmax (km/h)'].round(1), textposition='outside',
-                                    ))
-                                    _fig_vmax.add_trace(go.Bar(
-                                        x=_df_p['Atleta'], y=_df_p['Vmax real'],
-                                        name='Vmax Real',
-                                        marker_color='rgba(255,255,255,0.3)',
-                                        text=_df_p['Vmax real'].round(1), textposition='outside',
-                                    ))
-                                    _fig_vmax.update_layout(
-                                        title=dict(text='Vmax Teórico vs Real (km/h)', font=dict(color='white',size=13)),
-                                        barmode='group',
-                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                        font=dict(color='white'),
-                                        xaxis=dict(gridcolor='#333'),
-                                        yaxis=dict(gridcolor='#333', title='km/h'),
-                                        legend=dict(font=dict(color='white')),
-                                        height=320, margin=dict(t=45,b=10,l=10,r=10),
-                                    )
-                                    st.plotly_chart(_fig_vmax, use_container_width=True)
-
-                            st.markdown("---")
-
-                            # ════════════════════════════════════════════════
-                            # SEÇÃO 4 — HISTOGRAMA DE ACELERAÇÕES POR ZONA
+                            # SEÇÃO 2 — HISTOGRAMA DE ACELERAÇÕES POR ZONA
                             # ════════════════════════════════════════════════
                             st.markdown("### 📊 Distribuição de Acelerações por Zona")
                             _av_c3, _av_c4 = st.columns(2)
