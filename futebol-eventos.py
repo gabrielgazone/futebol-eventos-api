@@ -1085,8 +1085,30 @@ def adicionar_trajetoria_campo(fig, x_coords, y_coords, velocidades, nome=""):
             name=b['label'], marker=dict(size=9, color=b['color'])))
 
 
-def adicionar_pontos_velocidade_bandas(fig, x_coords, y_coords, velocidades, bandas_sel):
-    """Pontos coloridos por bandas de velocidade selecionadas."""
+def _segmentos_continuos(idxs, gap_max=8):
+    """Agrupa índices consecutivos em segmentos (gap_max = frames tolerados entre pontos)."""
+    if len(idxs) == 0:
+        return []
+    segs, seg = [], [idxs[0]]
+    for i in range(1, len(idxs)):
+        if idxs[i] - idxs[i - 1] <= gap_max:
+            seg.append(idxs[i])
+        else:
+            if len(seg) >= 3:
+                segs.append(seg)
+            seg = [idxs[i]]
+    if len(seg) >= 3:
+        segs.append(seg)
+    return segs
+
+
+def adicionar_pontos_velocidade_bandas(fig, x_coords, y_coords, velocidades,
+                                       bandas_sel, mostrar_setas=False):
+    """Pontos coloridos por bandas de velocidade selecionadas.
+
+    Se mostrar_setas=True, desenha uma seta direcional ao final de cada
+    esforço contínuo dentro de cada banda (direção ofensiva/defensiva).
+    """
     if not x_coords or not bandas_sel:
         return
     xs = np.array(x_coords)
@@ -1095,15 +1117,52 @@ def adicionar_pontos_velocidade_bandas(fig, x_coords, y_coords, velocidades, ban
     for k in bandas_sel:
         b = BANDAS_VEL[k]
         mask = (vs >= b['min']) & (vs < b['max'])
-        if mask.sum() > 0:
-            fig.add_trace(go.Scatter(
-                x=xs[mask], y=ys[mask], mode='markers', name=b['label'],
-                marker=dict(size=3, color=b['color'], opacity=0.8),
-                hovertemplate='x=%{x:.1f}m y=%{y:.1f}m<extra>' + b['label'] + '</extra>'))
+        if mask.sum() == 0:
+            continue
+        fig.add_trace(go.Scatter(
+            x=xs[mask], y=ys[mask], mode='markers', name=b['label'],
+            marker=dict(size=3, color=b['color'], opacity=0.8),
+            hovertemplate='x=%{x:.1f}m y=%{y:.1f}m<extra>' + b['label'] + '</extra>'))
+
+        if not mostrar_setas:
+            continue
+
+        # ── Uma seta por esforço contínuo dentro da banda ───────────
+        for seg in _segmentos_continuos(np.where(mask)[0]):
+            sx, sy = xs[seg], ys[seg]
+            # Direção: últimos ~25% dos pontos do segmento
+            n_t = max(2, min(len(seg) // 4, 10))
+            ddx = float(sx[-1] - sx[-n_t])
+            ddy = float(sy[-1] - sy[-n_t])
+            nm = np.hypot(ddx, ddy)
+            if nm < 0.3:                        # fallback início→fim
+                ddx = float(sx[-1] - sx[0])
+                ddy = float(sy[-1] - sy[0])
+                nm  = np.hypot(ddx, ddy)
+            if nm < 0.3:
+                continue
+            ddx /= nm; ddy /= nm
+            # Comprimento do cabo: proporcional à extensão do esforço, 1.5–5 m
+            span = np.hypot(float(sx[-1] - sx[0]), float(sy[-1] - sy[0]))
+            cabo = float(np.clip(span * 0.25, 1.5, 5.0))
+            tip_x, tip_y = float(sx[-1]), float(sy[-1])
+            fig.add_annotation(
+                x=tip_x + ddx * 0.8,   y=tip_y + ddy * 0.8,
+                ax=tip_x - ddx * cabo, ay=tip_y - ddy * cabo,
+                xref='x', yref='y', axref='x', ayref='y',
+                showarrow=True, arrowhead=3,
+                arrowsize=1.6, arrowwidth=2.0,
+                arrowcolor=b['color'],
+            )
 
 
-def adicionar_pontos_aceleracao_bandas(fig, x_coords, y_coords, aceleracoes, bandas_sel):
-    """Pontos coloridos por bandas de aceleração selecionadas."""
+def adicionar_pontos_aceleracao_bandas(fig, x_coords, y_coords, aceleracoes,
+                                       bandas_sel, mostrar_setas=False):
+    """Pontos coloridos por bandas de aceleração/desaceleração selecionadas.
+
+    Se mostrar_setas=True, desenha uma seta direcional ao final de cada
+    esforço contínuo dentro de cada banda.
+    """
     if not x_coords or not bandas_sel:
         return
     xs  = np.array(x_coords)
@@ -1112,11 +1171,41 @@ def adicionar_pontos_aceleracao_bandas(fig, x_coords, y_coords, aceleracoes, ban
     for k in bandas_sel:
         b = BANDAS_ACC[k]
         mask = (acc >= b['min']) & (acc < b['max'])
-        if mask.sum() > 0:
-            fig.add_trace(go.Scatter(
-                x=xs[mask], y=ys[mask], mode='markers', name=b['label'],
-                marker=dict(size=3, color=b['color'], opacity=0.8),
-                hovertemplate='x=%{x:.1f}m y=%{y:.1f}m<extra>' + b['label'] + '</extra>'))
+        if mask.sum() == 0:
+            continue
+        fig.add_trace(go.Scatter(
+            x=xs[mask], y=ys[mask], mode='markers', name=b['label'],
+            marker=dict(size=3, color=b['color'], opacity=0.8),
+            hovertemplate='x=%{x:.1f}m y=%{y:.1f}m<extra>' + b['label'] + '</extra>'))
+
+        if not mostrar_setas:
+            continue
+
+        # ── Uma seta por esforço contínuo dentro da banda ───────────
+        for seg in _segmentos_continuos(np.where(mask)[0]):
+            sx, sy = xs[seg], ys[seg]
+            n_t = max(2, min(len(seg) // 4, 10))
+            ddx = float(sx[-1] - sx[-n_t])
+            ddy = float(sy[-1] - sy[-n_t])
+            nm  = np.hypot(ddx, ddy)
+            if nm < 0.3:
+                ddx = float(sx[-1] - sx[0])
+                ddy = float(sy[-1] - sy[0])
+                nm  = np.hypot(ddx, ddy)
+            if nm < 0.3:
+                continue
+            ddx /= nm; ddy /= nm
+            span = np.hypot(float(sx[-1] - sx[0]), float(sy[-1] - sy[0]))
+            cabo = float(np.clip(span * 0.25, 1.5, 5.0))
+            tip_x, tip_y = float(sx[-1]), float(sy[-1])
+            fig.add_annotation(
+                x=tip_x + ddx * 0.8,   y=tip_y + ddy * 0.8,
+                ax=tip_x - ddx * cabo, ay=tip_y - ddy * cabo,
+                xref='x', yref='y', axref='x', ayref='y',
+                showarrow=True, arrowhead=3,
+                arrowsize=1.6, arrowwidth=2.0,
+                arrowcolor=b['color'],
+            )
 
 
 def adicionar_setas_direcao(fig, x_coords, y_coords,
@@ -4559,17 +4648,23 @@ def main():
                                         adicionar_trajetoria_campo(fig_campo, xn, yn, vel_raw, atleta_mapa)
                                     elif modo_viz == "⚡ Bandas de Velocidade" and bandas_vel_sel:
                                         adicionar_pontos_velocidade_bandas(
-                                            fig_campo, xn, yn, vel_raw, bandas_vel_sel)
+                                            fig_campo, xn, yn, vel_raw, bandas_vel_sel,
+                                            mostrar_setas=ov_setas)
                                     elif modo_viz == "🔁 Bandas de Aceleração" and bandas_acc_sel:
                                         adicionar_pontos_aceleracao_bandas(
-                                            fig_campo, xn, yn, acc_raw, bandas_acc_sel)
+                                            fig_campo, xn, yn, acc_raw, bandas_acc_sel,
+                                            mostrar_setas=ov_setas)
 
+                                    # Seta única no modo Trajetória, ou seta do esforço
+                                    # destacado em qualquer modo (laranja sobre tudo)
                                     if ov_setas:
-                                        adicionar_setas_direcao(
-                                            fig_campo, xn, yn,
-                                            xs_effort=xs_a if (xs_a and len(xs_a) >= 2) else None,
-                                            ys_effort=ys_a if (ys_a and len(ys_a) >= 2) else None,
-                                        )
+                                        if modo_viz == "🗺️ Trajetória":
+                                            adicionar_setas_direcao(fig_campo, xn, yn)
+                                        if xs_a and len(xs_a) >= 2:
+                                            adicionar_setas_direcao(
+                                                fig_campo, xn, yn,
+                                                xs_effort=xs_a, ys_effort=ys_a,
+                                            )
                                     if ov_hull:
                                         adicionar_convex_hull(fig_campo, xn, yn)
                                     if ov_tercos:
