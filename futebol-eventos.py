@@ -4883,10 +4883,18 @@ Escolha um ou mais atletas para análise simultânea.
                                              if len(_acc_eff) == len(_xn_eff)
                                              else [0.0] * (_seg_ei - _seg_si))
 
-                                # ── Tier 1: matching por timestamp exato (fallback)
+                                # ── Tier 1: matching por timestamp exato
+                                # Tenta timestamps de campo primeiro; cai para GPS
+                                # (campo x/y convertido de GPS → mesma indexação de ts_gps)
                                 if len(xs_a) < 2 and _anim_start_ts > 0 and _anim_end_ts > 0:
+                                    _ts1_src = []
                                     if _ts_eff and len(_ts_eff) == len(_xn_eff):
-                                        _ts_c = np.array(_ts_eff)
+                                        _ts1_src = _ts_eff
+                                    elif (_c_eff.get('ts_gps')
+                                          and len(_c_eff['ts_gps']) == len(_xn_eff)):
+                                        _ts1_src = _c_eff['ts_gps']
+                                    if _ts1_src:
+                                        _ts_c = np.array(_ts1_src, dtype=float)
                                         _m    = (_ts_c >= _anim_start_ts) & (_ts_c <= _anim_end_ts)
                                         if _m.any():
                                             xs_a  = np.array(_xn_eff)[_m].tolist()
@@ -4897,22 +4905,25 @@ Escolha um ou mais atletas para análise simultânea.
                                                      if len(_acc_eff) == len(_xn_eff) else [0]*int(_m.sum()))
 
                                 # ── Tier 2: fallback proporcional por timestamp
-                                if (len(xs_a) < 2 and _anim_start_ts > 0
-                                        and _anim_end_ts > 0 and _ts_eff):
-                                    _ts_min = min(_ts_eff)
-                                    _ts_max = max(_ts_eff)
-                                    if _ts_max > _ts_min:
-                                        _sp = max(0.0, (_anim_start_ts - _ts_min) / (_ts_max - _ts_min))
-                                        _ep = min(1.0, (_anim_end_ts   - _ts_min) / (_ts_max - _ts_min))
-                                        _si = int(_sp * len(_xn_eff))
-                                        _ei = min(len(_xn_eff), int(_ep * len(_xn_eff)) + 1)
-                                        if _ei > _si + 1:
-                                            xs_a  = _xn_eff[_si:_ei]
-                                            ys_a  = _yn_eff[_si:_ei]
-                                            vel_a = (_vel_eff[_si:_ei]
-                                                     if len(_vel_eff) == len(_xn_eff) else [0]*(_ei-_si))
-                                            acc_a = (_acc_eff[_si:_ei]
-                                                     if len(_acc_eff) == len(_xn_eff) else [0]*(_ei-_si))
+                                # Mesma lógica de source: campo → GPS
+                                if len(xs_a) < 2 and _anim_start_ts > 0 and _anim_end_ts > 0:
+                                    _ts2_src = (_ts_eff
+                                                or _c_eff.get('ts_gps', []))
+                                    if _ts2_src:
+                                        _ts_min = min(_ts2_src)
+                                        _ts_max = max(_ts2_src)
+                                        if _ts_max > _ts_min:
+                                            _sp = max(0.0, (_anim_start_ts - _ts_min) / (_ts_max - _ts_min))
+                                            _ep = min(1.0, (_anim_end_ts   - _ts_min) / (_ts_max - _ts_min))
+                                            _si = int(_sp * len(_xn_eff))
+                                            _ei = min(len(_xn_eff), int(_ep * len(_xn_eff)) + 1)
+                                            if _ei > _si + 1:
+                                                xs_a  = _xn_eff[_si:_ei]
+                                                ys_a  = _yn_eff[_si:_ei]
+                                                vel_a = (_vel_eff[_si:_ei]
+                                                         if len(_vel_eff) == len(_xn_eff) else [0]*(_ei-_si))
+                                                acc_a = (_acc_eff[_si:_ei]
+                                                         if len(_acc_eff) == len(_xn_eff) else [0]*(_ei-_si))
 
                                 # ── Tier 3: fallback por string de início + duração
                                 if len(xs_a) < 2:
@@ -5222,7 +5233,7 @@ Escolha um ou mais atletas para análise simultânea.
                                     # ══════════════════════════════════════════════
                                     # ANIMAÇÃO DO ESFORÇO SELECIONADO
                                     # ══════════════════════════════════════════════
-                                    if _anim_effort_row is not None and len(xs_a) >= 2:
+                                    if _anim_effort_row is not None:
                                         st.markdown("---")
                                         _vel_max_hdr = _anim_effort_row.get(
                                             'Vel. Máx (km/h)',
@@ -5431,10 +5442,11 @@ Escolha um ou mais atletas para análise simultânea.
                                             _ai5.metric("📊 % do Máximo",   f"{_anim_effort_row['% do Máximo']}%")
                                         else:
                                             st.warning(
-                                                "⚠️ Pontos de campo insuficientes para animar este esforço. "
-                                                "Verifique se o campo foi aplicado e se os timestamps correspondem."
+                                                "⚠️ Não foi possível localizar os pontos de campo para este esforço. "
+                                                "Verifique se o campo está configurado corretamente na aba **🗺️ Campo de Futebol** "
+                                                "e se os timestamps do esforço correspondem aos dados de posição carregados."
                                             )
-                                    elif _anim_effort_row is None:
+                                    else:
                                         st.info("💡 Selecione um esforço na tabela acima para ver a **animação no campo**.")
 
                                     # ── Detalhes de zona selecionada ──────────────────
