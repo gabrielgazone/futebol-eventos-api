@@ -7037,8 +7037,11 @@ Escolha um ou mais atletas para análise simultânea.
                             _step_fr = max(1, _n_all // _hist_max_frames)
                             _frame_ts = _all_ts_norm[::_step_fr]
                             _n_frames = len(_frame_ts)
-                            # 250ms por frame a 1× → ~4fps; escala linearmente com o slider
-                            _frame_dur_ms = max(30, int(250 / _hist_speed))
+                            # Duração real por frame baseada nos timestamps do período
+                            # 1× = tempo real: se o frame cobre 9.4s reais, fica 9.4s na tela
+                            _total_time_s      = _frame_ts[-1] - _frame_ts[0]
+                            _real_ms_per_frame = (_total_time_s * 1000) / max(1, _n_frames)
+                            _frame_dur_ms      = max(30, int(_real_ms_per_frame / _hist_speed))
 
                             # ── Figura base (campo) ────────────────────────
                             _fig_hist = desenhar_campo_futebol_bonito(
@@ -7702,7 +7705,7 @@ Escolha um ou mais atletas para análise simultânea.
                                         colorscale='RdBu', zmin=-1, zmax=1,
                                         text=[[f"{_corr[r,c]:.2f}" for c in range(_n_ha)] for r in range(_n_ha)],
                                         texttemplate='%{text}', textfont=dict(size=9),
-                                        colorbar=dict(title='r', tickfont=dict(color='white'), titlefont=dict(color='white')),
+                                        colorbar=dict(title=dict(text='r', font=dict(color='white')), tickfont=dict(color='white')),
                                     ))
                                     _fig_cr.update_layout(
                                         plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
@@ -7909,7 +7912,7 @@ Escolha um ou mais atletas para análise simultânea.
                                             x=[(_txr[i]+_txr[i+1])/2 for i in range(_tnx)],
                                             y=[(_tyr[i]+_tyr[i+1])/2 for i in range(_tny)],
                                             colorscale='YlOrRd',
-                                            colorbar=dict(title='Freq.', tickfont=dict(color='white'), titlefont=dict(color='white')),
+                                            colorbar=dict(title=dict(text='Freq.', font=dict(color='white')), tickfont=dict(color='white')),
                                         ))
                                         _fig_trf.add_shape(type='rect', x0=0, y0=0, x1=_hist_fl, y1=_hist_fw,
                                                            line=dict(color='white', width=2))
