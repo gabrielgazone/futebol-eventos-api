@@ -6959,13 +6959,49 @@ Escolha um ou mais atletas para análise simultânea.
                             )
                         with _col_hw2:
                             if _hist_window_sel != "Completo":
-                                _hist_start_pct = st.slider(
-                                    "▶ Início da janela (% do período):",
-                                    0, 95, 0, format="%d%%",
-                                    key="hist_start_pct"
+                                # Duração do período calculada no render anterior
+                                _prev_dur_s = st.session_state.get(
+                                    f'_hist_dur_{_hist_periodo_sel}', 0.0
                                 )
+                                _win_s_prev_map = {
+                                    "10 min": 600, "5 min": 300,
+                                    "2 min": 120,  "1 min": 60,
+                                }
+                                _win_s_prev = _win_s_prev_map.get(_hist_window_sel, 300)
+
+                                if _prev_dur_s > 0:
+                                    _max_start_min = max(
+                                        1, int((_prev_dur_s - _win_s_prev) / 60)
+                                    )
+                                    # Garante que o valor armazenado não excede o novo máximo
+                                    if st.session_state.get('hist_start_min', 0) > _max_start_min:
+                                        st.session_state['hist_start_min'] = 0
+
+                                    _hist_start_min = st.slider(
+                                        "▶ Início:",
+                                        min_value=0,
+                                        max_value=_max_start_min,
+                                        step=1,
+                                        format="%d min",
+                                        key="hist_start_min",
+                                    )
+                                    _hist_start_s = _hist_start_min * 60
+                                    _end_s_prev   = _hist_start_s + _win_s_prev
+                                    _tot_m = int(_prev_dur_s // 60)
+                                    _tot_s = int(_prev_dur_s  % 60)
+                                    st.caption(
+                                        f"🕐 {_hist_start_min:02d}:00"
+                                        f" → {int(_end_s_prev)//60:02d}:{int(_end_s_prev)%60:02d}"
+                                        f"  (período: {_tot_m:02d}:{_tot_s:02d})"
+                                    )
+                                else:
+                                    _hist_start_s = 0
+                                    st.caption(
+                                        "ℹ️ Gere a animação uma vez para habilitar "
+                                        "a navegação por minuto."
+                                    )
                             else:
-                                _hist_start_pct = 0
+                                _hist_start_s = 0
 
                         # ── Construir dados por atleta ─────────────────────
                         _HIST_COLORS = [
@@ -7059,6 +7095,8 @@ Escolha um ou mais atletas para análise simultânea.
                                 t for _hc in _hist_coords.values() for t in _hc['ts_norm']
                             })
                             _total_s_all = max(1.0, _all_ts_norm[-1] - _all_ts_norm[0])
+                            # Persiste duração para o slider de início usar no próximo render
+                            st.session_state[f'_hist_dur_{_hist_periodo_sel}'] = _total_s_all
 
                             _win_s_map = {
                                 "Completo": None,
@@ -7072,8 +7110,7 @@ Escolha um ou mais atletas para análise simultânea.
                             if _win_s is not None:
                                 # ── Janela de tempo real ───────────────────────
                                 # Usa TODOS os pontos GPS na janela → sem downsample
-                                _win_start_s = _total_s_all * _hist_start_pct / 100.0
-                                _win_start_s = min(_win_start_s,
+                                _win_start_s = min(float(_hist_start_s),
                                                    max(0.0, _total_s_all - _win_s))
                                 _win_end_s   = _win_start_s + _win_s
 
