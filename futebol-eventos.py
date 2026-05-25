@@ -7454,127 +7454,39 @@ Escolha um ou mais atletas para análise simultânea.
                                 with _tac_tabs[0]:
                                     st.markdown("### 🏗️ Estrutura da Equipa")
 
-                                    # 1 — Centróide
-                                    st.markdown("#### 1 — Centróide da Equipa ao Longo do Tempo")
-                                    _ccol1, _ccol2 = st.columns(2)
-                                    with _ccol1:
-                                        _fig_ct = go.Figure()
-                                        _fig_ct.add_trace(go.Scatter(
-                                            x=list(_ft_arr), y=list(_ctr_x),
-                                            name='X', line=dict(color='#4ECDC4', width=2),
-                                        ))
-                                        _fig_ct.add_trace(go.Scatter(
-                                            x=list(_ft_arr), y=list(_ctr_y),
-                                            name='Y', line=dict(color='#FFB347', width=2),
-                                        ))
-                                        _fig_ct.update_layout(
-                                            xaxis_title='Tempo (s)', yaxis_title='Posição (m)',
-                                            plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                            font=dict(color='white'), height=270,
-                                            legend=dict(font=dict(color='white')),
-                                            margin=dict(t=20, b=30, l=40, r=10),
-                                        )
-                                        st.plotly_chart(_fig_ct, use_container_width=True)
-                                    with _ccol2:
-                                        _fig_ctf = desenhar_campo_futebol_bonito(
-                                            field_length=_hist_fl, field_width=_hist_fw,
-                                            title="Trajeto do Centróide"
-                                        )
-                                        _fig_ctf.add_trace(go.Scatter(
-                                            x=list(_ctr_x), y=list(_ctr_y),
-                                            mode='lines', line=dict(color='yellow', width=2),
-                                            opacity=0.8, showlegend=False, hoverinfo='skip',
-                                        ))
-                                        _fig_ctf.add_trace(go.Scatter(
-                                            x=[float(_ctr_x[0])], y=[float(_ctr_y[0])],
-                                            mode='markers', marker=dict(color='lime', size=11, symbol='star'),
-                                            name='Início', showlegend=False,
-                                        ))
-                                        _fig_ctf.add_trace(go.Scatter(
-                                            x=[float(_ctr_x[-1])], y=[float(_ctr_y[-1])],
-                                            mode='markers', marker=dict(color='red', size=11, symbol='square'),
-                                            name='Fim', showlegend=False,
-                                        ))
-                                        _fig_ctf.update_layout(
-                                            height=290,
-                                            plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                            font=dict(color='white'),
-                                            margin=dict(t=35, b=5, l=5, r=5),
-                                            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-4, _hist_fl+4]),
-                                            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-4, _hist_fw+4], scaleanchor='x', scaleratio=1),
-                                        )
-                                        st.plotly_chart(_fig_ctf, use_container_width=True)
-                                    _mc1, _mc2, _mc3 = st.columns(3)
-                                    _mc1.metric("Pos. X média", f"{float(_ctr_x.mean()):.1f} m",
-                                                f"{float(_ctr_x.mean())/_hist_fl*100:.0f}% do campo")
-                                    _mc2.metric("Pos. Y média", f"{float(_ctr_y.mean()):.1f} m")
-                                    _mc3.metric("Variação X (std)", f"{float(_ctr_x.std()):.1f} m")
-
-                                    st.markdown("---")
-
-                                    # 2 — Largura e Profundidade
-                                    st.markdown("#### 2 — Largura e Profundidade Dinâmica")
-                                    _fig_wd = go.Figure()
-                                    _fig_wd.add_trace(go.Scatter(
-                                        x=list(_ft_arr), y=list(_width),
-                                        name='Largura (Y)', line=dict(color='#FF6B6B', width=2),
-                                        fill='tozeroy', fillcolor='rgba(255,107,107,0.15)',
-                                    ))
-                                    _fig_wd.add_trace(go.Scatter(
-                                        x=list(_ft_arr), y=list(_depth),
-                                        name='Profundidade (X)', line=dict(color='#45B7D1', width=2),
-                                        fill='tozeroy', fillcolor='rgba(69,183,209,0.15)',
-                                    ))
-                                    _fig_wd.update_layout(
-                                        xaxis_title='Tempo (s)', yaxis_title='Metros',
-                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                        font=dict(color='white'), height=270,
-                                        legend=dict(font=dict(color='white')),
-                                        margin=dict(t=10, b=30, l=40, r=10),
-                                    )
-                                    st.plotly_chart(_fig_wd, use_container_width=True)
-                                    _mw1, _mw2, _mw3, _mw4 = st.columns(4)
-                                    _mw1.metric("Largura média", f"{float(_width.mean()):.1f} m")
-                                    _mw2.metric("Profundidade média", f"{float(_depth.mean()):.1f} m")
-                                    _mw3.metric("Largura máx", f"{float(_width.max()):.1f} m")
-                                    _mw4.metric("Profundidade máx", f"{float(_depth.max()):.1f} m")
-
-                                    st.markdown("---")
-
-                                    # 3 — Compacidade
-                                    st.markdown("#### 3 — Índice de Compacidade")
-                                    _fig_cmp = go.Figure()
-                                    _cmp_avg = float(_compact.mean())
-                                    _fig_cmp.add_trace(go.Scatter(
-                                        x=list(_ft_arr), y=list(_compact),
-                                        mode='lines', line=dict(color='#96CEB4', width=2),
-                                        fill='tozeroy', fillcolor='rgba(150,206,180,0.2)',
-                                    ))
-                                    _fig_cmp.add_hline(y=_cmp_avg, line_dash='dash', line_color='yellow',
-                                                       annotation_text=f"Média: {_cmp_avg:.1f}m",
-                                                       annotation_font_color='yellow')
-                                    _fig_cmp.update_layout(
-                                        xaxis_title='Tempo (s)', yaxis_title='Dispersão (m)',
-                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                        font=dict(color='white'), height=260,
-                                        margin=dict(t=20, b=30, l=40, r=10), showlegend=False,
-                                    )
-                                    st.plotly_chart(_fig_cmp, use_container_width=True)
-                                    _mp1, _mp2, _mp3 = st.columns(3)
-                                    _mp1.metric("Compacidade média", f"{_cmp_avg:.1f} m")
-                                    _mp2.metric("P10 (mais compacto)", f"{float(np.percentile(_compact,10)):.1f} m")
-                                    _mp3.metric("P90 (mais disperso)", f"{float(np.percentile(_compact,90)):.1f} m")
-
-                                    st.markdown("---")
-
                                     # 5 — Linhas Táticas
                                     st.markdown("#### 5 — Linhas Táticas (Defesa / Meio / Ataque)")
-                                    _avg_x_atl = _sync_xs.mean(axis=1)
+
+                                    # Sugestão automática por posição X média
+                                    _avg_x_atl  = _sync_xs.mean(axis=1)
                                     _sorted_idx = np.argsort(_avg_x_atl)
-                                    _n3 = max(1, _n_ha // 3)
-                                    _def_idx = _sorted_idx[:_n3]
-                                    _mid_idx = _sorted_idx[_n3:2*_n3]
-                                    _att_idx = _sorted_idx[2*_n3:]
+                                    _n3         = max(1, _n_ha // 3)
+                                    _def_default = [_hist_atl_list[i] for i in _sorted_idx[:_n3]]
+                                    _mid_default = [_hist_atl_list[i] for i in _sorted_idx[_n3:2*_n3]]
+                                    _att_default = [_hist_atl_list[i] for i in _sorted_idx[2*_n3:]]
+
+                                    # Seletor manual de linhas
+                                    st.caption("💡 Atribuição automática por posição X média — ajuste conforme necessário.")
+                                    _lcol1, _lcol2, _lcol3 = st.columns(3)
+                                    with _lcol1:
+                                        _def_sel = st.multiselect(
+                                            "🔴 Defesa:", _hist_atl_list,
+                                            default=_def_default, key="tac_linha_def"
+                                        )
+                                    with _lcol2:
+                                        _mid_sel = st.multiselect(
+                                            "🟡 Meio:", _hist_atl_list,
+                                            default=_mid_default, key="tac_linha_mid"
+                                        )
+                                    with _lcol3:
+                                        _att_sel = st.multiselect(
+                                            "🟢 Ataque:", _hist_atl_list,
+                                            default=_att_default, key="tac_linha_att"
+                                        )
+
+                                    _def_idx = [_hist_atl_list.index(a) for a in _def_sel if a in _hist_atl_list]
+                                    _mid_idx = [_hist_atl_list.index(a) for a in _mid_sel if a in _hist_atl_list]
+                                    _att_idx = [_hist_atl_list.index(a) for a in _att_sel if a in _hist_atl_list]
                                     _line_def = _sync_xs[_def_idx].mean(axis=0) if len(_def_idx) else np.zeros(_n_frames)
                                     _line_mid = _sync_xs[_mid_idx].mean(axis=0) if len(_mid_idx) else np.full(_n_frames, _hist_fl/2)
                                     _line_att = _sync_xs[_att_idx].mean(axis=0) if len(_att_idx) else np.full(_n_frames, _hist_fl)
@@ -7611,87 +7523,9 @@ Escolha um ou mais atletas para análise simultânea.
                                 with _tac_tabs[1]:
                                     st.markdown("### 🗺️ Controlo do Espaço")
 
-                                    # 7 — Heatmap coletivo por fase
-                                    st.markdown("#### 7 — Mapa de Calor Coletivo por Fase")
-                                    _n_fases = st.select_slider("Fases:", options=[2,3,4,5], value=3, key="tac_fases")
-                                    _fase_sz  = _n_frames // _n_fases
-                                    _hm_cols  = st.columns(_n_fases)
-                                    for _fi_ph in range(_n_fases):
-                                        _st_ph = _fi_ph * _fase_sz
-                                        _en_ph = (_fi_ph + 1)*_fase_sz if _fi_ph < _n_fases-1 else _n_frames
-                                        _ph_xs = _sync_xs[:, _st_ph:_en_ph].flatten().tolist()
-                                        _ph_ys = _sync_ys[:, _st_ph:_en_ph].flatten().tolist()
-                                        _t0_ph = _frame_ts[_st_ph]
-                                        _t1_ph = _frame_ts[min(_en_ph-1, _n_frames-1)]
-                                        with _hm_cols[_fi_ph]:
-                                            _fig_ph = desenhar_campo_futebol_bonito(
-                                                field_length=_hist_fl, field_width=_hist_fw,
-                                                title=f"Fase {_fi_ph+1}  {int(_t0_ph//60):02d}:{int(_t0_ph%60):02d}–{int(_t1_ph//60):02d}:{int(_t1_ph%60):02d}"
-                                            )
-                                            if _ph_xs:
-                                                _fig_ph.add_trace(go.Histogram2dContour(
-                                                    x=_ph_xs, y=_ph_ys,
-                                                    colorscale='Hot', reversescale=True,
-                                                    showscale=False, ncontours=12,
-                                                    line=dict(width=0),
-                                                    contours=dict(coloring='fill'),
-                                                    opacity=0.65,
-                                                    xbins=dict(start=0, end=_hist_fl, size=5),
-                                                    ybins=dict(start=0, end=_hist_fw, size=5),
-                                                ))
-                                            _fig_ph.update_layout(
-                                                height=270,
-                                                plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                                font=dict(color='white', size=9),
-                                                margin=dict(t=35, b=5, l=5, r=5),
-                                                xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-3, _hist_fl+3]),
-                                                yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-3, _hist_fw+3], scaleanchor='x', scaleratio=1),
-                                            )
-                                            st.plotly_chart(_fig_ph, use_container_width=True)
-
-                                    st.markdown("---")
-
-                                    # 8 — Corredor dominante
-                                    st.markdown("#### 8 — Corredor Dominante")
-                                    _y3 = _hist_fw / 3.0
-                                    _n_left   = (_sync_ys < _y3).sum(axis=0).astype(float)
-                                    _n_center = ((_sync_ys >= _y3) & (_sync_ys < 2*_y3)).sum(axis=0).astype(float)
-                                    _n_right  = (_sync_ys >= 2*_y3).sum(axis=0).astype(float)
-                                    _fig_cor  = go.Figure()
-                                    _fig_cor.add_trace(go.Scatter(x=list(_ft_arr), y=list(_n_left),
-                                        name='Corredor Esq.', stackgroup='cor',
-                                        line=dict(color='#FF6B6B'), fillcolor='rgba(255,107,107,0.5)'))
-                                    _fig_cor.add_trace(go.Scatter(x=list(_ft_arr), y=list(_n_center),
-                                        name='Corredor Central', stackgroup='cor',
-                                        line=dict(color='#4ECDC4'), fillcolor='rgba(78,205,196,0.5)'))
-                                    _fig_cor.add_trace(go.Scatter(x=list(_ft_arr), y=list(_n_right),
-                                        name='Corredor Dir.', stackgroup='cor',
-                                        line=dict(color='#45B7D1'), fillcolor='rgba(69,183,209,0.5)'))
-                                    _fig_cor.update_layout(
-                                        xaxis_title='Tempo (s)', yaxis_title='Nº Atletas',
-                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                        font=dict(color='white'), height=270,
-                                        legend=dict(font=dict(color='white')),
-                                        margin=dict(t=10, b=30, l=40, r=10),
-                                    )
-                                    st.plotly_chart(_fig_cor, use_container_width=True)
-                                    _tot_c = float(_n_left.sum() + _n_center.sum() + _n_right.sum())
-                                    if _tot_c > 0:
-                                        _pL = _n_left.sum()/_tot_c*100
-                                        _pC = _n_center.sum()/_tot_c*100
-                                        _pR = _n_right.sum()/_tot_c*100
-                                        _dom = "Esquerdo" if _pL==max(_pL,_pC,_pR) else ("Central" if _pC==max(_pL,_pC,_pR) else "Direito")
-                                        _cor1, _cor2, _cor3, _cor4 = st.columns(4)
-                                        _cor1.metric("Esquerdo", f"{_pL:.0f}%")
-                                        _cor2.metric("Central", f"{_pC:.0f}%")
-                                        _cor3.metric("Direito", f"{_pR:.0f}%")
-                                        _cor4.metric("Dominante", _dom)
-
-                                    st.markdown("---")
-
                                     # 9 — Gaps Táticos (Delaunay)
                                     st.markdown("#### 9 — Espaços Descobertos (Gaps Táticos)")
-                                    _gap_thr = st.slider("Threshold de gap (m²):", 50, 500, 200, step=50, key="tac_gap")
+                                    _gap_thr = st.slider("Threshold de gap (m²):", 5, 50, 10, step=5, key="tac_gap")
                                     try:
                                         from scipy.spatial import Delaunay as _Del
                                         _gap_frames = [_n_frames//4, _n_frames//2, 3*_n_frames//4]
