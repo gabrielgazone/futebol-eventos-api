@@ -6937,10 +6937,35 @@ Escolha um ou mais atletas para análise simultânea.
                             )
                         with _col_hc3:
                             _hist_max_frames = st.select_slider(
-                                "🎞️ Qualidade:", options=[150, 300, 500],
-                                value=300, format_func=lambda x: f"{x} frames",
+                                "🎞️ Qualidade (jogo completo):", options=[300, 500, 1000, 2000],
+                                value=500, format_func=lambda x: f"{x} frames",
                                 key="hist_quality"
                             )
+
+                        # ── Janela de tempo (para animação suave em tempo real) ─
+                        _col_hw1, _col_hw2 = st.columns([1, 2])
+                        with _col_hw1:
+                            _hist_window_sel = st.select_slider(
+                                "🪟 Janela:",
+                                options=["Completo", "10 min", "5 min", "2 min", "1 min"],
+                                value="5 min",
+                                key="hist_window",
+                                help=(
+                                    "**Completo**: anima o período inteiro com downsample "
+                                    "(menos suave, visão geral).\n\n"
+                                    "**Janela**: usa TODOS os pontos GPS da janela selecionada "
+                                    "→ animação em tempo real verdadeiro, milissegundo a milissegundo."
+                                )
+                            )
+                        with _col_hw2:
+                            if _hist_window_sel != "Completo":
+                                _hist_start_pct = st.slider(
+                                    "▶ Início da janela (% do período):",
+                                    0, 95, 0, format="%d%%",
+                                    key="hist_start_pct"
+                                )
+                            else:
+                                _hist_start_pct = 0
 
                         # ── Construir dados por atleta ─────────────────────
                         _HIST_COLORS = [
@@ -7029,19 +7054,71 @@ Escolha um ou mais atletas para análise simultânea.
                                     for t in _hist_coords[_ha]['ts']
                                 ]
 
-                            # ── Timeline comum e downsample ────────────────
+                            # ── Timeline: janela ou jogo completo ─────────────
                             _all_ts_norm = sorted({
                                 t for _hc in _hist_coords.values() for t in _hc['ts_norm']
                             })
-                            _n_all = len(_all_ts_norm)
-                            _step_fr = max(1, _n_all // _hist_max_frames)
-                            _frame_ts = _all_ts_norm[::_step_fr]
-                            _n_frames = len(_frame_ts)
-                            # Duração real por frame baseada nos timestamps do período
-                            # 1× = tempo real: se o frame cobre 9.4s reais, fica 9.4s na tela
-                            _total_time_s      = _frame_ts[-1] - _frame_ts[0]
-                            _real_ms_per_frame = (_total_time_s * 1000) / max(1, _n_frames)
-                            _frame_dur_ms      = max(30, int(_real_ms_per_frame / _hist_speed))
+                            _total_s_all = max(1.0, _all_ts_norm[-1] - _all_ts_norm[0])
+
+                            _win_s_map = {
+                                "Completo": None,
+                                "10 min": 600,
+                                "5 min":  300,
+                                "2 min":  120,
+                                "1 min":   60,
+                            }
+                            _win_s = _win_s_map.get(_hist_window_sel)
+
+                            if _win_s is not None:
+                                # ── Janela de tempo real ───────────────────────
+                                # Usa TODOS os pontos GPS na janela → sem downsample
+                                _win_start_s = _total_s_all * _hist_start_pct / 100.0
+                                _win_start_s = min(_win_start_s,
+                                                   max(0.0, _total_s_all - _win_s))
+                                _win_end_s   = _win_start_s + _win_s
+
+                                _frame_ts_raw = [
+                                    t for t in _all_ts_norm
+                                    if _win_start_s <= t <= _win_end_s
+                                ]
+                                # Proteção: máximo 3000 frames para não travar o browser
+                                _MAX_WIN_FRAMES = 3000
+                                if len(_frame_ts_raw) > _MAX_WIN_FRAMES:
+                                    _st_w     = max(1, len(_frame_ts_raw) // _MAX_WIN_FRAMES)
+                                    _frame_ts = _frame_ts_raw[::_st_w]
+                                else:
+                                    _frame_ts = _frame_ts_raw or _all_ts_norm[:1]
+
+                                _n_frames = len(_frame_ts)
+                                _dur_win_s = (
+                                    (_frame_ts[-1] - _frame_ts[0])
+                                    if _n_frames > 1 else float(_win_s)
+                                )
+                                # 1× = tempo real: cada frame dura exatamente o
+                                # intervalo real que ele representa na partida
+                                _real_ms_per_frame = (
+                                    (_dur_win_s * 1000) / max(1, _n_frames - 1)
+                                )
+                                _frame_dur_ms = max(30, int(_real_ms_per_frame / _hist_speed))
+
+                                _ws_m = int(_win_start_s // 60)
+                                _ws_s = int(_win_start_s % 60)
+                                _we_m = int(_win_end_s   // 60)
+                                _we_s = int(_win_end_s   % 60)
+                                st.caption(
+                                    f"🪟 Janela {_ws_m:02d}:{_ws_s:02d}→{_we_m:02d}:{_we_s:02d}"
+                                    f" · {_n_frames} frames"
+                                    f" · {_real_ms_per_frame:.0f} ms reais/frame"
+                                    f" · exibição: {_frame_dur_ms} ms/frame a {_hist_speed:.2g}×"
+                                )
+                            else:
+                                # ── Jogo completo: downsample via quality slider ─
+                                _step_fr  = max(1, len(_all_ts_norm) // _hist_max_frames)
+                                _frame_ts = _all_ts_norm[::_step_fr]
+                                _n_frames = len(_frame_ts)
+                                _dur_all_s = max(1.0, _frame_ts[-1] - _frame_ts[0])
+                                _real_ms_per_frame = (_dur_all_s * 1000) / max(1, _n_frames)
+                                _frame_dur_ms = max(30, int(_real_ms_per_frame / _hist_speed))
 
                             # ── Figura base (campo) ────────────────────────
                             _fig_hist = desenhar_campo_futebol_bonito(
