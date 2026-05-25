@@ -7288,7 +7288,7 @@ Escolha um ou mais atletas para análise simultânea.
                                 plot_bgcolor='#0e1117',
                                 paper_bgcolor='#0e1117',
                                 font=dict(color='white'),
-                                margin=dict(t=30, b=170, l=10, r=10),
+                                margin=dict(t=20, b=140, l=10, r=10),
                                 xaxis=dict(
                                     range=[-4, _hist_fl + 4],
                                     showgrid=False, zeroline=False,
@@ -7318,7 +7318,8 @@ Escolha um ou mais atletas para análise simultânea.
                                 )],
                                 updatemenus=[dict(
                                     type='buttons', showactive=False,
-                                    y=-0.13, x=0.5,
+                                    direction='down',
+                                    x=0.83, y=0.97,
                                     xanchor='center', yanchor='top',
                                     buttons=[
                                         dict(
