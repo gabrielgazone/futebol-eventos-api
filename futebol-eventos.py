@@ -4156,6 +4156,123 @@ Escolha um ou mais atletas para análise simultânea.
             if _res_combinado:
                 resultados_por_periodo[_CHAVE_COMBINADO] = _res_combinado
 
+        # ══════════════════════════════════════════════════════════════════
+        # COACH AI — painel de insights pró-ativos na sidebar
+        # ══════════════════════════════════════════════════════════════════
+        with st.sidebar:
+            st.markdown("---")
+            with st.expander("🤖 Coach AI — Insights Pró-ativos", expanded=True):
+                _cai = []
+
+                # ── 1. Evolução da intensidade entre períodos ─────────────
+                _per_vel_avg = {}
+                for _pn, _pd in dados_posicao_por_periodo.items():
+                    if _pn == _CHAVE_COMBINADO:
+                        continue
+                    _pvs = []
+                    for _av in _pd.values():
+                        _pvs.extend(_av.get('vels_gps', _av.get('vel', [])))
+                    if _pvs:
+                        _per_vel_avg[_pn] = float(np.mean(_pvs))
+
+                _pva_items = list(_per_vel_avg.items())
+                if len(_pva_items) >= 2:
+                    _drop = _pva_items[0][1] - _pva_items[-1][1]
+                    if _drop > 0.5:
+                        _cai.append(
+                            f"📉 **Queda de {_drop:.1f} km/h** na velocidade média do "
+                            f"_{_pva_items[0][0]}_ → _{_pva_items[-1][0]}_. "
+                            f"Possível fadiga acumulada."
+                        )
+                    elif _drop < -0.5:
+                        _cai.append(
+                            f"📈 **Alta de {abs(_drop):.1f} km/h** no _{_pva_items[-1][0]}_. "
+                            f"Equipa respondeu bem após intervalo."
+                        )
+
+                # ── 2. Velocidade máxima (destaque de atleta) ─────────────
+                _vmax_champ, _vmax_val, _vmax_per = None, 0.0, ''
+                for _pn, _pd in dados_posicao_por_periodo.items():
+                    for _an, _av in _pd.items():
+                        _avs = np.array(_av.get('vels_gps', _av.get('vel', [])), dtype=float)
+                        if len(_avs) > 0 and float(_avs.max()) > _vmax_val:
+                            _vmax_val = float(_avs.max())
+                            _vmax_champ = _an
+                            _vmax_per = _pn
+                if _vmax_champ and _vmax_val > 0:
+                    _vmax_flag = "⚠️ Verifique o sensor!" if _vmax_val > 32 else "✅"
+                    _cai.append(
+                        f"🚀 **Vel. máx**: {_vmax_champ.split(' ')[0]} — "
+                        f"**{_vmax_val:.1f} km/h** ({_vmax_per}) {_vmax_flag}"
+                    )
+
+                # ── 3. Zona de alta intensidade geral ────────────────────
+                _all_vels_cai = []
+                for _pd in dados_posicao_por_periodo.values():
+                    for _av in _pd.values():
+                        _all_vels_cai.extend(_av.get('vels_gps', _av.get('vel', [])))
+                if _all_vels_cai:
+                    _av_arr = np.array(_all_vels_cai, dtype=float)
+                    _hsr_p = float((_av_arr >= 14).mean() * 100)
+                    _spr_p = float((_av_arr >= 21).mean() * 100)
+                    if _hsr_p < 3:
+                        _cai.append(
+                            f"⚠️ **Intensidade baixa**: {_hsr_p:.1f}% >14 km/h — "
+                            f"sessão de recuperação ou aquecimento."
+                        )
+                    elif _hsr_p > 18:
+                        _cai.append(
+                            f"🔥 **Alta intensidade elevada**: {_hsr_p:.1f}% >14 km/h | "
+                            f"{_spr_p:.1f}% sprint. Monitorar recuperação."
+                        )
+                    else:
+                        _cai.append(
+                            f"✅ **Intensidade equilibrada**: {_hsr_p:.1f}% >14 km/h | "
+                            f"{_spr_p:.1f}% sprint."
+                        )
+
+                # ── 4. Atleta com maior distância ─────────────────────────
+                _dmax_champ, _dmax_val = None, 0.0
+                for _pn, _rs in resultados_por_periodo.items():
+                    if _pn == _CHAVE_COMBINADO:
+                        continue
+                    for _r in _rs:
+                        _rd = _r.get('Distância (m)', 0)
+                        if _rd > _dmax_val:
+                            _dmax_val = _rd
+                            _dmax_champ = _r.get('Atleta', '?')
+                if _dmax_champ:
+                    _vol_flag = " ⚠️ Volume muito alto!" if _dmax_val > 13000 else ""
+                    _cai.append(
+                        f"🏃 **Maior distância**: {_dmax_champ.split(' ')[0]} — "
+                        f"**{_dmax_val:,.0f} m**{_vol_flag}"
+                    )
+
+                # ── 5. PlayerLoad mais elevado ────────────────────────────
+                _plmax_champ, _plmax_val = None, 0.0
+                for _pn, _rs in resultados_por_periodo.items():
+                    if _pn == _CHAVE_COMBINADO:
+                        continue
+                    for _r in _rs:
+                        _pl = _r.get('PlayerLoad', 0) or 0
+                        if _pl > _plmax_val:
+                            _plmax_val = _pl
+                            _plmax_champ = _r.get('Atleta', '?')
+                if _plmax_champ and _plmax_val > 0:
+                    _cai.append(
+                        f"⚡ **Maior PlayerLoad**: {_plmax_champ.split(' ')[0]} — "
+                        f"**{_plmax_val:.0f}** UA"
+                    )
+
+                # ── Exibir ────────────────────────────────────────────────
+                if _cai:
+                    for _ins in _cai:
+                        st.markdown(f"> {_ins}")
+                        st.markdown("")
+                else:
+                    st.caption("Carregue dados GPS para ver insights automáticos.")
+                st.caption("_Análise automática baseada nos dados carregados._")
+
         if resultados_por_periodo:
             st.subheader("📊 Métricas Biométricas")
             col1, col2, col3, col4 = st.columns(4)
@@ -4192,6 +4309,8 @@ Escolha um ou mais atletas para análise simultânea.
                 "📋 Tabela Descritiva",
                 "📊 Por Posição",
                 "🎬 História do Jogo",
+                "🔍 Exploração Livre",
+                "💬 Pergunte ao App",
             ])
             
             # ==================== ABA 1: GRÁFICOS COMPARATIVOS ====================
@@ -7585,14 +7704,13 @@ Escolha um ou mais atletas para análise simultânea.
                                     name=_ha, showlegend=False, hoverinfo='skip',
                                 ))
 
-                            # Trail: rastro animado (começa vazio)
+                            # Trail cinemático (broadcast): gradiente de opacidade e tamanho
                             for _i, _ha in enumerate(_hist_atl_list):
                                 _col = _HIST_COLORS[_i % len(_HIST_COLORS)]
                                 _fig_hist.add_trace(go.Scatter(
                                     x=[], y=[],
-                                    mode='lines',
-                                    line=dict(color=_col, width=3),
-                                    opacity=0.75,
+                                    mode='markers',
+                                    marker=dict(color=[], size=[], opacity=1.0),
                                     name=_ha, showlegend=False, hoverinfo='skip',
                                 ))
 
@@ -7680,8 +7798,26 @@ Escolha um ou mais atletas para análise simultânea.
                                     _hull_pts_x.append(_cur_x)
                                     _hull_pts_y.append(_cur_y)
 
-                                    # Trail trace update
-                                    _frame_data.append(go.Scatter(x=_trail_x, y=_trail_y))
+                                    # Trail cinemático: gradiente broadcast (antigo=transparente, novo=opaco)
+                                    _n_tr = max(1, len(_trail_x))
+                                    _tr_r = int(_col.lstrip('#')[0:2], 16)
+                                    _tr_g = int(_col.lstrip('#')[2:4], 16)
+                                    _tr_b = int(_col.lstrip('#')[4:6], 16)
+                                    _tr_alphas = np.linspace(0.04, 0.94, _n_tr)
+                                    _tr_sizes  = np.linspace(2.0, 9.5, _n_tr)
+                                    _tr_colors = [
+                                        f'rgba({_tr_r},{_tr_g},{_tr_b},{a:.2f})'
+                                        for a in _tr_alphas
+                                    ]
+                                    _frame_data.append(go.Scatter(
+                                        x=_trail_x, y=_trail_y,
+                                        mode='markers',
+                                        marker=dict(
+                                            color=_tr_colors,
+                                            size=_tr_sizes.tolist(),
+                                            opacity=1.0,
+                                        ),
+                                    ))
                                     _frame_traces.append(_n_static + _n_ha + _i)
 
                                     # Marker trace update — cor por velocidade, borda = identidade
@@ -7865,6 +8001,138 @@ Escolha um ou mais atletas para análise simultânea.
                                 f"⚙️ {_n_frames} frames · {_hist_speed:.2g}× velocidade · "
                                 f"rastro {_hist_trail_s}s · campo {_hist_fl:.0f}×{_hist_fw:.0f}m"
                             )
+
+                            # ══════════════════════════════════════════════════════
+                            # CAMPO 3D ISOMÉTRICO — Trajetórias Espaço-Tempo
+                            # ══════════════════════════════════════════════════════
+                            st.markdown("---")
+                            with st.expander(
+                                "🏟️ Campo 3D Isométrico — Trajetórias Espaço-Tempo",
+                                expanded=False,
+                            ):
+                                st.caption(
+                                    "Visualização 3D: **X** = posição longitudinal · "
+                                    "**Y** = tempo (s) · **Z** = posição lateral. "
+                                    "A profundidade temporal revela padrões e ritmo de movimentação. "
+                                    "Cor = velocidade (verde=lento, vermelho=sprint)."
+                                )
+                                _3d_fig = go.Figure()
+                                _3d_ts_all = np.array([
+                                    t for _hc3 in _hist_coords.values()
+                                    for t in _hc3['ts_norm']
+                                ])
+                                _3d_t0 = float(_3d_ts_all.min()) if len(_3d_ts_all) > 0 else 0.0
+
+                                for _i3, _ha3 in enumerate(_hist_atl_list):
+                                    _hc3  = _hist_coords[_ha3]
+                                    _col3 = _HIST_COLORS[_i3 % len(_HIST_COLORS)]
+                                    _xs3  = np.array(_hc3['xs'])
+                                    _ys3  = np.array(_hc3['ys'])
+                                    _ts3  = np.array(_hc3['ts_norm'])
+                                    _vl3  = np.array(_hc3['vel'])
+
+                                    # Downsample para performance (max 2000 pontos)
+                                    _stp3 = max(1, len(_xs3) // 2000)
+                                    _x3d  = _xs3[::_stp3]
+                                    _y3d  = _ts3[::_stp3]   # tempo = eixo profundidade
+                                    _z3d  = _ys3[::_stp3]
+                                    _v3d  = _vl3[::_stp3]
+
+                                    _3d_fig.add_trace(go.Scatter3d(
+                                        x=_x3d.tolist(),
+                                        y=_y3d.tolist(),
+                                        z=_z3d.tolist(),
+                                        mode='lines+markers',
+                                        line=dict(color=_col3, width=3),
+                                        marker=dict(
+                                            size=3,
+                                            color=_v3d.tolist(),
+                                            colorscale=[
+                                                [0.0,  '#4FC3F7'],   # azul – andando
+                                                [0.25, '#66BB6A'],   # verde – trotando
+                                                [0.5,  '#FFA726'],   # laranja – correndo
+                                                [1.0,  '#EF5350'],   # vermelho – sprint
+                                            ],
+                                            cmin=0, cmax=28,
+                                            opacity=0.88,
+                                            showscale=(_i3 == 0),
+                                            colorbar=dict(
+                                                title=dict(
+                                                    text='Vel (km/h)',
+                                                    font=dict(color='white', size=10),
+                                                ),
+                                                tickfont=dict(color='white', size=9),
+                                                len=0.5, x=1.01,
+                                            ),
+                                        ),
+                                        name=_ha3.split(' ')[0],
+                                        hovertemplate=(
+                                            f"<b>{_ha3.split(' ')[0]}</b><br>"
+                                            "X: %{x:.1f} m<br>"
+                                            "Tempo: %{y:.0f} s<br>"
+                                            "Y: %{z:.1f} m<br>"
+                                            "Vel: %{marker.color:.1f} km/h"
+                                            "<extra></extra>"
+                                        ),
+                                    ))
+
+                                _3d_fig.update_layout(
+                                    height=620,
+                                    plot_bgcolor='#0e1117',
+                                    paper_bgcolor='#0e1117',
+                                    font=dict(color='white'),
+                                    scene=dict(
+                                        xaxis=dict(
+                                            title='Campo X (m)',
+                                            range=[0, _hist_fl],
+                                            showgrid=True,
+                                            gridcolor='rgba(255,255,255,0.08)',
+                                            backgroundcolor='rgba(14,17,23,0)',
+                                            tickfont=dict(color='white'),
+                                            titlefont=dict(color='white'),
+                                        ),
+                                        yaxis=dict(
+                                            title='Tempo (s)',
+                                            showgrid=True,
+                                            gridcolor='rgba(255,255,255,0.08)',
+                                            backgroundcolor='rgba(14,17,23,0)',
+                                            tickfont=dict(color='white'),
+                                            titlefont=dict(color='white'),
+                                        ),
+                                        zaxis=dict(
+                                            title='Campo Y (m)',
+                                            range=[0, _hist_fw],
+                                            showgrid=True,
+                                            gridcolor='rgba(255,255,255,0.08)',
+                                            backgroundcolor='rgba(14,17,23,0)',
+                                            tickfont=dict(color='white'),
+                                            titlefont=dict(color='white'),
+                                        ),
+                                        bgcolor='rgba(14,17,23,0.97)',
+                                        camera=dict(
+                                            # ângulo isométrico clássico
+                                            eye=dict(x=1.6, y=-1.8, z=1.1),
+                                            up=dict(x=0, y=0, z=1),
+                                            center=dict(x=0, y=0, z=0),
+                                        ),
+                                        aspectmode='manual',
+                                        aspectratio=dict(x=2.2, y=1.6, z=1.0),
+                                    ),
+                                    legend=dict(
+                                        font=dict(color='white', size=9),
+                                        bgcolor='rgba(30,30,30,0.85)',
+                                        bordercolor='rgba(150,150,150,0.3)',
+                                        borderwidth=1,
+                                    ),
+                                    margin=dict(t=20, b=10, l=10, r=10),
+                                )
+                                st.plotly_chart(_3d_fig, use_container_width=True)
+                                st.caption(
+                                    "💡 **Dica**: arraste para rotacionar · scroll para zoom · "
+                                    "duplo clique para resetar a câmera. "
+                                    "Atletas com trajetórias mais verticais (mais altas no eixo Z) "
+                                    "exploram mais a largura do campo."
+                                )
 
                             # ══════════════════════════════════════════════════════
                             # ANÁLISES TÁTICAS COLETIVAS
@@ -8420,6 +8688,463 @@ Escolha um ou mais atletas para análise simultânea.
                                     )
                                 else:
                                     st.info("Nenhum dado de velocidade disponível para comparação entre períodos.")
+
+            # ==================== ABA 10: EXPLORAÇÃO LIVRE ====================
+            with abas[9]:
+                st.subheader("🔍 Exploração Livre — Modo Sandbox")
+                st.caption(
+                    "Monte seu próprio gráfico: escolha métricas para os eixos, tamanho e cor. "
+                    "Ideal para descobrir padrões e correlações inesperadas."
+                )
+
+                # Construir DataFrame unificado com todos os atletas e períodos
+                _el_rows = []
+                for _el_per, _el_res in resultados_por_periodo.items():
+                    for _el_r in _el_res:
+                        _el_row = dict(_el_r)
+                        _el_row['Período'] = _el_per
+                        _el_rows.append(_el_row)
+
+                if _el_rows:
+                    _df_el = pd.DataFrame(_el_rows)
+
+                    # Colunas numéricas disponíveis
+                    _el_num_cols = [
+                        c for c in _df_el.columns
+                        if c not in ('Atleta', 'Período', 'Posição', 'Equipe')
+                        and pd.api.types.is_numeric_dtype(_df_el[c])
+                    ]
+                    _el_cat_cols = ['Atleta', 'Período', 'Posição', 'Equipe']
+                    _el_cat_cols = [c for c in _el_cat_cols if c in _df_el.columns]
+
+                    if len(_el_num_cols) >= 2:
+                        _el_c1, _el_c2, _el_c3 = st.columns(3)
+                        with _el_c1:
+                            _el_x = st.selectbox(
+                                "Eixo X:", _el_num_cols,
+                                index=0, key="el_x"
+                            )
+                        with _el_c2:
+                            _idx_y = min(1, len(_el_num_cols) - 1)
+                            _el_y = st.selectbox(
+                                "Eixo Y:", _el_num_cols,
+                                index=_idx_y, key="el_y"
+                            )
+                        with _el_c3:
+                            _el_color = st.selectbox(
+                                "Cor por:", _el_cat_cols,
+                                index=0, key="el_color"
+                            )
+
+                        _el_c4, _el_c5 = st.columns(2)
+                        with _el_c4:
+                            _el_size = st.selectbox(
+                                "Tamanho por:", ["(uniforme)"] + _el_num_cols,
+                                index=0, key="el_size"
+                            )
+                        with _el_c5:
+                            _el_trend = st.checkbox(
+                                "Mostrar linha de tendência", value=True, key="el_trend"
+                            )
+
+                        # Construir scatter
+                        _df_el_clean = _df_el.dropna(subset=[_el_x, _el_y])
+                        _el_fig = go.Figure()
+
+                        _el_color_vals = (
+                            _df_el_clean[_el_color].tolist()
+                            if _el_color in _df_el_clean.columns else ['Todos']
+                        )
+                        _el_unique_cats = list(dict.fromkeys(_el_color_vals))
+                        _EL_PAL = [
+                            '#FF6B6B','#4ECDC4','#45B7D1','#96CEB4',
+                            '#FFEAA7','#DDA0DD','#98FB98','#FFB347',
+                        ]
+
+                        for _ei, _ec in enumerate(_el_unique_cats):
+                            _mask = [v == _ec for v in _el_color_vals]
+                            _sub  = _df_el_clean[[v == _ec for v in _el_color_vals]]
+
+                            if _el_size != "(uniforme)" and _el_size in _sub.columns:
+                                _sz_raw = _sub[_el_size].fillna(0).values.astype(float)
+                                _sz_min, _sz_max = _sz_raw.min(), _sz_raw.max()
+                                _sz_rng = _sz_max - _sz_min if _sz_max > _sz_min else 1
+                                _sizes = ((_sz_raw - _sz_min) / _sz_rng * 24 + 8).tolist()
+                            else:
+                                _sizes = 14
+
+                            _el_fig.add_trace(go.Scatter(
+                                x=_sub[_el_x].tolist(),
+                                y=_sub[_el_y].tolist(),
+                                mode='markers',
+                                marker=dict(
+                                    color=_EL_PAL[_ei % len(_EL_PAL)],
+                                    size=_sizes,
+                                    opacity=0.82,
+                                    line=dict(color='rgba(255,255,255,0.25)', width=0.8),
+                                ),
+                                name=str(_ec),
+                                text=(
+                                    _sub['Atleta'].tolist()
+                                    if 'Atleta' in _sub.columns else []
+                                ),
+                                hovertemplate=(
+                                    "<b>%{text}</b><br>"
+                                    f"{_el_x}: %{{x:.2f}}<br>"
+                                    f"{_el_y}: %{{y:.2f}}<extra></extra>"
+                                ),
+                            ))
+
+                        # Linha de tendência global (OLS simples)
+                        if _el_trend and len(_df_el_clean) >= 3:
+                            _tx = _df_el_clean[_el_x].values.astype(float)
+                            _ty = _df_el_clean[_el_y].values.astype(float)
+                            _tm = np.isfinite(_tx) & np.isfinite(_ty)
+                            if _tm.sum() >= 2:
+                                _tc = np.polyfit(_tx[_tm], _ty[_tm], 1)
+                                _tx_line = np.linspace(_tx[_tm].min(), _tx[_tm].max(), 80)
+                                _ty_line = np.polyval(_tc, _tx_line)
+                                _el_fig.add_trace(go.Scatter(
+                                    x=_tx_line.tolist(), y=_ty_line.tolist(),
+                                    mode='lines',
+                                    line=dict(color='rgba(255,255,255,0.55)', width=1.8, dash='dash'),
+                                    name='Tendência', showlegend=False,
+                                ))
+                                # R²
+                                _ty_hat = np.polyval(_tc, _tx[_tm])
+                                _ss_res = float(np.sum((_ty[_tm] - _ty_hat)**2))
+                                _ss_tot = float(np.sum((_ty[_tm] - _ty[_tm].mean())**2))
+                                _r2     = 1 - _ss_res / _ss_tot if _ss_tot > 0 else 0
+                                _el_fig.add_annotation(
+                                    x=0.98, y=0.04,
+                                    xref='paper', yref='paper',
+                                    text=f"R² = {_r2:.3f}",
+                                    showarrow=False,
+                                    font=dict(size=13, color='rgba(255,255,255,0.7)'),
+                                    bgcolor='rgba(0,0,0,0.4)',
+                                    borderpad=4,
+                                )
+
+                        _el_fig.update_layout(
+                            xaxis_title=_el_x,
+                            yaxis_title=_el_y,
+                            plot_bgcolor='#0e1117',
+                            paper_bgcolor='#0e1117',
+                            font=dict(color='white'),
+                            height=500,
+                            legend=dict(
+                                font=dict(color='white', size=10),
+                                bgcolor='rgba(30,30,30,0.85)',
+                                bordercolor='rgba(150,150,150,0.4)',
+                                borderwidth=1,
+                            ),
+                            xaxis=dict(
+                                showgrid=True,
+                                gridcolor='rgba(255,255,255,0.07)',
+                                tickfont=dict(color='white'),
+                            ),
+                            yaxis=dict(
+                                showgrid=True,
+                                gridcolor='rgba(255,255,255,0.07)',
+                                tickfont=dict(color='white'),
+                            ),
+                            margin=dict(t=20, b=50, l=60, r=20),
+                        )
+                        st.plotly_chart(_el_fig, use_container_width=True)
+
+                        # Tabela de correlação rápida
+                        with st.expander("📐 Matriz de Correlação", expanded=False):
+                            _corr_cols = _el_num_cols[:10]  # limitar a 10 métricas
+                            _df_corr = _df_el[_corr_cols].dropna(axis=1, how='all').corr()
+                            _fig_corr = go.Figure(go.Heatmap(
+                                z=_df_corr.values.tolist(),
+                                x=_df_corr.columns.tolist(),
+                                y=_df_corr.columns.tolist(),
+                                colorscale='RdBu',
+                                zmid=0,
+                                text=[[f"{v:.2f}" for v in row] for row in _df_corr.values],
+                                texttemplate="%{text}",
+                                textfont=dict(size=9),
+                                colorbar=dict(tickfont=dict(color='white')),
+                            ))
+                            _fig_corr.update_layout(
+                                plot_bgcolor='#0e1117',
+                                paper_bgcolor='#0e1117',
+                                font=dict(color='white'),
+                                height=420,
+                                xaxis=dict(tickfont=dict(color='white', size=9)),
+                                yaxis=dict(tickfont=dict(color='white', size=9)),
+                                margin=dict(t=10, b=80, l=80, r=10),
+                            )
+                            st.plotly_chart(_fig_corr, use_container_width=True)
+                    else:
+                        st.info("São necessárias pelo menos 2 métricas numéricas para a exploração livre.")
+                else:
+                    st.info("Carregue dados para usar o modo de exploração livre.")
+
+            # ==================== ABA 11: PERGUNTE AO APP (NLP + Claude AI) ====================
+            with abas[10]:
+                st.subheader("💬 Pergunte ao App")
+                st.caption(
+                    "Faça perguntas em linguagem natural sobre os dados carregados. "
+                    "Use o Claude AI para respostas mais ricas, ou o modo offline para "
+                    "análises locais baseadas em padrões."
+                )
+
+                # ── Inicializar session state ──────────────────────────────
+                if 'nlp_corrections' not in st.session_state:
+                    st.session_state['nlp_corrections'] = []
+                if 'nlp_history' not in st.session_state:
+                    st.session_state['nlp_history'] = []
+
+                # ── Configuração da API ────────────────────────────────────
+                with st.expander("⚙️ Configurar Claude AI (opcional)", expanded=False):
+                    _nlp_key = st.text_input(
+                        "Anthropic API Key (claude-3-haiku-20240307):",
+                        type="password",
+                        key="nlp_api_key",
+                        help="Deixe em branco para usar o modo offline (padrões locais).",
+                    )
+                    _nlp_model = st.selectbox(
+                        "Modelo:",
+                        ["claude-3-haiku-20240307", "claude-3-5-sonnet-20241022"],
+                        key="nlp_model",
+                    )
+
+                # ── Construir contexto dos dados ────────────────────────────
+                _nlp_ctx_lines = []
+                for _np, _nr in resultados_por_periodo.items():
+                    if _np == _CHAVE_COMBINADO:
+                        continue
+                    _nlp_ctx_lines.append(f"Período: {_np}")
+                    for _nr_row in _nr[:8]:  # max 8 atletas por período no contexto
+                        _nlp_ctx_lines.append(
+                            f"  - {_nr_row.get('Atleta','?')}: "
+                            f"dist={_nr_row.get('Distância (m)',0):.0f}m, "
+                            f"vmax={_nr_row.get('Velocidade Máx (km/h)',0):.1f}km/h, "
+                            f"PL={_nr_row.get('PlayerLoad',0):.0f}, "
+                            f"sprints={_nr_row.get('Sprints (>24 km/h)',0)}"
+                        )
+                _nlp_data_ctx = "\n".join(_nlp_ctx_lines) if _nlp_ctx_lines else "Sem dados numéricos disponíveis."
+
+                # ── Caixinha de perguntas ──────────────────────────────────
+                _nlp_q = st.text_input(
+                    "🔍 Sua pergunta:",
+                    placeholder="Ex: Quem teve a maior velocidade? Qual período foi mais intenso?",
+                    key="nlp_question_input",
+                )
+
+                _nlp_c1, _nlp_c2 = st.columns([3, 1])
+                with _nlp_c1:
+                    _nlp_send = st.button("💬 Perguntar", type="primary", key="nlp_send")
+                with _nlp_c2:
+                    _nlp_clear = st.button("🗑️ Limpar histórico", key="nlp_clear")
+
+                if _nlp_clear:
+                    st.session_state['nlp_history'] = []
+                    st.rerun()
+
+                # ── Modo offline: padrões locais ────────────────────────────
+                def _nlp_offline_answer(question, data_ctx):
+                    """Resposta baseada em padrões regex sem API externa."""
+                    q = question.lower()
+                    lines = []
+
+                    # Coletar métricas
+                    _all_dist, _all_vmax, _all_pl = {}, {}, {}
+                    for _pp, _rr in resultados_por_periodo.items():
+                        if _pp == _CHAVE_COMBINADO:
+                            continue
+                        for _rw in _rr:
+                            _an = _rw.get('Atleta', '?')
+                            _all_dist[_an] = max(
+                                _all_dist.get(_an, 0), _rw.get('Distância (m)', 0)
+                            )
+                            _all_vmax[_an] = max(
+                                _all_vmax.get(_an, 0), _rw.get('Velocidade Máx (km/h)', 0)
+                            )
+                            _all_pl[_an] = max(
+                                _all_pl.get(_an, 0), _rw.get('PlayerLoad', 0) or 0
+                            )
+
+                    if any(w in q for w in ['velocidade', 'vel', 'rápido', 'rapido', 'veloz']):
+                        if _all_vmax:
+                            _best = max(_all_vmax, key=_all_vmax.get)
+                            lines.append(
+                                f"🚀 **{_best}** atingiu a maior velocidade: "
+                                f"**{_all_vmax[_best]:.1f} km/h**."
+                            )
+                            _top3 = sorted(_all_vmax.items(), key=lambda x: x[1], reverse=True)[:3]
+                            lines.append("Top 3: " + " | ".join(f"{n}: {v:.1f}" for n, v in _top3))
+
+                    elif any(w in q for w in ['distância', 'distancia', 'percorr', 'km']):
+                        if _all_dist:
+                            _best = max(_all_dist, key=_all_dist.get)
+                            lines.append(
+                                f"🏃 **{_best}** percorreu a maior distância: "
+                                f"**{_all_dist[_best]:,.0f} m**."
+                            )
+                            _top3 = sorted(_all_dist.items(), key=lambda x: x[1], reverse=True)[:3]
+                            lines.append("Top 3: " + " | ".join(f"{n}: {v:,.0f}m" for n, v in _top3))
+
+                    elif any(w in q for w in ['playerload', 'carga', 'load', 'intensidade']):
+                        if _all_pl:
+                            _best = max(_all_pl, key=_all_pl.get)
+                            lines.append(
+                                f"⚡ **{_best}** tem o maior PlayerLoad: "
+                                f"**{_all_pl[_best]:.0f}** UA."
+                            )
+
+                    elif any(w in q for w in ['período', 'periodo', 'primeiro tempo', 'segundo tempo']):
+                        _per_summ = []
+                        for _pp, _rr in resultados_por_periodo.items():
+                            if _pp == _CHAVE_COMBINADO:
+                                continue
+                            _d_avg = np.mean([r.get('Distância (m)', 0) for r in _rr]) if _rr else 0
+                            _v_avg = np.mean([r.get('Velocidade Média (km/h)', 0) for r in _rr]) if _rr else 0
+                            _per_summ.append(
+                                f"**{_pp}**: dist. média {_d_avg:,.0f}m | vel. média {_v_avg:.1f} km/h"
+                            )
+                        if _per_summ:
+                            lines.append("📊 Resumo por período:")
+                            lines.extend(_per_summ)
+
+                    elif any(w in q for w in ['sprint', 'sprints']):
+                        _spr = {}
+                        for _pp, _rr in resultados_por_periodo.items():
+                            for _rw in _rr:
+                                _an = _rw.get('Atleta', '?')
+                                _spr[_an] = _spr.get(_an, 0) + (_rw.get('Sprints (>24 km/h)', 0) or 0)
+                        if _spr:
+                            _best = max(_spr, key=_spr.get)
+                            lines.append(
+                                f"💨 **{_best}** liderou em sprints: **{_spr[_best]}** sprints >24 km/h."
+                            )
+
+                    if not lines:
+                        lines.append(
+                            "🤔 Não encontrei um padrão específico para essa pergunta no modo offline. "
+                            "Configure a Claude AI API Key para respostas mais avançadas, ou tente perguntar "
+                            "sobre velocidade, distância, PlayerLoad, sprints ou períodos."
+                        )
+
+                    return "\n\n".join(lines)
+
+                # ── Processar pergunta ──────────────────────────────────────
+                if _nlp_send and _nlp_q.strip():
+                    _nlp_api_key_val = st.session_state.get('nlp_api_key', '').strip()
+
+                    if _nlp_api_key_val:
+                        # ── Modo Claude AI ─────────────────────────────────
+                        try:
+                            import anthropic as _anth
+                            _anth_client = _anth.Anthropic(api_key=_nlp_api_key_val)
+
+                            # Few-shot corrections como contexto
+                            _few_shot_txt = ""
+                            if st.session_state['nlp_corrections']:
+                                _few_shot_txt = "\n\nExemplos de respostas aprovadas pelo usuário:\n"
+                                for _fc in st.session_state['nlp_corrections'][-5:]:
+                                    _few_shot_txt += (
+                                        f"P: {_fc['q']}\nR: {_fc['a']}\n---\n"
+                                    )
+
+                            _sys_prompt = (
+                                "Você é um assistente especialista em ciência do esporte e análise de desempenho "
+                                "de futebol com dados GPS da Catapult. Responda de forma objetiva, técnica e em "
+                                "português do Brasil. Use os dados fornecidos para embasar suas respostas. "
+                                "Formate sua resposta em Markdown com negrito para destaques."
+                                + _few_shot_txt
+                            )
+                            _user_msg = (
+                                f"Dados do jogo/treino:\n{_nlp_data_ctx}\n\n"
+                                f"Pergunta: {_nlp_q}"
+                            )
+
+                            _anth_resp = _anth_client.messages.create(
+                                model=st.session_state.get('nlp_model', 'claude-3-haiku-20240307'),
+                                max_tokens=800,
+                                system=_sys_prompt,
+                                messages=[{"role": "user", "content": _user_msg}],
+                            )
+                            _nlp_answer = _anth_resp.content[0].text
+
+                        except ImportError:
+                            _nlp_answer = (
+                                "⚠️ Biblioteca `anthropic` não instalada. "
+                                "Execute `pip install anthropic` e reinicie o app. "
+                                "Usando modo offline:\n\n"
+                                + _nlp_offline_answer(_nlp_q, _nlp_data_ctx)
+                            )
+                        except Exception as _anth_err:
+                            _nlp_answer = (
+                                f"⚠️ Erro na API Claude: {_anth_err}\n\n"
+                                "Resposta offline:\n\n"
+                                + _nlp_offline_answer(_nlp_q, _nlp_data_ctx)
+                            )
+                    else:
+                        # ── Modo offline ───────────────────────────────────
+                        _nlp_answer = _nlp_offline_answer(_nlp_q, _nlp_data_ctx)
+
+                    # Adicionar ao histórico
+                    st.session_state['nlp_history'].append({
+                        'q': _nlp_q,
+                        'a': _nlp_answer,
+                        'mode': 'claude' if _nlp_api_key_val else 'offline',
+                    })
+
+                # ── Exibir histórico ───────────────────────────────────────
+                if st.session_state['nlp_history']:
+                    for _hi, _hitem in enumerate(
+                        reversed(st.session_state['nlp_history'])
+                    ):
+                        _is_claude = _hitem.get('mode') == 'claude'
+                        st.markdown(
+                            f"<div style='background:#1a2332;border-left:3px solid "
+                            f"{'#4FC3F7' if _is_claude else '#81C784'}"
+                            f";border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                            f"<span style='color:#94a3b8;font-size:12px'>"
+                            f"{'🤖 Claude AI' if _is_claude else '🔍 Offline'}</span><br>"
+                            f"<b style='color:white'>❓ {_hitem['q']}</b>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown(_hitem['a'])
+
+                        # Opção de aprovação para few-shot learning
+                        _col_fb1, _col_fb2, _ = st.columns([1, 1, 6])
+                        with _col_fb1:
+                            if st.button(
+                                "👍 Útil", key=f"nlp_approve_{_hi}",
+                                help="Salvar como exemplo para melhorar futuras respostas"
+                            ):
+                                st.session_state['nlp_corrections'].append({
+                                    'q': _hitem['q'], 'a': _hitem['a']
+                                })
+                                st.success("✅ Salvo como exemplo de treinamento!")
+                        with _col_fb2:
+                            if st.button("🗑️", key=f"nlp_del_{_hi}", help="Remover do histórico"):
+                                _idx_del = len(st.session_state['nlp_history']) - 1 - _hi
+                                st.session_state['nlp_history'].pop(_idx_del)
+                                st.rerun()
+                        st.markdown("---")
+
+                    # Mostrar quantos exemplos de treinamento foram salvos
+                    _n_few = len(st.session_state['nlp_corrections'])
+                    if _n_few > 0:
+                        st.caption(
+                            f"🧠 {_n_few} exemplo(s) de treinamento salvo(s) — "
+                            f"o Claude usará como referência nas próximas perguntas."
+                        )
+                else:
+                    st.info(
+                        "💡 **Exemplos de perguntas:**\n\n"
+                        "- Quem foi o atleta mais rápido?\n"
+                        "- Qual período teve maior intensidade?\n"
+                        "- Quem percorreu mais distância?\n"
+                        "- Compare a velocidade entre os períodos\n"
+                        "- Quantos sprints foram registrados no total?"
+                    )
 
         else:
             st.warning("Nenhum dado encontrado")

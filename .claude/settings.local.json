@@ -22,7 +22,15 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('futebol-eventos.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
       "Bash(python -m py_compile futebol-eventos.py)",
       "Bash(python -m py_compile futebol-etos.py)",
-      "WebFetch(domain:docs.connect.catapultsports.com)"
+      "WebFetch(domain:docs.connect.catapultsports.com)",
+      "Bash(git -C \"C:\\\\Users\\\\User\\\\Desktop\\\\curso\\\\futebol-eventos-api\" diff futebol-eventos.py)",
+      "Bash(git -C \"C:\\\\Users\\\\User\\\\Desktop\\\\curso\\\\futebol-eventos-api\" add futebol-eventos.py)",
+      "Bash(git -C \"C:\\\\Users\\\\User\\\\Desktop\\\\curso\\\\futebol-eventos-api\" log --all --oneline)",
+      "Bash(git -C \"C:\\\\Users\\\\User\\\\Desktop\\\\curso\\\\futebol-eventos-api\" diff 278fd98~1 278fd98 -- futebol-eventos.py)",
+      "Bash(git -C \"C:\\\\Users\\\\User\\\\Desktop\\\\curso\\\\futebol-eventos-api\" log --all --oneline --format=\"%H %s\")",
+      "Bash(git -C \"C:\\\\Users\\\\User\\\\Desktop\\\\curso\\\\futebol-eventos-api\" show 67cadfb:futebol-eventos.py)",
+      "Bash(python -m py_compile \"C:\\\\Users\\\\User\\\\Desktop\\\\curso\\\\futebol-eventos-api\\\\futebol-eventos.py\")",
+      "Bash(git -C 'C:\\\\Users\\\\User\\\\Desktop\\\\curso\\\\futebol-eventos-api' commit -m ' *)"
     ]
   }
 }
