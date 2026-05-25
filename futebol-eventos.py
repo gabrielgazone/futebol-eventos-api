@@ -6922,9 +6922,12 @@ Escolha um ou mais atletas para análise simultânea.
                         # ── Controles de animação ──────────────────────────
                         _col_hc1, _col_hc2, _col_hc3 = st.columns(3)
                         with _col_hc1:
+                            _hist_speed_opts = [round(i * 0.25, 2) for i in range(1, 21)]
                             _hist_speed = st.select_slider(
-                                "⚡ Velocidade:", options=[10, 30, 60, 120],
-                                value=30, format_func=lambda x: f"{x}×",
+                                "⚡ Velocidade:",
+                                options=_hist_speed_opts,
+                                value=1.0,
+                                format_func=lambda x: f"{x:.2g}×",
                                 key="hist_speed"
                             )
                         with _col_hc2:
@@ -7034,7 +7037,8 @@ Escolha um ou mais atletas para análise simultânea.
                             _step_fr = max(1, _n_all // _hist_max_frames)
                             _frame_ts = _all_ts_norm[::_step_fr]
                             _n_frames = len(_frame_ts)
-                            _frame_dur_ms = max(30, int(_step_fr * 100 // _hist_speed))
+                            # 250ms por frame a 1× → ~4fps; escala linearmente com o slider
+                            _frame_dur_ms = max(30, int(250 / _hist_speed))
 
                             # ── Figura base (campo) ────────────────────────
                             _fig_hist = desenhar_campo_futebol_bonito(
@@ -7284,7 +7288,7 @@ Escolha um ou mais atletas para análise simultânea.
                                     _df_hist, use_container_width=True, hide_index=True
                                 )
                             st.caption(
-                                f"⚙️ {_n_frames} frames · {_hist_speed}× velocidade · "
+                                f"⚙️ {_n_frames} frames · {_hist_speed:.2g}× velocidade · "
                                 f"rastro {_hist_trail_s}s · campo {_hist_fl:.0f}×{_hist_fw:.0f}m"
                             )
 
