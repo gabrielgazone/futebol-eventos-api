@@ -8078,39 +8078,39 @@ Escolha um ou mais atletas para análise simultânea.
 
                                 _3d_fig.update_layout(
                                     height=620,
-                                    plot_bgcolor='#0e1117',
                                     paper_bgcolor='#0e1117',
                                     font=dict(color='white'),
                                     scene=dict(
                                         xaxis=dict(
-                                            title='Campo X (m)',
+                                            title=dict(
+                                                text='Campo X (m)',
+                                                font=dict(color='white', size=11),
+                                            ),
                                             range=[0, _hist_fl],
                                             showgrid=True,
-                                            gridcolor='rgba(255,255,255,0.08)',
-                                            backgroundcolor='rgba(14,17,23,0)',
-                                            tickfont=dict(color='white'),
-                                            titlefont=dict(color='white'),
+                                            gridcolor='rgba(255,255,255,0.10)',
+                                            tickfont=dict(color='rgba(200,200,200,0.8)'),
                                         ),
                                         yaxis=dict(
-                                            title='Tempo (s)',
+                                            title=dict(
+                                                text='Tempo (s)',
+                                                font=dict(color='white', size=11),
+                                            ),
                                             showgrid=True,
-                                            gridcolor='rgba(255,255,255,0.08)',
-                                            backgroundcolor='rgba(14,17,23,0)',
-                                            tickfont=dict(color='white'),
-                                            titlefont=dict(color='white'),
+                                            gridcolor='rgba(255,255,255,0.10)',
+                                            tickfont=dict(color='rgba(200,200,200,0.8)'),
                                         ),
                                         zaxis=dict(
-                                            title='Campo Y (m)',
+                                            title=dict(
+                                                text='Campo Y (m)',
+                                                font=dict(color='white', size=11),
+                                            ),
                                             range=[0, _hist_fw],
                                             showgrid=True,
-                                            gridcolor='rgba(255,255,255,0.08)',
-                                            backgroundcolor='rgba(14,17,23,0)',
-                                            tickfont=dict(color='white'),
-                                            titlefont=dict(color='white'),
+                                            gridcolor='rgba(255,255,255,0.10)',
+                                            tickfont=dict(color='rgba(200,200,200,0.8)'),
                                         ),
-                                        bgcolor='rgba(14,17,23,0.97)',
                                         camera=dict(
-                                            # ângulo isométrico clássico
                                             eye=dict(x=1.6, y=-1.8, z=1.1),
                                             up=dict(x=0, y=0, z=1),
                                             center=dict(x=0, y=0, z=0),
