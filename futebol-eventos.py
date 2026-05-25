@@ -4406,17 +4406,23 @@ Escolha um ou mais atletas para análise simultânea.
                                 ]
 
                                 # ── Venue da atividade → pré-popula campo ────────────
-                                # Prioriza lat/lon do venue (mais preciso); cai para
-                                # mediana GPS como fallback.
+                                # Centro do mapa: sempre usa mediana GPS real dos atletas
+                                # (o venue.lat/lng da API pode estar cadastrado num local errado).
+                                # Dimensões e rotação do venue são usadas quando disponíveis.
                                 _venue_info = st.session_state.get('venue', {})
-                                _venue_lat  = _venue_info.get('lat')
-                                _venue_lng  = _venue_info.get('lng')
                                 _venue_rot  = int(_venue_info.get('rotation') or 0)
                                 _venue_fl   = float(_venue_info.get('length')   or 105)
                                 _venue_fw   = float(_venue_info.get('width')    or 68)
 
-                                _lat_c = round(float(_venue_lat if _venue_lat else np.median(lats_gps)), 7)
-                                _lon_c = round(float(_venue_lng if _venue_lng else np.median(lons_gps)), 7)
+                                # Posição do mapa: mediana GPS > venue lat/lng > 0,0
+                                if lats_gps:
+                                    _lat_c = round(float(np.median(lats_gps)), 7)
+                                    _lon_c = round(float(np.median(lons_gps)), 7)
+                                else:
+                                    _vl = _venue_info.get('lat')
+                                    _vg = _venue_info.get('lng')
+                                    _lat_c = round(float(_vl), 7) if _vl else 0.0
+                                    _lon_c = round(float(_vg), 7) if _vg else 0.0
 
                                 if _venue_info:
                                     st.caption(
@@ -6890,18 +6896,27 @@ Escolha um ou mais atletas para análise simultânea.
                             "Período:", _hist_periodos_disp, key="hist_periodo_sel"
                         )
 
+                    # Mostra todos os atletas com qualquer dado de posição (xs OU GPS)
                     _hist_atletas_disp = [
+                        a for a, d in dados_posicao_por_periodo.get(_hist_periodo_sel, {}).items()
+                        if d.get('xs') or d.get('lats')
+                    ]
+                    # Sub-lista com xs+ts_pos (necessário para animação)
+                    _hist_atletas_xy = [
                         a for a, d in dados_posicao_por_periodo.get(_hist_periodo_sel, {}).items()
                         if d.get('xs') and d.get('ts_pos')
                     ]
                     with _col_hsp:
+                        _hist_default = [a for a in (_hist_atletas_xy[:8] or _hist_atletas_disp[:8])]
                         _hist_atletas_sel = st.multiselect(
                             "Atletas:", _hist_atletas_disp,
-                            default=_hist_atletas_disp[:8] if len(_hist_atletas_disp) > 8 else _hist_atletas_disp,
+                            default=_hist_default,
                             key="hist_atletas_sel"
                         )
 
-                    if not _hist_atletas_sel:
+                    if not _hist_atletas_disp:
+                        st.info("Nenhum dado de posição encontrado para este período.")
+                    elif not _hist_atletas_sel:
                         st.info("Selecione pelo menos um atleta.")
                     else:
                         # ── Controles de animação ──────────────────────────
@@ -6946,7 +6961,18 @@ Escolha um ou mais atletas para análise simultânea.
                                 }
 
                         if not _hist_coords:
-                            st.warning("Nenhum atleta selecionado possui dados de posição com timestamps.")
+                            _n_sem_xy = len([a for a in _hist_atletas_sel
+                                             if not dados_posicao_por_periodo
+                                                .get(_hist_periodo_sel, {})
+                                                .get(a, {}).get('xs')])
+                            st.warning(
+                                f"⚠️ **{_n_sem_xy}/{len(_hist_atletas_sel)} atleta(s) sem dados de campo (x,y)** "
+                                f"para o período **{_hist_periodo_sel}**.\n\n"
+                                "A animação requer coordenadas de campo. Possíveis causas:\n"
+                                "- O campo não está configurado no sistema Catapult para este período\n"
+                                "- Os sensores não capturaram dados de posição de campo\n"
+                                "- Tente selecionar o período **1 Tempo** — geralmente tem mais dados xy"
+                            )
                         else:
                             # ── Normalizar timestamps ──────────────────────
                             _all_ts_raw = [t for _hc in _hist_coords.values() for t in _hc['ts']]
