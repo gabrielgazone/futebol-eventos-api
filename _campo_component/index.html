@@ -134,7 +134,7 @@
     if(!e.data || typeof e.data !== 'object') return;
     if(e.data.type === 'streamlit:render' && !initialized){
       var a = e.data.args || {};
-      initMap(a.pts||[], a.lat_c||0, a.lon_c||0);
+      initMap(a.pts||[], a.lat_c||0, a.lon_c||0, a.rot||0, a.fl||105, a.fw||68);
       initialized = true;
     }
   });
@@ -155,10 +155,17 @@
   }
 
   // ── Inicialização do mapa ────────────────────────────────────────────
-  function initMap(pts, lat_c, lon_c){
+  function initMap(pts, lat_c, lon_c, rot, fl, fw){
     cLat = lat_c; cLon = lon_c;
+    // Pré-popula com dados do venue (se fornecidos pelo Python)
+    rotD = +rot || 0;
+    fL   = +fl  || 105;
+    fW   = +fw  || 68;
     document.getElementById('inLat').value = cLat.toFixed(6);
     document.getElementById('inLon').value = cLon.toFixed(6);
+    document.getElementById('rot').value   = rotD;
+    document.getElementById('fl').value    = fL;
+    document.getElementById('fw').value    = fW;
 
     map = L.map('map', {maxZoom: 21}).setView([cLat, cLon], 18);
 

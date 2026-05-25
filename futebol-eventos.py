@@ -313,128 +313,166 @@ REFERENCIAS = {
     """
 }
 
+# ==================== CACHE DE API (TTL 15 min) ====================
+# Standalone function cacheada pelo Streamlit. Parâmetros como
+# primitivos/tuples para serem hashable. TTL de 900s (15 min).
+@st.cache_data(ttl=900, show_spinner=False)
+def _api_fetch(base_url: str, token: str, path: str,
+               params: tuple = ()) -> object:
+    """Chamada HTTP GET à API Catapult com cache automático de 15 min."""
+    headers = {'Authorization': f'Bearer {token}'}
+    try:
+        r = requests.get(f"{base_url}/{path}",
+                         headers=headers,
+                         params=dict(params),
+                         timeout=60)
+        return r.json() if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
+# ==================== PREFERÊNCIAS DO USUÁRIO ====================
+_PREFS_FILE = _os.path.join(_os.path.expanduser("~"), ".futebol_prefs.json")
+
+def _carregar_prefs() -> dict:
+    """Carrega preferências salvas do usuário (arquivo local JSON)."""
+    try:
+        with open(_PREFS_FILE, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _salvar_prefs(prefs: dict) -> None:
+    """Persiste preferências do usuário em arquivo local JSON."""
+    try:
+        with open(_PREFS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(prefs, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+# ==================== BANCO COMPARTILHADO DE VENUES ====================
+# venues.json fica na mesma pasta do script → qualquer usuário que acesse
+# o app no mesmo servidor lê e escreve neste arquivo.
+# Estrutura: { "Nome do Venue": { lat, lon, rot, fl, fw, ig, saved_at } }
+_VENUES_FILE = _os.path.join(
+    _os.path.dirname(_os.path.abspath(__file__)), "venues.json"
+)
+
+def _carregar_venues() -> dict:
+    """Retorna o dicionário de venues salvos (nome → config)."""
+    try:
+        with open(_VENUES_FILE, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _salvar_venue(nome: str, cfg: dict) -> None:
+    """Persiste (ou sobrescreve) a configuração de um venue no arquivo compartilhado."""
+    dados = _carregar_venues()
+    dados[nome.strip()] = {
+        'lat':      cfg.get('lat', 0.0),
+        'lon':      cfg.get('lon', 0.0),
+        'rot':      cfg.get('rot', 0),
+        'fl':       cfg.get('fl',  105),
+        'fw':       cfg.get('fw',  68),
+        'ig':       cfg.get('ig',  3),
+        'saved_at': datetime.now().strftime('%Y-%m-%d %H:%M'),
+    }
+    try:
+        with open(_VENUES_FILE, 'w', encoding='utf-8') as f:
+            json.dump(dados, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def _excluir_venue(nome: str) -> None:
+    """Remove um venue do banco compartilhado."""
+    dados = _carregar_venues()
+    dados.pop(nome, None)
+    try:
+        with open(_VENUES_FILE, 'w', encoding='utf-8') as f:
+            json.dump(dados, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
 class CatapultAPI:
     def __init__(self, base_url, token):
         self.base_url = base_url
-        self.headers = {'Authorization': f'Bearer {token}'}
+        self._token   = token                                  # usado no cache
+        self.headers  = {'Authorization': f'Bearer {token}'}
     
     def get_athletes(self):
-        r = requests.get(f"{self.base_url}/athletes", headers=self.headers)
-        return r.json() if r.status_code == 200 else None
-    
+        return _api_fetch(self.base_url, self._token, "athletes")
+
     def get_teams(self):
-        r = requests.get(f"{self.base_url}/teams", headers=self.headers)
-        return r.json() if r.status_code == 200 else None
-    
+        return _api_fetch(self.base_url, self._token, "teams")
+
     def get_team_athletes(self, team_id):
-        r = requests.get(f"{self.base_url}/teams/{team_id}/athletes", headers=self.headers)
-        return r.json() if r.status_code == 200 else None
-    
+        return _api_fetch(self.base_url, self._token, f"teams/{team_id}/athletes")
+
     def get_activities(self):
-        r = requests.get(f"{self.base_url}/activities?page_size=500", headers=self.headers)
-        return r.json() if r.status_code == 200 else None
-    
+        return _api_fetch(self.base_url, self._token, "activities",
+                          params=(("page_size", "500"),))
+
     def get_activity_athletes(self, activity_id):
-        r = requests.get(f"{self.base_url}/activities/{activity_id}/athletes", headers=self.headers)
-        return r.json() if r.status_code == 200 else None
-    
+        return _api_fetch(self.base_url, self._token,
+                          f"activities/{activity_id}/athletes")
+
     def get_activity_periods(self, activity_id):
-        r = requests.get(f"{self.base_url}/activities/{activity_id}/periods", headers=self.headers)
-        return r.json() if r.status_code == 200 else None
-    
+        return _api_fetch(self.base_url, self._token,
+                          f"activities/{activity_id}/periods")
+
     def get_all_periods(self):
-        r = requests.get(f"{self.base_url}/periods", headers=self.headers)
-        return r.json() if r.status_code == 200 else None
-    
+        return _api_fetch(self.base_url, self._token, "periods")
+
     def get_athletes_in_period(self, period_id):
-        r = requests.get(f"{self.base_url}/periods/{period_id}/athletes", headers=self.headers)
-        return r.json() if r.status_code == 200 else None
-    
+        return _api_fetch(self.base_url, self._token,
+                          f"periods/{period_id}/athletes")
+
     def get_positions(self):
-        r = requests.get(f"{self.base_url}/positions", headers=self.headers)
-        return r.json() if r.status_code == 200 else None
-    
+        return _api_fetch(self.base_url, self._token, "positions")
+
     def get_parameters(self):
-        r = requests.get(f"{self.base_url}/parameters", headers=self.headers)
-        return r.json() if r.status_code == 200 else None
+        return _api_fetch(self.base_url, self._token, "parameters")
     
+    _SENSOR_PARAMS = (
+        ("parameters", "ts,lat,long,v,a,hr,pl,xy"),
+        ("xy_middle",  "1"),
+        ("nulls",      "1"),
+    )
+
     def get_sensor_data(self, activity_id, athlete_id):
-        params = {
-            "parameters": "ts,lat,long,v,a,hr,pl,xy",
-            "nulls": "1"
-        }
-        r = requests.get(
-            f"{self.base_url}/activities/{activity_id}/athletes/{athlete_id}/sensor",
-            headers=self.headers,
-            params=params,
-            timeout=60
-        )
-        if r.status_code == 200:
-            return r.json()
-        return None
-    
+        return _api_fetch(self.base_url, self._token,
+                          f"activities/{activity_id}/athletes/{athlete_id}/sensor",
+                          params=self._SENSOR_PARAMS)
+
     def get_period_sensor_data(self, period_id, athlete_id):
-        params = {
-            "parameters": "ts,lat,long,v,a,hr,pl,xy",
-            "nulls": "1"
-        }
-        r = requests.get(
-            f"{self.base_url}/periods/{period_id}/athletes/{athlete_id}/sensor",
-            headers=self.headers,
-            params=params,
-            timeout=60
-        )
-        if r.status_code == 200:
-            return r.json()
-        return None
-    
-    def get_activity_efforts(self, activity_id, athlete_id, effort_types="velocity,acceleration"):
-        params = {"effort_types": effort_types}
-        r = requests.get(
-            f"{self.base_url}/activities/{activity_id}/athletes/{athlete_id}/efforts",
-            headers=self.headers,
-            params=params,
-            timeout=60
-        )
-        if r.status_code == 200:
-            return r.json()
-        return None
-    
-    def get_period_efforts(self, period_id, athlete_id, effort_types="velocity,acceleration"):
-        params = {"effort_types": effort_types}
-        r = requests.get(
-            f"{self.base_url}/periods/{period_id}/athletes/{athlete_id}/efforts",
-            headers=self.headers,
-            params=params,
-            timeout=60
-        )
-        if r.status_code == 200:
-            return r.json()
-        return None
+        return _api_fetch(self.base_url, self._token,
+                          f"periods/{period_id}/athletes/{athlete_id}/sensor",
+                          params=self._SENSOR_PARAMS)
+
+    def get_activity_efforts(self, activity_id, athlete_id,
+                             effort_types="velocity,acceleration"):
+        return _api_fetch(self.base_url, self._token,
+                          f"activities/{activity_id}/athletes/{athlete_id}/efforts",
+                          params=(("effort_types", effort_types),))
+
+    def get_period_efforts(self, period_id, athlete_id,
+                           effort_types="velocity,acceleration"):
+        return _api_fetch(self.base_url, self._token,
+                          f"periods/{period_id}/athletes/{athlete_id}/efforts",
+                          params=(("effort_types", effort_types),))
 
     def get_activity_events(self, activity_id, athlete_id, event_types):
-        params = {"event_types": event_types}
-        r = requests.get(
-            f"{self.base_url}/activities/{activity_id}/athletes/{athlete_id}/events",
-            headers=self.headers,
-            params=params,
-            timeout=60
-        )
-        if r.status_code == 200:
-            return r.json()
-        return None
+        return _api_fetch(self.base_url, self._token,
+                          f"activities/{activity_id}/athletes/{athlete_id}/events",
+                          params=(("event_types", event_types),))
 
     def get_period_events(self, period_id, athlete_id, event_types):
-        params = {"event_types": event_types}
-        r = requests.get(
-            f"{self.base_url}/periods/{period_id}/athletes/{athlete_id}/events",
-            headers=self.headers,
-            params=params,
-            timeout=60
-        )
-        if r.status_code == 200:
-            return r.json()
-        return None
+        return _api_fetch(self.base_url, self._token,
+                          f"periods/{period_id}/athletes/{athlete_id}/events",
+                          params=(("event_types", event_types),))
 
     # PARTE 2 - FUNÇÕES DE EXTRAÇÃO, CONVERSÃO E CÁLCULO
 
@@ -3054,6 +3092,77 @@ def gerar_heatmap_segmentado(xs, ys, ts_list, bloco_min, bloco_idx, field_length
 
 # ==================== FEATURE 2: DIAGRAMA DE VORONOI ====================
 
+def enriquecer_esforcos_taticos(df: pd.DataFrame,
+                               coords_atletas: dict,
+                               field_length: float = 105) -> pd.DataFrame:
+    """
+    Adiciona colunas 'Zona' e 'Direção' ao DataFrame de esforços com
+    base nas coordenadas x/y do atleta:
+      - Zona: Defensivo / Meio / Ataque (terços do campo)
+      - Direção: ⬆ Ofensivo / ⬇ Defensivo / ↔ Lateral
+    """
+    if df.empty:
+        return df
+
+    zonas, direcoes = [], []
+    fl3 = field_length / 3.0
+
+    for _, row in df.iterrows():
+        atl  = str(row.get('Atleta', ''))
+        c    = coords_atletas.get(atl, {})
+        xn   = c.get('xn', [])
+        tsn  = c.get('ts', [])
+        x_ini = x_fim = None
+
+        # Tier 0: índices de segmento (cálculo local)
+        si = int(row.get('_seg_start_idx', -1))
+        ei = int(row.get('_seg_end_idx',   -1))
+        if 0 <= si < ei <= len(xn):
+            x_ini = float(xn[si])
+            x_fim = float(xn[ei - 1])
+
+        # Tier 1: timestamps (esforços da API)
+        if x_ini is None and tsn and row.get('_start_ts', 0) > 0:
+            _ts_a = np.array(tsn)
+            _msk  = (_ts_a >= row['_start_ts']) & (_ts_a <= row['_end_ts'])
+            if _msk.any():
+                _idxs = np.where(_msk)[0]
+                x_ini = float(xn[_idxs[0]])
+                x_fim = float(xn[_idxs[-1]])
+
+        # Zona
+        if x_ini is not None:
+            if x_ini < fl3:
+                zona = '🔴 Defensivo'
+            elif x_ini < 2 * fl3:
+                zona = '🟡 Meio'
+            else:
+                zona = '🟢 Ataque'
+        else:
+            zona = '—'
+
+        # Direção
+        if x_ini is not None and x_fim is not None:
+            dx = x_fim - x_ini
+            if dx > 5:
+                direcao = '⬆ Ofensivo'
+            elif dx < -5:
+                direcao = '⬇ Defensivo'
+            else:
+                direcao = '↔ Lateral'
+        else:
+            direcao = '—'
+
+        zonas.append(zona)
+        direcoes.append(direcao)
+
+    df = df.copy()
+    df.insert(df.columns.get_loc('Banda') + 1 if 'Banda' in df.columns else len(df.columns),
+              'Zona', zonas)
+    df.insert(df.columns.get_loc('Zona') + 1, 'Direção', direcoes)
+    return df
+
+
 def calcular_voronoi_campo(posicoes_atletas, field_length=105, field_width=68, resolucao=1.5):
     """Diagrama de Voronoi (nearest-neighbor grid) — raio de ação por atleta."""
     centroids = {}
@@ -3526,11 +3635,54 @@ def main():
     if 'athlete_team_map' not in st.session_state:
         st.session_state.athlete_team_map = {}
     
+    # ── Carregar preferências salvas ─────────────────────────────────
+    _prefs = _carregar_prefs()
+
     # Sidebar
     with st.sidebar:
+
+        # ── FEATURE 5: Tour guiado para novos usuários ───────────────
+        if not _prefs.get('tour_done'):
+            with st.expander("📖 Como usar — Guia Rápido", expanded=True):
+                st.markdown("""
+**Bem-vindo! Siga estes passos:**
+
+**1️⃣ Servidor & Token**
+Selecione o servidor da sua região e cole o token JWT do OpenField.
+
+**2️⃣ Carregar Dados**
+Clique em **🔄 Carregar Dados** — equipes, atletas e atividades serão buscados automaticamente.
+
+**3️⃣ Filtrar**
+Filtre por equipe e posição, selecione a atividade e os períodos desejados.
+
+**4️⃣ Selecionar Atletas**
+Escolha um ou mais atletas para análise simultânea.
+
+**5️⃣ Explorar as ABAs**
+- 📈 Gráficos Comparativos
+- 🗺️ Campo de Futebol (posição, esforços, animação)
+- ⏱️ Esforços ao Longo do Tempo
+- 📊 Janelas Temporais Móveis
+- 💪 Carga Neuromuscular
+- 🏎️ Perfil Aceleração × Velocidade
+""")
+                if st.button("✅ Entendi, não mostrar novamente", key="_tour_ok"):
+                    _prefs['tour_done'] = True
+                    _salvar_prefs(_prefs)
+                    st.rerun()
+
         st.header("🌍 Servidor")
-        server = st.selectbox("Selecione:", list(SERVERS.keys()))
+        # ── FEATURE 2: pré-seleciona servidor salvo nas prefs ────────
+        _server_opts  = list(SERVERS.keys())
+        _server_saved = _prefs.get('server', _server_opts[0])
+        _server_idx   = _server_opts.index(_server_saved) if _server_saved in _server_opts else 0
+        server = st.selectbox("Selecione:", _server_opts, index=_server_idx)
         base_url = SERVERS[server]
+        # Salva imediatamente se mudou
+        if server != _prefs.get('server'):
+            _prefs['server'] = server
+            _salvar_prefs(_prefs)
 
         st.header(t("language_header"))
         st.selectbox(t("language_select"), list(LANGUAGES.keys()), key="lang_selector")
@@ -3603,7 +3755,12 @@ def main():
                         atvs = activities_raw
                     atividades = []
                     for a in atvs:
-                        atividades.append({'id': a.get('id'), 'nome': a.get('name'), 'data': a.get('start_time')})
+                        atividades.append({
+                            'id':    a.get('id'),
+                            'nome':  a.get('name'),
+                            'data':  a.get('start_time'),
+                            'venue': a.get('venue') or {},   # campo: lat, lng, rotation, length, width
+                        })
                     st.session_state.df_activities = pd.DataFrame(atividades)
                     st.success(f"✅ {len(atividades)} atividades")
                 
@@ -3630,9 +3787,20 @@ def main():
             st.session_state['_atividade_sel_cached'] = atividade_sel
 
             if atividade_sel:
-                activity_id = st.session_state.df_activities[st.session_state.df_activities['nome'] == atividade_sel]['id'].values[0]
+                _act_row = st.session_state.df_activities[
+                    st.session_state.df_activities['nome'] == atividade_sel]
+                activity_id = _act_row['id'].values[0]
                 st.session_state.activity_id = activity_id
-                
+
+                # ── Venue (campo) da atividade ────────────────────────────────
+                # Salva lat, lng, rotation, length, width para pré-popular o
+                # componente de posicionamento de campo automaticamente.
+                if 'venue' in _act_row.columns:
+                    _venue_val = _act_row['venue'].values[0]
+                    st.session_state.venue = _venue_val if isinstance(_venue_val, dict) else {}
+                else:
+                    st.session_state.venue = {}
+
                 with st.spinner("Buscando períodos da atividade..."):
                     api = st.session_state.api
                     periods_raw = api.get_activity_periods(activity_id)
@@ -3862,19 +4030,24 @@ def main():
                         if acc_efforts:
                             dados_efforts_acc[atleta_nome] = acc_efforts
                     
-                    # Usa x,y da API diretamente — coordenadas relativas ao campo (m desde
-                    # o canto inferior esquerdo), calculadas pela Catapult a partir da
-                    # configuração do campo no OpenField. Filtra nulos e valores absurdos
-                    # (lat=0,long=0 sem nulls=1 produz x,y na casa dos milhões).
+                    # Usa x,y da API com xy_middle=1 → origem (0,0) = CENTRO do campo.
+                    # Converte para origem no canto inferior esquerdo somando fl/2 e fw/2
+                    # usando dimensões do venue (ou padrão FIFA 105×68m).
+                    # Filtra nulos e projeções Mercator (valores na casa dos milhares/milhões).
+                    _venue   = st.session_state.get('venue', {})
+                    _fl_v    = float(_venue.get('length') or 105)
+                    _fw_v    = float(_venue.get('width')  or 68)
+                    _half_fl = _fl_v / 2.0
+                    _half_fw = _fw_v / 2.0
                     pontos_pos = [
-                        (float(p['x']), float(p['y']),
+                        (float(p['x']) + _half_fl, float(p['y']) + _half_fw,
                          (p.get('v') or 0) * 3.6,
                          float(p.get('a') or 0),
                          float(p.get('ts') or 0))
                         for p in sensor_points
                         if p.get('x') is not None and p.get('y') is not None
-                        and -50 < float(p['x']) < 250
-                        and -50 < float(p['y']) < 200
+                        and abs(float(p['x'])) < 90   # xy_middle → max ±60m (campo 120m) + margem
+                        and abs(float(p['y'])) < 60   # xy_middle → max ±45m (campo 90m) + margem
                     ]
                     if pontos_pos:
                         xs          = [pt[0] for pt in pontos_pos]
@@ -3992,6 +4165,7 @@ def main():
                 "🏎️ Perfil Acc-Vel",
                 "📋 Tabela Descritiva",
                 "📊 Por Posição",
+                "🎬 História do Jogo",
             ])
             
             # ==================== ABA 1: GRÁFICOS COMPARATIVOS ====================
@@ -4156,6 +4330,26 @@ def main():
 
                         # Chave por atleta (campo físico não muda entre períodos)
                         campo_key = f"campo_cfg__{atleta_mapa}"
+
+                        # ── Auto-carga do banco compartilhado de venues ──────────
+                        # Se o venue da atividade já foi configurado por algum usuário,
+                        # aplica automaticamente — sem precisar passar pela FASE 1.
+                        _venues_db   = _carregar_venues()
+                        _venue_name  = st.session_state.get('venue', {}).get('name', '')
+                        if (_venue_name and _venue_name in _venues_db
+                                and campo_key not in st.session_state):
+                            _vs = _venues_db[_venue_name]
+                            st.session_state[campo_key] = {
+                                'lat':          float(_vs.get('lat', 0)),
+                                'lon':          float(_vs.get('lon', 0)),
+                                'rot':          int(_vs.get('rot',   0)),
+                                'fl':           int(_vs.get('fl',  105)),
+                                'fw':           int(_vs.get('fw',   68)),
+                                'ig':           int(_vs.get('ig',    3)),
+                                '_from_venues': _venue_name,
+                                '_saved_at':    _vs.get('saved_at', ''),
+                            }
+
                         campo_aplicado = campo_key in st.session_state
 
                         # ══════════════════════════════════════════════════════
@@ -4185,8 +4379,27 @@ def main():
                                      "v":   round(float(vels_gps[i]) if i < len(vels_gps) else 0.0, 1)}
                                     for i in range(0, _n, _step)
                                 ]
-                                _lat_c = round(float(np.median(lats_gps)), 7)
-                                _lon_c = round(float(np.median(lons_gps)), 7)
+
+                                # ── Venue da atividade → pré-popula campo ────────────
+                                # Prioriza lat/lon do venue (mais preciso); cai para
+                                # mediana GPS como fallback.
+                                _venue_info = st.session_state.get('venue', {})
+                                _venue_lat  = _venue_info.get('lat')
+                                _venue_lng  = _venue_info.get('lng')
+                                _venue_rot  = int(_venue_info.get('rotation') or 0)
+                                _venue_fl   = float(_venue_info.get('length')   or 105)
+                                _venue_fw   = float(_venue_info.get('width')    or 68)
+
+                                _lat_c = round(float(_venue_lat if _venue_lat else np.median(lats_gps)), 7)
+                                _lon_c = round(float(_venue_lng if _venue_lng else np.median(lons_gps)), 7)
+
+                                if _venue_info:
+                                    st.caption(
+                                        f"📡 Venue detectado: **{_venue_fl:.0f}×{_venue_fw:.0f}m** · "
+                                        f"rot **{_venue_rot}°** · "
+                                        f"centro **{_lat_c:.5f}, {_lon_c:.5f}** "
+                                        f"_(pré-populado automaticamente)_"
+                                    )
 
                                 # Componente bidirecional: retorna {lat,lon,rot,fl,fw,ig}
                                 # quando o usuário clica "✅ Aplicar Campo" no painel do mapa
@@ -4194,20 +4407,65 @@ def main():
                                     pts=_pts,
                                     lat_c=_lat_c,
                                     lon_c=_lon_c,
+                                    rot=_venue_rot,
+                                    fl=_venue_fl,
+                                    fw=_venue_fw,
                                     key=f"campo_mapa_{atleta_mapa}",
                                     default=None
                                 )
 
                                 if resultado_campo is not None:
-                                    st.session_state[campo_key] = {
+                                    _novo_cfg = {
                                         'lat': float(resultado_campo['lat']),
                                         'lon': float(resultado_campo['lon']),
                                         'rot': int(resultado_campo['rot']),
                                         'fl':  int(resultado_campo['fl']),
                                         'fw':  int(resultado_campo['fw']),
-                                        'ig':  int(resultado_campo['ig'])
+                                        'ig':  int(resultado_campo['ig']),
                                     }
-                                    st.rerun()
+                                    st.session_state[campo_key] = _novo_cfg
+                                    st.success("✅ Campo aplicado com sucesso!")
+
+                                    # ── Oferecer salvar no banco compartilhado ──────
+                                    _vdb_atual  = _carregar_venues()
+                                    _def_vname  = (_venue_name
+                                                   or st.session_state.get('venue', {}).get('name', '')
+                                                   or '')
+                                    st.markdown("---")
+                                    st.markdown("#### 💾 Deseja salvar no banco compartilhado de venues?")
+                                    st.caption(
+                                        "Outros usuários que abrirem uma atividade **neste mesmo venue** "
+                                        "terão o campo configurado automaticamente."
+                                    )
+                                    with st.form("_form_save_venue"):
+                                        _vname_inp = st.text_input(
+                                            "Nome do venue:",
+                                            value=_def_vname,
+                                            placeholder="Ex: Estádio Municipal / CT do Clube",
+                                        )
+                                        if _vname_inp and _vname_inp.strip() in _vdb_atual:
+                                            st.warning(
+                                                f"⚠️ Já existe um venue salvo com este nome "
+                                                f"(salvo em {_vdb_atual[_vname_inp.strip()].get('saved_at','?')}). "
+                                                f"Confirme para sobrescrever."
+                                            )
+                                        _c1, _c2 = st.columns(2)
+                                        with _c1:
+                                            _btn_salvar = st.form_submit_button(
+                                                "💾 Salvar para todos", type="primary")
+                                        with _c2:
+                                            _btn_pular  = st.form_submit_button("⏭ Pular")
+
+                                    if _btn_salvar and _vname_inp.strip():
+                                        _salvar_venue(_vname_inp.strip(), _novo_cfg)
+                                        st.success(
+                                            f"✅ Venue **{_vname_inp.strip()}** salvo! "
+                                            f"Outros usuários serão beneficiados automaticamente."
+                                        )
+                                        st.session_state[campo_key]['_from_venues'] = _vname_inp.strip()
+                                        st.session_state[campo_key]['_saved_at'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+                                    if _btn_salvar or _btn_pular:
+                                        st.rerun()
                             else:
                                 st.warning(
                                     "⚠️ Nenhum ponto GPS real (lat/lon) encontrado para este atleta.\n\n"
@@ -4219,9 +4477,19 @@ def main():
                         # ══════════════════════════════════════════════════════
                         else:
                             cfg = st.session_state[campo_key]
+                            _cfg_from_vn  = cfg.get('_from_venues', '')
+                            _cfg_saved_at = cfg.get('_saved_at', '')
+
+                            # ── Banner de origem ─────────────────────────────────
+                            if _cfg_from_vn:
+                                st.success(
+                                    f"📦 Campo carregado automaticamente do banco compartilhado: "
+                                    f"**{_cfg_from_vn}**"
+                                    + (f" · salvo em {_cfg_saved_at}" if _cfg_saved_at else "")
+                                )
 
                             # Botão para reajustar (volta à Fase 1)
-                            col_hdr, col_btn = st.columns([5, 1])
+                            col_hdr, col_btn, col_mgr = st.columns([4, 1, 1])
                             with col_hdr:
                                 st.markdown(
                                     f"### 1️⃣ Campo Aplicado  "
@@ -4235,6 +4503,42 @@ def main():
                                 if st.button("🔄 Reajustar", key="btn_reajustar"):
                                     del st.session_state[campo_key]
                                     st.rerun()
+                            with col_mgr:
+                                if st.button("🗄️ Venues", key="btn_mgr_venues"):
+                                    st.session_state['_show_venue_mgr'] = not st.session_state.get('_show_venue_mgr', False)
+
+                            # ── Gerenciador de venues ────────────────────────────
+                            if st.session_state.get('_show_venue_mgr', False):
+                                with st.expander("🗄️ Banco Compartilhado de Venues", expanded=True):
+                                    _vdb = _carregar_venues()
+                                    if not _vdb:
+                                        st.info("Nenhum venue salvo ainda. Configure um campo e clique em 💾 Salvar.")
+                                    else:
+                                        for _vn, _vc in _vdb.items():
+                                            _v1, _v2, _v3, _v4 = st.columns([3, 2, 2, 1])
+                                            with _v1:
+                                                st.markdown(f"**{_vn}**")
+                                            with _v2:
+                                                st.caption(f"📏 {_vc.get('fl',105)}×{_vc.get('fw',68)}m · 🧭 {_vc.get('rot',0)}°")
+                                            with _v3:
+                                                st.caption(f"💾 {_vc.get('saved_at','?')}")
+                                            with _v4:
+                                                if st.button("🗑️", key=f"_del_vn_{_vn}",
+                                                             help=f"Excluir {_vn}"):
+                                                    _excluir_venue(_vn)
+                                                    st.rerun()
+                                    # Salvar config atual com novo nome
+                                    st.markdown("---")
+                                    st.markdown("**Salvar configuração atual:**")
+                                    with st.form("_form_mgr_save"):
+                                        _mgr_nome = st.text_input(
+                                            "Nome:", value=_venue_name or '',
+                                            key="_mgr_vname")
+                                        if st.form_submit_button("💾 Salvar / Atualizar", type="primary"):
+                                            if _mgr_nome.strip():
+                                                _salvar_venue(_mgr_nome.strip(), cfg)
+                                                st.success(f"✅ **{_mgr_nome.strip()}** salvo!")
+                                                st.rerun()
 
                             # ── Esforço selecionado (para filtrar GPS no mapa e animação) ──
                             lats_eff, lons_eff, vels_eff, eff_desc = [], [], [], ""
@@ -4330,8 +4634,26 @@ def main():
                                 _c = _coords_atletas[_atl]
                                 _df_atl = pd.DataFrame()
 
-                                # Tentativa 1: sensor com coords x/y
-                                if _c['xn']:
+                                # ── Tentativa 1: Esforços da API Catapult (fonte primária) ──
+                                # Mais precisos — calculados pelos algoritmos oficiais
+                                # da Catapult com os mesmos limiares do OpenField.
+                                _raw_api: list = []
+                                for _pm in periodos_mapa_sel:
+                                    if tipo_esf == "⚡ Velocidade":
+                                        _raw_api += dados_efforts_vel_por_periodo.get(
+                                            _pm, {}).get(_atl, [])
+                                    else:
+                                        _raw_api += dados_efforts_acc_por_periodo.get(
+                                            _pm, {}).get(_atl, [])
+                                if _raw_api:
+                                    _esf_usou_api = True
+                                    _df_atl = (processar_efforts_velocidade(_raw_api)
+                                               if tipo_esf == "⚡ Velocidade"
+                                               else processar_efforts_aceleracao(_raw_api))
+
+                                # ── Fallback: cálculo local com dados do sensor ──────
+                                # Usado apenas se a API não retornou esforços.
+                                if _df_atl.empty and _c['xn']:
                                     if tipo_esf == "⚡ Velocidade":
                                         _df_atl = calcular_efforts_velocidade_sensor(
                                             _c['xn'], _c['yn'], _c['vel'], _c['ts'],
@@ -4340,22 +4662,6 @@ def main():
                                         _df_atl = calcular_efforts_aceleracao_sensor(
                                             _c['xn'], _c['yn'], _c['acc'], _c['vel'], _c['ts'],
                                             min_dur_s=_min_dur_acc_s)
-
-                                # Fallback API Catapult
-                                if _df_atl.empty:
-                                    _esf_usou_api = True
-                                    _raw_api: list = []
-                                    for _pm in periodos_mapa_sel:
-                                        if tipo_esf == "⚡ Velocidade":
-                                            _raw_api += dados_efforts_vel_por_periodo.get(
-                                                _pm, {}).get(_atl, [])
-                                        else:
-                                            _raw_api += dados_efforts_acc_por_periodo.get(
-                                                _pm, {}).get(_atl, [])
-                                    if _raw_api:
-                                        _df_atl = (processar_efforts_velocidade(_raw_api)
-                                                   if tipo_esf == "⚡ Velocidade"
-                                                   else processar_efforts_aceleracao(_raw_api))
 
                                 if not _df_atl.empty:
                                     _df_atl['Atleta'] = _atl
@@ -4369,12 +4675,23 @@ def main():
                                         '_start_ts').reset_index(drop=True)
                                 efforts_df_full['Esforço'] = range(1, len(efforts_df_full) + 1)
 
+                                # ── FEATURE 13: Zona e Direção tática ────────────
+                                _fl_tac = float(
+                                    st.session_state.get('venue', {}).get('length') or 105)
+                                efforts_df_full = enriquecer_esforcos_taticos(
+                                    efforts_df_full, _coords_atletas, field_length=_fl_tac)
+
                             if not efforts_df_full.empty:
-                                # Aviso de fonte API
+                                # Indicador de fonte de dados
                                 if _esf_usou_api:
                                     st.caption(
-                                        "ℹ️ Alguns atletas usam esforços da API Catapult "
-                                        "(sensor sem x/y). Valores podem diferir levemente."
+                                        "✅ Esforços calculados pela **API Catapult** (algoritmos oficiais OpenField). "
+                                        "Atletas sem dados de API usam cálculo local como fallback."
+                                    )
+                                else:
+                                    st.caption(
+                                        "⚙️ Esforços calculados **localmente** a partir dos dados do sensor "
+                                        "(API Catapult não retornou esforços para estes atletas)."
                                     )
 
                                 # Filtro de bandas
@@ -4628,6 +4945,8 @@ def main():
                                         with ob:
                                             ov_tercos  = st.checkbox("📊 Terços do campo",     key="ov_tercos")
                                             ov_grade   = st.checkbox("🔲 Grade de quadrantes", key="ov_grade")
+                                            ov_heatmap_comp = st.checkbox("🔥 Heatmap por Período",  key="ov_hcmp")
+                                            ov_voronoi_comp = st.checkbox("🔷 Voronoi por Período",  key="ov_vcmp")
 
                                     # ── Seletores de bandas (dependem do modo) ────────
                                     bandas_vel_sel = list(BANDAS_VEL.keys())
@@ -4807,6 +5126,66 @@ def main():
                                         )
 
                                     st.plotly_chart(fig_campo, use_container_width=True)
+
+                                    # ── FEATURE 12: Heatmap comparativo por período ──
+                                    if ov_heatmap_comp and len(periodos_mapa_sel) >= 1:
+                                        st.markdown("#### 🔥 Heatmap de Posicionamento por Período")
+                                        _fl_hm = float(st.session_state.get('venue', {}).get('length') or 105)
+                                        _fw_hm = float(st.session_state.get('venue', {}).get('width')  or 68)
+                                        _hm_cols = st.columns(min(len(periodos_mapa_sel), 3))
+                                        for _hm_i, _hm_pm in enumerate(periodos_mapa_sel[:3]):
+                                            with _hm_cols[_hm_i]:
+                                                _hm_xs, _hm_ys = [], []
+                                                for _hm_atl in atletas_mapa:
+                                                    _hm_d = dados_posicao_por_periodo.get(_hm_pm, {}).get(_hm_atl, {})
+                                                    _hm_xs += _hm_d.get('xs', [])
+                                                    _hm_ys += _hm_d.get('ys', [])
+                                                if _hm_xs:
+                                                    _fig_hm = desenhar_campo_futebol_bonito(
+                                                        _fl_hm, _fw_hm, title=_hm_pm)
+                                                    _xhm = np.array(_hm_xs)
+                                                    _yhm = np.array(_hm_ys)
+                                                    _H, _xe, _ye = np.histogram2d(
+                                                        _xhm, _yhm, bins=[52, 34],
+                                                        range=[[0, _fl_hm], [0, _fw_hm]])
+                                                    _H = _gf(_H, sigma=2.5)
+                                                    _xc = (_xe[:-1] + _xe[1:]) / 2
+                                                    _yc = (_ye[:-1] + _ye[1:]) / 2
+                                                    _fig_hm.add_trace(go.Heatmap(
+                                                        x=_xc, y=_yc, z=_H.T,
+                                                        colorscale='Hot', opacity=0.60,
+                                                        showscale=False, hoverinfo='skip'))
+                                                    _fig_hm.update_layout(
+                                                        height=320,
+                                                        margin=dict(l=5, r=5, t=35, b=5))
+                                                    st.plotly_chart(_fig_hm, use_container_width=True)
+                                                else:
+                                                    st.info(f"Sem dados para {_hm_pm}")
+
+                                    # ── FEATURE 14: Voronoi comparativo por período ──
+                                    if ov_voronoi_comp and len(periodos_mapa_sel) >= 1:
+                                        st.markdown("#### 🔷 Voronoi — Raio de Ação por Período")
+                                        _vc_cols = st.columns(min(len(periodos_mapa_sel), 3))
+                                        for _vc_i, _vc_pm in enumerate(periodos_mapa_sel[:3]):
+                                            with _vc_cols[_vc_i]:
+                                                _vc_pos = {}
+                                                for _vc_atl in atletas_mapa:
+                                                    _vc_d = dados_posicao_por_periodo.get(_vc_pm, {}).get(_vc_atl, {})
+                                                    if _vc_d.get('xs'):
+                                                        _vc_pos[_vc_atl] = {'xs': _vc_d['xs'], 'ys': _vc_d['ys']}
+                                                if len(_vc_pos) >= 2:
+                                                    _fig_vc = calcular_voronoi_campo(_vc_pos)
+                                                    if _fig_vc:
+                                                        _fig_vc.update_layout(
+                                                            title=dict(text=_vc_pm, font=dict(size=13)),
+                                                            height=320,
+                                                            margin=dict(l=5, r=5, t=35, b=5),
+                                                            showlegend=False)
+                                                        st.plotly_chart(_fig_vc, use_container_width=True)
+                                                    else:
+                                                        st.info(f"Sem dados Voronoi para {_vc_pm}")
+                                                else:
+                                                    st.info(f"Voronoi precisa de ≥2 atletas com dados em {_vc_pm}")
 
                                     # ══════════════════════════════════════════════
                                     # ANIMAÇÃO DO ESFORÇO SELECIONADO
@@ -6451,6 +6830,1124 @@ def main():
                         st.info("Nenhum dado disponível para este período.")
                 else:
                     st.info("Carregue os dados para visualizar a análise por posição.")
+
+            # ══════════════════════════════════════════════════════════════
+            # ABA 9: HISTÓRIA DO JOGO
+            # ══════════════════════════════════════════════════════════════
+            with abas[8]:
+                st.subheader("🎬 História do Jogo")
+                st.caption("Animação top-down de todos os atletas movendo-se pelo campo ao longo do tempo.")
+
+                # ── Obter config do campo ─────────────────────────────────
+                _hist_cfg = None
+                for _hk in list(st.session_state.keys()):
+                    if _hk.startswith("campo_cfg__") and isinstance(st.session_state[_hk], dict) and 'fl' in st.session_state[_hk]:
+                        _hist_cfg = st.session_state[_hk]
+                        break
+
+                if _hist_cfg:
+                    _hist_fl = float(_hist_cfg.get('fl', 105))
+                    _hist_fw = float(_hist_cfg.get('fw', 68))
+                else:
+                    _hist_venue = st.session_state.get('venue', {})
+                    _hist_fl = float(_hist_venue.get('length') or 105)
+                    _hist_fw = float(_hist_venue.get('width') or 68)
+                    st.info("💡 Configure o campo na aba **🗺️ Campo de Futebol** para usar as dimensões exatas do campo.")
+
+                if not dados_posicao_por_periodo:
+                    st.info("Carregue os dados para visualizar a história do jogo.")
+                else:
+                    # ── Seletores ──────────────────────────────────────────
+                    _hist_periodos_disp = list(dados_posicao_por_periodo.keys())
+                    _col_hp, _col_hsp = st.columns(2)
+                    with _col_hp:
+                        _hist_periodo_sel = st.selectbox(
+                            "Período:", _hist_periodos_disp, key="hist_periodo_sel"
+                        )
+
+                    _hist_atletas_disp = [
+                        a for a, d in dados_posicao_por_periodo.get(_hist_periodo_sel, {}).items()
+                        if d.get('xs') and d.get('ts_pos')
+                    ]
+                    with _col_hsp:
+                        _hist_atletas_sel = st.multiselect(
+                            "Atletas:", _hist_atletas_disp,
+                            default=_hist_atletas_disp[:8] if len(_hist_atletas_disp) > 8 else _hist_atletas_disp,
+                            key="hist_atletas_sel"
+                        )
+
+                    if not _hist_atletas_sel:
+                        st.info("Selecione pelo menos um atleta.")
+                    else:
+                        # ── Controles de animação ──────────────────────────
+                        _col_hc1, _col_hc2, _col_hc3 = st.columns(3)
+                        with _col_hc1:
+                            _hist_speed = st.select_slider(
+                                "⚡ Velocidade:", options=[10, 30, 60, 120],
+                                value=30, format_func=lambda x: f"{x}×",
+                                key="hist_speed"
+                            )
+                        with _col_hc2:
+                            _hist_trail_s = st.select_slider(
+                                "🌊 Rastro (s):", options=[3, 10, 20, 30],
+                                value=10, key="hist_trail"
+                            )
+                        with _col_hc3:
+                            _hist_max_frames = st.select_slider(
+                                "🎞️ Qualidade:", options=[150, 300, 500],
+                                value=300, format_func=lambda x: f"{x} frames",
+                                key="hist_quality"
+                            )
+
+                        # ── Construir dados por atleta ─────────────────────
+                        _HIST_COLORS = [
+                            '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4',
+                            '#FFEAA7', '#DDA0DD', '#98FB98', '#FFB347',
+                            '#87CEEB', '#F08080', '#90EE90', '#FFD700',
+                        ]
+
+                        _hist_coords = {}
+                        for _ha in _hist_atletas_sel:
+                            _hd = dados_posicao_por_periodo[_hist_periodo_sel].get(_ha, {})
+                            _hxs = list(_hd.get('xs', []))
+                            _hys = list(_hd.get('ys', []))
+                            _hvl = list(_hd.get('vel', []))
+                            _hts = list(_hd.get('ts_pos', []))
+                            if _hxs and _hts and len(_hxs) == len(_hts):
+                                _hist_coords[_ha] = {
+                                    'xs': _hxs, 'ys': _hys,
+                                    'vel': _hvl if len(_hvl) == len(_hxs) else [0.0]*len(_hxs),
+                                    'ts': _hts,
+                                }
+
+                        if not _hist_coords:
+                            st.warning("Nenhum atleta selecionado possui dados de posição com timestamps.")
+                        else:
+                            # ── Normalizar timestamps ──────────────────────
+                            _all_ts_raw = [t for _hc in _hist_coords.values() for t in _hc['ts']]
+                            _ts_min_raw = min(_all_ts_raw)
+                            # Detecta ms (>1e10) vs s
+                            _ts_scale = 1000.0 if _ts_min_raw > 1e10 else 1.0
+                            for _ha in _hist_coords:
+                                _hist_coords[_ha]['ts_norm'] = [
+                                    (t - _ts_min_raw) / _ts_scale
+                                    for t in _hist_coords[_ha]['ts']
+                                ]
+
+                            # ── Timeline comum e downsample ────────────────
+                            _all_ts_norm = sorted({
+                                t for _hc in _hist_coords.values() for t in _hc['ts_norm']
+                            })
+                            _n_all = len(_all_ts_norm)
+                            _step_fr = max(1, _n_all // _hist_max_frames)
+                            _frame_ts = _all_ts_norm[::_step_fr]
+                            _n_frames = len(_frame_ts)
+                            _frame_dur_ms = max(30, int(_step_fr * 100 // _hist_speed))
+
+                            # ── Figura base (campo) ────────────────────────
+                            _fig_hist = desenhar_campo_futebol_bonito(
+                                field_length=_hist_fl, field_width=_hist_fw,
+                                title="🎬 História do Jogo"
+                            )
+                            _n_static = len(_fig_hist.data)
+
+                            _hist_atl_list = list(_hist_coords.keys())
+                            _n_ha = len(_hist_atl_list)
+
+                            # Ghost: trajetória completa, ténue (estática)
+                            for _i, _ha in enumerate(_hist_atl_list):
+                                _hc = _hist_coords[_ha]
+                                _col = _HIST_COLORS[_i % len(_HIST_COLORS)]
+                                _fig_hist.add_trace(go.Scatter(
+                                    x=_hc['xs'], y=_hc['ys'],
+                                    mode='lines',
+                                    line=dict(color=_col, width=1),
+                                    opacity=0.12,
+                                    name=_ha, showlegend=False, hoverinfo='skip',
+                                ))
+
+                            # Trail: rastro animado (começa vazio)
+                            for _i, _ha in enumerate(_hist_atl_list):
+                                _col = _HIST_COLORS[_i % len(_HIST_COLORS)]
+                                _fig_hist.add_trace(go.Scatter(
+                                    x=[], y=[],
+                                    mode='lines',
+                                    line=dict(color=_col, width=3),
+                                    opacity=0.75,
+                                    name=_ha, showlegend=False, hoverinfo='skip',
+                                ))
+
+                            # Marker: posição atual animada
+                            for _i, _ha in enumerate(_hist_atl_list):
+                                _hc = _hist_coords[_ha]
+                                _col = _HIST_COLORS[_i % len(_HIST_COLORS)]
+                                _pos_lbl = dados_posicao_por_periodo[_hist_periodo_sel].get(_ha, {}).get('posicao', '')
+                                _eq_lbl  = dados_posicao_por_periodo[_hist_periodo_sel].get(_ha, {}).get('equipe', '')
+                                _fig_hist.add_trace(go.Scatter(
+                                    x=[_hc['xs'][0]], y=[_hc['ys'][0]],
+                                    mode='markers+text',
+                                    marker=dict(
+                                        size=14, color=_col,
+                                        line=dict(color='white', width=1.5),
+                                        symbol='circle',
+                                    ),
+                                    text=[_ha.split(' ')[0]],
+                                    textposition='top center',
+                                    textfont=dict(size=9, color='white'),
+                                    name=_ha,
+                                    showlegend=True,
+                                    hovertemplate=(
+                                        f"<b>{_ha}</b><br>"
+                                        f"Posição: {_pos_lbl}<br>"
+                                        f"Equipe: {_eq_lbl}<extra></extra>"
+                                    ),
+                                ))
+
+                            # ── Índices dos traces animados ────────────────
+                            # ghost  → n_static + i
+                            # trail  → n_static + n_ha + i
+                            # marker → n_static + 2*n_ha + i
+
+                            # ── Montar frames ──────────────────────────────
+                            _frames_list = []
+                            for _fi, _fts in enumerate(_frame_ts):
+                                _frame_data   = []
+                                _frame_traces = []
+                                for _i, _ha in enumerate(_hist_atl_list):
+                                    _hc = _hist_coords[_ha]
+                                    _ts_arr = np.array(_hc['ts_norm'])
+                                    _xs_arr = np.array(_hc['xs'])
+                                    _ys_arr = np.array(_hc['ys'])
+                                    _vl_arr = np.array(_hc['vel'])
+
+                                    # Índice mais próximo até _fts
+                                    _cur_idx = int(np.searchsorted(_ts_arr, _fts, side='right')) - 1
+                                    _cur_idx = max(0, min(_cur_idx, len(_ts_arr) - 1))
+
+                                    # Trail: pontos nos últimos _hist_trail_s segundos
+                                    _tr_start_ts = _fts - float(_hist_trail_s)
+                                    _tr_idx = int(np.searchsorted(_ts_arr, _tr_start_ts, side='left'))
+                                    _trail_x = _xs_arr[_tr_idx:_cur_idx + 1].tolist()
+                                    _trail_y = _ys_arr[_tr_idx:_cur_idx + 1].tolist()
+
+                                    _cur_x = float(_xs_arr[_cur_idx])
+                                    _cur_y = float(_ys_arr[_cur_idx])
+                                    _cur_v = float(_vl_arr[_cur_idx]) if _cur_idx < len(_vl_arr) else 0.0
+
+                                    # Trail trace update
+                                    _frame_data.append(go.Scatter(x=_trail_x, y=_trail_y))
+                                    _frame_traces.append(_n_static + _n_ha + _i)
+
+                                    # Marker trace update
+                                    _frame_data.append(go.Scatter(
+                                        x=[_cur_x], y=[_cur_y],
+                                        text=[_ha.split(' ')[0]],
+                                        hovertemplate=(
+                                            f"<b>{_ha}</b><br>"
+                                            f"Vel: {_cur_v:.1f} km/h<extra></extra>"
+                                        ),
+                                    ))
+                                    _frame_traces.append(_n_static + 2 * _n_ha + _i)
+
+                                _mins = int(_fts // 60)
+                                _secs = int(_fts % 60)
+                                _clock = f"{_mins:02d}:{_secs:02d}"
+                                _frames_list.append(go.Frame(
+                                    data=_frame_data,
+                                    traces=_frame_traces,
+                                    name=str(_fi),
+                                    layout=go.Layout(annotations=[dict(
+                                        x=0.02, y=0.97, xref='paper', yref='paper',
+                                        text=f"⏱ {_clock}",
+                                        showarrow=False,
+                                        font=dict(size=22, color='white'),
+                                        bgcolor='rgba(0,0,0,0.55)',
+                                        bordercolor='rgba(255,255,255,0.6)',
+                                        borderwidth=1, borderpad=5,
+                                    )]),
+                                ))
+
+                            _fig_hist.frames = _frames_list
+
+                            # ── Layout final ───────────────────────────────
+                            _fig_hist.update_layout(
+                                height=620,
+                                plot_bgcolor='#0e1117',
+                                paper_bgcolor='#0e1117',
+                                font=dict(color='white'),
+                                margin=dict(t=60, b=130, l=10, r=10),
+                                xaxis=dict(
+                                    range=[-4, _hist_fl + 4],
+                                    showgrid=False, zeroline=False,
+                                    showticklabels=False, fixedrange=True,
+                                ),
+                                yaxis=dict(
+                                    range=[-4, _hist_fw + 4],
+                                    showgrid=False, zeroline=False,
+                                    showticklabels=False, fixedrange=True,
+                                    scaleanchor='x', scaleratio=1,
+                                ),
+                                legend=dict(
+                                    font=dict(color='white', size=10),
+                                    bgcolor='rgba(30,30,30,0.85)',
+                                    bordercolor='rgba(150,150,150,0.4)',
+                                    borderwidth=1,
+                                    x=1.01, y=1, xanchor='left',
+                                ),
+                                annotations=[dict(
+                                    x=0.02, y=0.97, xref='paper', yref='paper',
+                                    text="⏱ 00:00",
+                                    showarrow=False,
+                                    font=dict(size=22, color='white'),
+                                    bgcolor='rgba(0,0,0,0.55)',
+                                    bordercolor='rgba(255,255,255,0.6)',
+                                    borderwidth=1, borderpad=5,
+                                )],
+                                updatemenus=[dict(
+                                    type='buttons', showactive=False,
+                                    y=1.06, x=0.5, xanchor='center',
+                                    buttons=[
+                                        dict(
+                                            label="▶ Play",
+                                            method="animate",
+                                            args=[None, {
+                                                "frame": {"duration": _frame_dur_ms, "redraw": True},
+                                                "fromcurrent": True,
+                                                "transition": {"duration": 0},
+                                            }],
+                                        ),
+                                        dict(
+                                            label="⏸ Pausar",
+                                            method="animate",
+                                            args=[[None], {
+                                                "frame": {"duration": 0, "redraw": False},
+                                                "mode": "immediate",
+                                                "transition": {"duration": 0},
+                                            }],
+                                        ),
+                                    ],
+                                    font=dict(color='black'),
+                                    bgcolor='rgba(200,200,200,0.9)',
+                                    bordercolor='rgba(100,100,100,0.5)',
+                                )],
+                                sliders=[dict(
+                                    active=0,
+                                    steps=[dict(
+                                        args=[[str(_fi)], {
+                                            "frame": {"duration": _frame_dur_ms, "redraw": True},
+                                            "mode": "immediate",
+                                            "transition": {"duration": 0},
+                                        }],
+                                        label=f"{int(_frame_ts[_fi] // 60):02d}:{int(_frame_ts[_fi] % 60):02d}",
+                                        method="animate",
+                                    ) for _fi in range(_n_frames)],
+                                    x=0.05, len=0.9,
+                                    pad={"b": 10, "t": 10},
+                                    currentvalue=dict(
+                                        prefix="⏱ ",
+                                        font=dict(size=14, color='white'),
+                                        visible=True,
+                                        xanchor='center',
+                                    ),
+                                    transition=dict(duration=0),
+                                    bgcolor='rgba(50,50,50,0.7)',
+                                    bordercolor='rgba(120,120,120,0.5)',
+                                    font=dict(color='white', size=9),
+                                )],
+                            )
+
+                            st.plotly_chart(_fig_hist, use_container_width=True)
+
+                            # ── Resumo estatístico ─────────────────────────
+                            st.markdown("---")
+                            st.markdown("### 📊 Resumo dos Atletas")
+                            _hist_stats = []
+                            for _i, _ha in enumerate(_hist_atl_list):
+                                _hc   = _hist_coords[_ha]
+                                _hd_m = dados_posicao_por_periodo[_hist_periodo_sel].get(_ha, {})
+                                _col  = _HIST_COLORS[_i % len(_HIST_COLORS)]
+                                _vmax = max(_hc['vel']) if _hc['vel'] else 0.0
+                                _hxnp = np.array(_hc['xs'])
+                                _hynp = np.array(_hc['ys'])
+                                _hdist = float(np.sum(
+                                    np.sqrt(np.diff(_hxnp)**2 + np.diff(_hynp)**2)
+                                )) if len(_hxnp) > 1 else 0.0
+                                _dur_s = (
+                                    _hc['ts_norm'][-1] - _hc['ts_norm'][0]
+                                    if len(_hc['ts_norm']) > 1 else 0.0
+                                )
+                                _hist_stats.append({
+                                    '🎨': f'<span style="color:{_col}">■</span>',
+                                    'Atleta': _ha,
+                                    'Posição': _hd_m.get('posicao', '—'),
+                                    'Equipe': _hd_m.get('equipe', '—'),
+                                    'Distância (m)': round(_hdist),
+                                    'Vel Máx (km/h)': round(_vmax, 1),
+                                    'Duração (s)': round(_dur_s),
+                                    'Pontos GPS': len(_hxnp),
+                                })
+                            if _hist_stats:
+                                _df_hist = pd.DataFrame(_hist_stats).drop(columns=['🎨'])
+                                st.dataframe(
+                                    _df_hist, use_container_width=True, hide_index=True
+                                )
+                            st.caption(
+                                f"⚙️ {_n_frames} frames · {_hist_speed}× velocidade · "
+                                f"rastro {_hist_trail_s}s · campo {_hist_fl:.0f}×{_hist_fw:.0f}m"
+                            )
+
+                            # ══════════════════════════════════════════════════════
+                            # ANÁLISES TÁTICAS COLETIVAS
+                            # ══════════════════════════════════════════════════════
+                            if _n_ha >= 2:
+                                st.markdown("---")
+                                st.markdown("## 🧠 Análises Táticas Coletivas")
+                                st.caption("Baseado nas posições e velocidades sincronizadas de todos os atletas selecionados.")
+
+                                # Interpolar todos os atletas para a grade _frame_ts
+                                _ft_arr  = np.array(_frame_ts)
+                                _sync_xs = np.zeros((_n_ha, _n_frames))
+                                _sync_ys = np.zeros((_n_ha, _n_frames))
+                                _sync_vl = np.zeros((_n_ha, _n_frames))
+                                for _si, _sha in enumerate(_hist_atl_list):
+                                    _shc  = _hist_coords[_sha]
+                                    _s_ts = np.array(_shc['ts_norm'])
+                                    _sync_xs[_si] = np.interp(_ft_arr, _s_ts, np.array(_shc['xs']))
+                                    _sync_ys[_si] = np.interp(_ft_arr, _s_ts, np.array(_shc['ys']))
+                                    _sync_vl[_si] = np.interp(_ft_arr, _s_ts, np.array(_shc['vel']))
+
+                                # Métricas coletivas por frame
+                                _ctr_x    = _sync_xs.mean(axis=0)
+                                _ctr_y    = _sync_ys.mean(axis=0)
+                                _width    = _sync_ys.max(axis=0) - _sync_ys.min(axis=0)
+                                _depth    = _sync_xs.max(axis=0) - _sync_xs.min(axis=0)
+                                _compact  = np.sqrt(_sync_xs.std(axis=0)**2 + _sync_ys.std(axis=0)**2)
+                                _team_spd = _sync_vl.mean(axis=0)
+                                _lat_asym = _ctr_y - _hist_fw / 2.0
+
+                                _tac_tabs = st.tabs([
+                                    "🏗️ Estrutura",
+                                    "🗺️ Espaço",
+                                    "⚡ Dinâmica",
+                                    "🔗 Relações",
+                                    "🤖 Automática",
+                                ])
+
+                                # ──────────────────────────────────────────────
+                                # TAB ESTRUTURA  (1, 2, 3, 5)
+                                # ──────────────────────────────────────────────
+                                with _tac_tabs[0]:
+                                    st.markdown("### 🏗️ Estrutura da Equipa")
+
+                                    # 1 — Centróide
+                                    st.markdown("#### 1 — Centróide da Equipa ao Longo do Tempo")
+                                    _ccol1, _ccol2 = st.columns(2)
+                                    with _ccol1:
+                                        _fig_ct = go.Figure()
+                                        _fig_ct.add_trace(go.Scatter(
+                                            x=list(_ft_arr), y=list(_ctr_x),
+                                            name='X', line=dict(color='#4ECDC4', width=2),
+                                        ))
+                                        _fig_ct.add_trace(go.Scatter(
+                                            x=list(_ft_arr), y=list(_ctr_y),
+                                            name='Y', line=dict(color='#FFB347', width=2),
+                                        ))
+                                        _fig_ct.update_layout(
+                                            xaxis_title='Tempo (s)', yaxis_title='Posição (m)',
+                                            plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                            font=dict(color='white'), height=270,
+                                            legend=dict(font=dict(color='white')),
+                                            margin=dict(t=20, b=30, l=40, r=10),
+                                        )
+                                        st.plotly_chart(_fig_ct, use_container_width=True)
+                                    with _ccol2:
+                                        _fig_ctf = desenhar_campo_futebol_bonito(
+                                            field_length=_hist_fl, field_width=_hist_fw,
+                                            title="Trajeto do Centróide"
+                                        )
+                                        _fig_ctf.add_trace(go.Scatter(
+                                            x=list(_ctr_x), y=list(_ctr_y),
+                                            mode='lines', line=dict(color='yellow', width=2),
+                                            opacity=0.8, showlegend=False, hoverinfo='skip',
+                                        ))
+                                        _fig_ctf.add_trace(go.Scatter(
+                                            x=[float(_ctr_x[0])], y=[float(_ctr_y[0])],
+                                            mode='markers', marker=dict(color='lime', size=11, symbol='star'),
+                                            name='Início', showlegend=False,
+                                        ))
+                                        _fig_ctf.add_trace(go.Scatter(
+                                            x=[float(_ctr_x[-1])], y=[float(_ctr_y[-1])],
+                                            mode='markers', marker=dict(color='red', size=11, symbol='square'),
+                                            name='Fim', showlegend=False,
+                                        ))
+                                        _fig_ctf.update_layout(
+                                            height=290,
+                                            plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                            font=dict(color='white'),
+                                            margin=dict(t=35, b=5, l=5, r=5),
+                                            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-4, _hist_fl+4]),
+                                            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-4, _hist_fw+4], scaleanchor='x', scaleratio=1),
+                                        )
+                                        st.plotly_chart(_fig_ctf, use_container_width=True)
+                                    _mc1, _mc2, _mc3 = st.columns(3)
+                                    _mc1.metric("Pos. X média", f"{float(_ctr_x.mean()):.1f} m",
+                                                f"{float(_ctr_x.mean())/_hist_fl*100:.0f}% do campo")
+                                    _mc2.metric("Pos. Y média", f"{float(_ctr_y.mean()):.1f} m")
+                                    _mc3.metric("Variação X (std)", f"{float(_ctr_x.std()):.1f} m")
+
+                                    st.markdown("---")
+
+                                    # 2 — Largura e Profundidade
+                                    st.markdown("#### 2 — Largura e Profundidade Dinâmica")
+                                    _fig_wd = go.Figure()
+                                    _fig_wd.add_trace(go.Scatter(
+                                        x=list(_ft_arr), y=list(_width),
+                                        name='Largura (Y)', line=dict(color='#FF6B6B', width=2),
+                                        fill='tozeroy', fillcolor='rgba(255,107,107,0.15)',
+                                    ))
+                                    _fig_wd.add_trace(go.Scatter(
+                                        x=list(_ft_arr), y=list(_depth),
+                                        name='Profundidade (X)', line=dict(color='#45B7D1', width=2),
+                                        fill='tozeroy', fillcolor='rgba(69,183,209,0.15)',
+                                    ))
+                                    _fig_wd.update_layout(
+                                        xaxis_title='Tempo (s)', yaxis_title='Metros',
+                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                        font=dict(color='white'), height=270,
+                                        legend=dict(font=dict(color='white')),
+                                        margin=dict(t=10, b=30, l=40, r=10),
+                                    )
+                                    st.plotly_chart(_fig_wd, use_container_width=True)
+                                    _mw1, _mw2, _mw3, _mw4 = st.columns(4)
+                                    _mw1.metric("Largura média", f"{float(_width.mean()):.1f} m")
+                                    _mw2.metric("Profundidade média", f"{float(_depth.mean()):.1f} m")
+                                    _mw3.metric("Largura máx", f"{float(_width.max()):.1f} m")
+                                    _mw4.metric("Profundidade máx", f"{float(_depth.max()):.1f} m")
+
+                                    st.markdown("---")
+
+                                    # 3 — Compacidade
+                                    st.markdown("#### 3 — Índice de Compacidade")
+                                    _fig_cmp = go.Figure()
+                                    _cmp_avg = float(_compact.mean())
+                                    _fig_cmp.add_trace(go.Scatter(
+                                        x=list(_ft_arr), y=list(_compact),
+                                        mode='lines', line=dict(color='#96CEB4', width=2),
+                                        fill='tozeroy', fillcolor='rgba(150,206,180,0.2)',
+                                    ))
+                                    _fig_cmp.add_hline(y=_cmp_avg, line_dash='dash', line_color='yellow',
+                                                       annotation_text=f"Média: {_cmp_avg:.1f}m",
+                                                       annotation_font_color='yellow')
+                                    _fig_cmp.update_layout(
+                                        xaxis_title='Tempo (s)', yaxis_title='Dispersão (m)',
+                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                        font=dict(color='white'), height=260,
+                                        margin=dict(t=20, b=30, l=40, r=10), showlegend=False,
+                                    )
+                                    st.plotly_chart(_fig_cmp, use_container_width=True)
+                                    _mp1, _mp2, _mp3 = st.columns(3)
+                                    _mp1.metric("Compacidade média", f"{_cmp_avg:.1f} m")
+                                    _mp2.metric("P10 (mais compacto)", f"{float(np.percentile(_compact,10)):.1f} m")
+                                    _mp3.metric("P90 (mais disperso)", f"{float(np.percentile(_compact,90)):.1f} m")
+
+                                    st.markdown("---")
+
+                                    # 5 — Linhas Táticas
+                                    st.markdown("#### 5 — Linhas Táticas (Defesa / Meio / Ataque)")
+                                    _avg_x_atl = _sync_xs.mean(axis=1)
+                                    _sorted_idx = np.argsort(_avg_x_atl)
+                                    _n3 = max(1, _n_ha // 3)
+                                    _def_idx = _sorted_idx[:_n3]
+                                    _mid_idx = _sorted_idx[_n3:2*_n3]
+                                    _att_idx = _sorted_idx[2*_n3:]
+                                    _line_def = _sync_xs[_def_idx].mean(axis=0) if len(_def_idx) else np.zeros(_n_frames)
+                                    _line_mid = _sync_xs[_mid_idx].mean(axis=0) if len(_mid_idx) else np.full(_n_frames, _hist_fl/2)
+                                    _line_att = _sync_xs[_att_idx].mean(axis=0) if len(_att_idx) else np.full(_n_frames, _hist_fl)
+                                    _dist_iL  = _line_att - _line_def
+                                    _fig_ln = go.Figure()
+                                    _fig_ln.add_trace(go.Scatter(x=list(_ft_arr), y=list(_line_def),
+                                        name='Linha Def.', line=dict(color='#FF6B6B', width=2)))
+                                    _fig_ln.add_trace(go.Scatter(x=list(_ft_arr), y=list(_line_mid),
+                                        name='Linha Meio', line=dict(color='#FFEAA7', width=2)))
+                                    _fig_ln.add_trace(go.Scatter(x=list(_ft_arr), y=list(_line_att),
+                                        name='Linha Atq.', line=dict(color='#96CEB4', width=2)))
+                                    _fig_ln.add_trace(go.Scatter(x=list(_ft_arr), y=list(_dist_iL),
+                                        name='Dist. inter-linhas', line=dict(color='#DDA0DD', width=1.5, dash='dot')))
+                                    _fig_ln.update_layout(
+                                        xaxis_title='Tempo (s)', yaxis_title='Posição X (m)',
+                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                        font=dict(color='white'), height=290,
+                                        legend=dict(font=dict(color='white')),
+                                        margin=dict(t=10, b=30, l=40, r=10),
+                                    )
+                                    st.plotly_chart(_fig_ln, use_container_width=True)
+                                    _def_n = ', '.join([_hist_atl_list[i].split(' ')[0] for i in _def_idx])
+                                    _mid_n = ', '.join([_hist_atl_list[i].split(' ')[0] for i in _mid_idx])
+                                    _att_n = ', '.join([_hist_atl_list[i].split(' ')[0] for i in _att_idx])
+                                    st.caption(f"🔴 Defesa: {_def_n}  |  🟡 Meio: {_mid_n}  |  🟢 Ataque: {_att_n}")
+                                    _ml1, _ml2, _ml3 = st.columns(3)
+                                    _ml1.metric("Altura linha def.", f"{float(_line_def.mean()):.1f} m")
+                                    _ml2.metric("Dist. inter-linhas", f"{float(_dist_iL.mean()):.1f} m")
+                                    _ml3.metric("Altura linha atq.", f"{float(_line_att.mean()):.1f} m")
+
+                                # ──────────────────────────────────────────────
+                                # TAB ESPAÇO  (7, 8, 9)
+                                # ──────────────────────────────────────────────
+                                with _tac_tabs[1]:
+                                    st.markdown("### 🗺️ Controlo do Espaço")
+
+                                    # 7 — Heatmap coletivo por fase
+                                    st.markdown("#### 7 — Mapa de Calor Coletivo por Fase")
+                                    _n_fases = st.select_slider("Fases:", options=[2,3,4,5], value=3, key="tac_fases")
+                                    _fase_sz  = _n_frames // _n_fases
+                                    _hm_cols  = st.columns(_n_fases)
+                                    for _fi_ph in range(_n_fases):
+                                        _st_ph = _fi_ph * _fase_sz
+                                        _en_ph = (_fi_ph + 1)*_fase_sz if _fi_ph < _n_fases-1 else _n_frames
+                                        _ph_xs = _sync_xs[:, _st_ph:_en_ph].flatten().tolist()
+                                        _ph_ys = _sync_ys[:, _st_ph:_en_ph].flatten().tolist()
+                                        _t0_ph = _frame_ts[_st_ph]
+                                        _t1_ph = _frame_ts[min(_en_ph-1, _n_frames-1)]
+                                        with _hm_cols[_fi_ph]:
+                                            _fig_ph = desenhar_campo_futebol_bonito(
+                                                field_length=_hist_fl, field_width=_hist_fw,
+                                                title=f"Fase {_fi_ph+1}  {int(_t0_ph//60):02d}:{int(_t0_ph%60):02d}–{int(_t1_ph//60):02d}:{int(_t1_ph%60):02d}"
+                                            )
+                                            if _ph_xs:
+                                                _fig_ph.add_trace(go.Histogram2dContour(
+                                                    x=_ph_xs, y=_ph_ys,
+                                                    colorscale='Hot', reversescale=True,
+                                                    showscale=False, ncontours=12,
+                                                    line=dict(width=0),
+                                                    contours=dict(coloring='fill'),
+                                                    opacity=0.65,
+                                                    xbins=dict(start=0, end=_hist_fl, size=5),
+                                                    ybins=dict(start=0, end=_hist_fw, size=5),
+                                                ))
+                                            _fig_ph.update_layout(
+                                                height=270,
+                                                plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                                font=dict(color='white', size=9),
+                                                margin=dict(t=35, b=5, l=5, r=5),
+                                                xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-3, _hist_fl+3]),
+                                                yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-3, _hist_fw+3], scaleanchor='x', scaleratio=1),
+                                            )
+                                            st.plotly_chart(_fig_ph, use_container_width=True)
+
+                                    st.markdown("---")
+
+                                    # 8 — Corredor dominante
+                                    st.markdown("#### 8 — Corredor Dominante")
+                                    _y3 = _hist_fw / 3.0
+                                    _n_left   = (_sync_ys < _y3).sum(axis=0).astype(float)
+                                    _n_center = ((_sync_ys >= _y3) & (_sync_ys < 2*_y3)).sum(axis=0).astype(float)
+                                    _n_right  = (_sync_ys >= 2*_y3).sum(axis=0).astype(float)
+                                    _fig_cor  = go.Figure()
+                                    _fig_cor.add_trace(go.Scatter(x=list(_ft_arr), y=list(_n_left),
+                                        name='Corredor Esq.', stackgroup='cor',
+                                        line=dict(color='#FF6B6B'), fillcolor='rgba(255,107,107,0.5)'))
+                                    _fig_cor.add_trace(go.Scatter(x=list(_ft_arr), y=list(_n_center),
+                                        name='Corredor Central', stackgroup='cor',
+                                        line=dict(color='#4ECDC4'), fillcolor='rgba(78,205,196,0.5)'))
+                                    _fig_cor.add_trace(go.Scatter(x=list(_ft_arr), y=list(_n_right),
+                                        name='Corredor Dir.', stackgroup='cor',
+                                        line=dict(color='#45B7D1'), fillcolor='rgba(69,183,209,0.5)'))
+                                    _fig_cor.update_layout(
+                                        xaxis_title='Tempo (s)', yaxis_title='Nº Atletas',
+                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                        font=dict(color='white'), height=270,
+                                        legend=dict(font=dict(color='white')),
+                                        margin=dict(t=10, b=30, l=40, r=10),
+                                    )
+                                    st.plotly_chart(_fig_cor, use_container_width=True)
+                                    _tot_c = float(_n_left.sum() + _n_center.sum() + _n_right.sum())
+                                    if _tot_c > 0:
+                                        _pL = _n_left.sum()/_tot_c*100
+                                        _pC = _n_center.sum()/_tot_c*100
+                                        _pR = _n_right.sum()/_tot_c*100
+                                        _dom = "Esquerdo" if _pL==max(_pL,_pC,_pR) else ("Central" if _pC==max(_pL,_pC,_pR) else "Direito")
+                                        _cor1, _cor2, _cor3, _cor4 = st.columns(4)
+                                        _cor1.metric("Esquerdo", f"{_pL:.0f}%")
+                                        _cor2.metric("Central", f"{_pC:.0f}%")
+                                        _cor3.metric("Direito", f"{_pR:.0f}%")
+                                        _cor4.metric("Dominante", _dom)
+
+                                    st.markdown("---")
+
+                                    # 9 — Gaps Táticos (Delaunay)
+                                    st.markdown("#### 9 — Espaços Descobertos (Gaps Táticos)")
+                                    _gap_thr = st.slider("Threshold de gap (m²):", 50, 500, 200, step=50, key="tac_gap")
+                                    try:
+                                        from scipy.spatial import Delaunay as _Del
+                                        _gap_frames = [_n_frames//4, _n_frames//2, 3*_n_frames//4]
+                                        _gcols = st.columns(len(_gap_frames))
+                                        for _gi, _gf in enumerate(_gap_frames):
+                                            _gx = _sync_xs[:, _gf]
+                                            _gy = _sync_ys[:, _gf]
+                                            _gts_lbl = float(_frame_ts[_gf])
+                                            with _gcols[_gi]:
+                                                _fig_gap = desenhar_campo_futebol_bonito(
+                                                    field_length=_hist_fl, field_width=_hist_fw,
+                                                    title=f"{int(_gts_lbl//60):02d}:{int(_gts_lbl%60):02d}"
+                                                )
+                                                if len(_gx) >= 3:
+                                                    _pts_g = np.column_stack([_gx, _gy])
+                                                    _tri_g = _Del(_pts_g)
+                                                    for _s in _tri_g.simplices:
+                                                        _tx = _pts_g[_s,0].tolist() + [float(_pts_g[_s[0],0])]
+                                                        _ty = _pts_g[_s,1].tolist() + [float(_pts_g[_s[0],1])]
+                                                        _area = abs(
+                                                            (_pts_g[_s[1],0]-_pts_g[_s[0],0])*(_pts_g[_s[2],1]-_pts_g[_s[0],1]) -
+                                                            (_pts_g[_s[2],0]-_pts_g[_s[0],0])*(_pts_g[_s[1],1]-_pts_g[_s[0],1])
+                                                        ) / 2.0
+                                                        _clr = 'rgba(255,50,50,0.45)' if _area > _gap_thr else 'rgba(50,200,50,0.15)'
+                                                        _fig_gap.add_trace(go.Scatter(
+                                                            x=_tx, y=_ty, fill='toself',
+                                                            fillcolor=_clr,
+                                                            line=dict(color='rgba(255,255,255,0.25)', width=0.5),
+                                                            showlegend=False, hoverinfo='skip',
+                                                        ))
+                                                _fig_gap.add_trace(go.Scatter(
+                                                    x=list(_gx), y=list(_gy), mode='markers',
+                                                    marker=dict(size=10, color='white', line=dict(color='black', width=1)),
+                                                    showlegend=False, hoverinfo='skip',
+                                                ))
+                                                _fig_gap.update_layout(
+                                                    height=260,
+                                                    plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                                    font=dict(color='white', size=9),
+                                                    margin=dict(t=35, b=5, l=5, r=5),
+                                                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-3, _hist_fl+3]),
+                                                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-3, _hist_fw+3], scaleanchor='x', scaleratio=1),
+                                                )
+                                                st.plotly_chart(_fig_gap, use_container_width=True)
+                                        st.caption("🔴 Vermelho = gap > threshold  ·  🟢 Verde = cobertura adequada")
+                                    except Exception as _eg:
+                                        st.warning(f"scipy indisponível para gaps: {_eg}")
+
+                                # ──────────────────────────────────────────────
+                                # TAB DINÂMICA  (11, 12, 13, 14, 15)
+                                # ──────────────────────────────────────────────
+                                with _tac_tabs[2]:
+                                    st.markdown("### ⚡ Dinâmica Coletiva")
+
+                                    # 11 — Pressing
+                                    st.markdown("#### 11 — Índice de Pressing Coletivo")
+                                    _pr_v = st.slider("Vel. mín. de pressing (km/h):", 10, 21, 14, key="tac_prv")
+                                    _pr_n = st.slider("Atletas simultâneos (mín.):", 2, min(_n_ha,8), min(3,_n_ha), key="tac_prn")
+                                    _press_idx = (_sync_vl >= _pr_v).sum(axis=0).astype(float)
+                                    _press_bin = (_press_idx >= _pr_n).astype(float)
+                                    _fig_pr = go.Figure()
+                                    _fig_pr.add_trace(go.Scatter(
+                                        x=list(_ft_arr), y=list(_press_idx),
+                                        name='Atletas em alta vel.',
+                                        line=dict(color='#FF6B6B', width=1.5),
+                                        fill='tozeroy', fillcolor='rgba(255,107,107,0.2)',
+                                    ))
+                                    _fig_pr.add_hline(y=_pr_n, line_dash='dash', line_color='yellow',
+                                                      annotation_text=f"Threshold ({_pr_n})", annotation_font_color='yellow')
+                                    _fig_pr.update_layout(
+                                        xaxis_title='Tempo (s)', yaxis_title='Nº Atletas',
+                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                        font=dict(color='white'), height=255,
+                                        margin=dict(t=15, b=30, l=40, r=10), showlegend=False,
+                                    )
+                                    st.plotly_chart(_fig_pr, use_container_width=True)
+                                    _dt_frame = float(np.diff(_ft_arr).mean()) if _n_frames > 1 else 1.0
+                                    _pr1, _pr2, _pr3 = st.columns(3)
+                                    _pr1.metric("Tempo em pressing", f"{float(_press_bin.mean())*100:.1f}%")
+                                    _pr2.metric("Duração total", f"{float(_press_bin.sum())*_dt_frame:.0f} s")
+                                    _pr3.metric("Média atletas HSR", f"{float(_press_idx.mean()):.1f}")
+
+                                    st.markdown("---")
+
+                                    # 12 — Transições
+                                    st.markdown("#### 12 — Detecção de Transições")
+                                    _dctr = np.gradient(_ctr_x, _ft_arr)
+                                    _sm   = np.convolve(_dctr, np.ones(5)/5, mode='same')
+                                    _tr_thr = st.slider("Threshold (m/s):", 0.5, 5.0, 1.5, step=0.5, key="tac_trthr")
+                                    _fig_tr = go.Figure()
+                                    _fig_tr.add_trace(go.Scatter(
+                                        x=list(_ft_arr), y=list(_sm),
+                                        line=dict(color='#4ECDC4', width=2), name='Vel. centróide X',
+                                    ))
+                                    _smmax = float(max(abs(_sm.max()), abs(_sm.min()), _tr_thr) + 0.1)
+                                    _fig_tr.add_hrect(y0=_tr_thr, y1=_smmax,
+                                        fillcolor='rgba(150,206,180,0.2)', line_width=0,
+                                        annotation_text='Transição Ofensiva', annotation_font_color='#96CEB4')
+                                    _fig_tr.add_hrect(y0=-_smmax, y1=-_tr_thr,
+                                        fillcolor='rgba(255,107,107,0.2)', line_width=0,
+                                        annotation_text='Transição Defensiva', annotation_font_color='#FF6B6B')
+                                    _fig_tr.update_layout(
+                                        xaxis_title='Tempo (s)', yaxis_title='m/s',
+                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                        font=dict(color='white'), height=255,
+                                        margin=dict(t=20, b=30, l=50, r=10), showlegend=False,
+                                    )
+                                    st.plotly_chart(_fig_tr, use_container_width=True)
+                                    _t_off = (_sm > _tr_thr).astype(int)
+                                    _t_def = (_sm < -_tr_thr).astype(int)
+                                    _n_toff = int(np.diff(np.concatenate([[0],_t_off,[0]]) ).clip(0).sum())
+                                    _n_tdef = int(np.diff(np.concatenate([[0],_t_def,[0]]) ).clip(0).sum())
+                                    _tr1, _tr2, _tr3 = st.columns(3)
+                                    _tr1.metric("Transições ofensivas", f"{_n_toff}")
+                                    _tr2.metric("Transições defensivas", f"{_n_tdef}")
+                                    _tr3.metric("Ratio O/D", f"{_n_toff/_n_tdef:.2f}" if _n_tdef else "—")
+
+                                    st.markdown("---")
+
+                                    # 13 — Sincronização de Velocidade
+                                    st.markdown("#### 13 — Sincronização de Velocidade da Equipa")
+                                    _corr = np.corrcoef(_sync_vl)
+                                    _short_names = [a.split(' ')[0] for a in _hist_atl_list]
+                                    _fig_cr = go.Figure(go.Heatmap(
+                                        z=_corr.tolist(),
+                                        x=_short_names, y=_short_names,
+                                        colorscale='RdBu', zmin=-1, zmax=1,
+                                        text=[[f"{_corr[r,c]:.2f}" for c in range(_n_ha)] for r in range(_n_ha)],
+                                        texttemplate='%{text}', textfont=dict(size=9),
+                                        colorbar=dict(title='r', tickfont=dict(color='white'), titlefont=dict(color='white')),
+                                    ))
+                                    _fig_cr.update_layout(
+                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                        font=dict(color='white'), height=max(300, _n_ha*35+80),
+                                        margin=dict(t=20, b=30, l=80, r=30),
+                                    )
+                                    st.plotly_chart(_fig_cr, use_container_width=True)
+                                    _upper = np.triu(np.ones_like(_corr, dtype=bool), k=1)
+                                    _sync_score = float(_corr[_upper].mean())
+                                    _best = np.unravel_index(np.argmax(_corr * _upper), _corr.shape)
+                                    _sy1, _sy2 = st.columns(2)
+                                    _sy1.metric("Índice de sincronia global", f"{_sync_score:.3f}")
+                                    _sy2.metric("Par mais sincronizado",
+                                        f"{_short_names[_best[0]]} & {_short_names[_best[1]]}",
+                                        f"r = {_corr[_best]:.2f}")
+
+                                    st.markdown("---")
+
+                                    # 14 — Team Speed
+                                    st.markdown("#### 14 — Velocidade do Bloco (Team Speed)")
+                                    _fig_ts = go.Figure()
+                                    _fig_ts.add_trace(go.Scatter(
+                                        x=list(_ft_arr), y=list(_team_spd),
+                                        line=dict(color='#FFB347', width=2),
+                                        fill='tozeroy', fillcolor='rgba(255,179,71,0.2)',
+                                    ))
+                                    _p75ts = float(np.percentile(_team_spd, 75))
+                                    _fig_ts.add_hline(y=_p75ts, line_dash='dot', line_color='#FFD700',
+                                                      annotation_text=f"P75: {_p75ts:.1f} km/h",
+                                                      annotation_font_color='#FFD700')
+                                    _fig_ts.update_layout(
+                                        xaxis_title='Tempo (s)', yaxis_title='Vel. média (km/h)',
+                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                        font=dict(color='white'), height=255,
+                                        margin=dict(t=10, b=30, l=40, r=10), showlegend=False,
+                                    )
+                                    st.plotly_chart(_fig_ts, use_container_width=True)
+                                    _peak_t = float(_ft_arr[int(np.argmax(_team_spd))])
+                                    _ts1, _ts2, _ts3 = st.columns(3)
+                                    _ts1.metric("Vel. média global", f"{float(_team_spd.mean()):.1f} km/h")
+                                    _ts2.metric("Pico coletivo", f"{float(_team_spd.max()):.1f} km/h")
+                                    _ts3.metric("Pico em", f"{int(_peak_t//60):02d}:{int(_peak_t%60):02d}")
+
+                                    st.markdown("---")
+
+                                    # 15 — Compressão Defensiva
+                                    st.markdown("#### 15 — Índice de Compressão Defensiva")
+                                    _cd_d = st.slider("Profundidade máx (m):", 10, 40, 20, key="tac_cdd")
+                                    _cd_w = st.slider("Largura máx (m):", 15, 55, 35, key="tac_cdw")
+                                    _cbin = ((_depth <= _cd_d) & (_width <= _cd_w)).astype(float)
+                                    _fig_cd = go.Figure()
+                                    _fig_cd.add_trace(go.Scatter(x=list(_ft_arr), y=list(_depth),
+                                        name='Profundidade', line=dict(color='#45B7D1', width=1.5)))
+                                    _fig_cd.add_trace(go.Scatter(x=list(_ft_arr), y=list(_width),
+                                        name='Largura', line=dict(color='#FF6B6B', width=1.5)))
+                                    _in_c = False
+                                    _c_regs = []
+                                    for _ci in range(_n_frames):
+                                        if _cbin[_ci] and not _in_c:
+                                            _cs = float(_ft_arr[_ci]); _in_c = True
+                                        elif not _cbin[_ci] and _in_c:
+                                            _c_regs.append((_cs, float(_ft_arr[_ci]))); _in_c = False
+                                    if _in_c: _c_regs.append((_cs, float(_ft_arr[-1])))
+                                    for _cr0, _cr1 in _c_regs[:25]:
+                                        _fig_cd.add_vrect(x0=_cr0, x1=_cr1,
+                                            fillcolor='rgba(150,206,180,0.25)', line_width=0)
+                                    _fig_cd.add_hline(y=_cd_d, line_dash='dash', line_color='#45B7D1', line_width=1)
+                                    _fig_cd.add_hline(y=_cd_w, line_dash='dash', line_color='#FF6B6B', line_width=1)
+                                    _fig_cd.update_layout(
+                                        xaxis_title='Tempo (s)', yaxis_title='Metros',
+                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                        font=dict(color='white'), height=270,
+                                        legend=dict(font=dict(color='white')),
+                                        margin=dict(t=10, b=30, l=40, r=10),
+                                    )
+                                    st.plotly_chart(_fig_cd, use_container_width=True)
+                                    _cd1, _cd2, _cd3 = st.columns(3)
+                                    _cd1.metric("Tempo em bloco compacto", f"{float(_cbin.mean())*100:.1f}%")
+                                    _cd2.metric("Episódios de compressão", f"{len(_c_regs)}")
+                                    _cd3.metric("Profundidade média", f"{float(_depth.mean()):.1f} m")
+
+                                # ──────────────────────────────────────────────
+                                # TAB RELAÇÕES  (16, 17, 18, 19)
+                                # ──────────────────────────────────────────────
+                                with _tac_tabs[3]:
+                                    st.markdown("### 🔗 Relações Entre Jogadores")
+
+                                    # 16 — Rede de Proximidade
+                                    st.markdown("#### 16 — Rede de Proximidade")
+                                    _net_d = st.slider("Distância de ligação (m):", 5, 30, 15, key="tac_netd")
+                                    _net_f = st.select_slider(
+                                        "Frame (tempo):",
+                                        options=list(range(_n_frames)), value=_n_frames//2,
+                                        format_func=lambda x: f"{int(_frame_ts[x]//60):02d}:{int(_frame_ts[x]%60):02d}",
+                                        key="tac_netf"
+                                    )
+                                    _nfx = _sync_xs[:, _net_f]
+                                    _nfy = _sync_ys[:, _net_f]
+                                    _fig_net = desenhar_campo_futebol_bonito(
+                                        field_length=_hist_fl, field_width=_hist_fw,
+                                        title=f"Rede de Proximidade — {int(_frame_ts[_net_f]//60):02d}:{int(_frame_ts[_net_f]%60):02d}"
+                                    )
+                                    _degs = [0]*_n_ha
+                                    for _na in range(_n_ha):
+                                        for _nb in range(_na+1, _n_ha):
+                                            _dab = float(np.sqrt((_nfx[_na]-_nfx[_nb])**2+(_nfy[_na]-_nfy[_nb])**2))
+                                            if _dab <= _net_d:
+                                                _degs[_na] += 1; _degs[_nb] += 1
+                                                _fig_net.add_trace(go.Scatter(
+                                                    x=[float(_nfx[_na]), float(_nfx[_nb])],
+                                                    y=[float(_nfy[_na]), float(_nfy[_nb])],
+                                                    mode='lines',
+                                                    line=dict(color='rgba(255,255,100,0.45)', width=2),
+                                                    showlegend=False, hoverinfo='skip',
+                                                ))
+                                    for _ni in range(_n_ha):
+                                        _nc = _HIST_COLORS[_ni % len(_HIST_COLORS)]
+                                        _fig_net.add_trace(go.Scatter(
+                                            x=[float(_nfx[_ni])], y=[float(_nfy[_ni])],
+                                            mode='markers+text',
+                                            marker=dict(size=12+_degs[_ni]*4, color=_nc,
+                                                        line=dict(color='white', width=1.5)),
+                                            text=[f"{_hist_atl_list[_ni].split(' ')[0]}({_degs[_ni]})"],
+                                            textposition='top center',
+                                            textfont=dict(size=8, color='white'),
+                                            name=_hist_atl_list[_ni], showlegend=False,
+                                        ))
+                                    _fig_net.update_layout(
+                                        height=400, plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                        font=dict(color='white'), margin=dict(t=40, b=10, l=10, r=10),
+                                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-3, _hist_fl+3]),
+                                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-3, _hist_fw+3], scaleanchor='x', scaleratio=1),
+                                    )
+                                    st.plotly_chart(_fig_net, use_container_width=True)
+                                    st.caption("Tamanho proporcional ao grau (nº de conexões).")
+                                    st.dataframe(
+                                        pd.DataFrame({'Atleta': _hist_atl_list, 'Grau': _degs}).sort_values('Grau', ascending=False),
+                                        use_container_width=True, hide_index=True
+                                    )
+
+                                    st.markdown("---")
+
+                                    # 17 — Distância ao Companheiro Mais Próximo
+                                    st.markdown("#### 17 — Distância ao Companheiro Mais Próximo")
+                                    _mdists = np.full((_n_ha, _n_frames), np.inf)
+                                    for _di in range(_n_ha):
+                                        for _dj in range(_n_ha):
+                                            if _di == _dj: continue
+                                            _d = np.sqrt((_sync_xs[_di]-_sync_xs[_dj])**2+(_sync_ys[_di]-_sync_ys[_dj])**2)
+                                            _mdists[_di] = np.minimum(_mdists[_di], _d)
+                                    _mdists = np.where(np.isinf(_mdists), 0, _mdists)
+                                    _fig_md = go.Figure()
+                                    for _di2, _ha2 in enumerate(_hist_atl_list):
+                                        _fig_md.add_trace(go.Scatter(
+                                            x=list(_ft_arr), y=list(_mdists[_di2]),
+                                            name=_ha2.split(' ')[0],
+                                            line=dict(color=_HIST_COLORS[_di2%len(_HIST_COLORS)], width=1.5),
+                                            opacity=0.8,
+                                        ))
+                                    _fig_md.add_trace(go.Scatter(
+                                        x=list(_ft_arr), y=list(_mdists.mean(axis=0)),
+                                        name='Média equipa', line=dict(color='white', width=2.5, dash='dash'),
+                                    ))
+                                    _fig_md.update_layout(
+                                        xaxis_title='Tempo (s)', yaxis_title='Distância (m)',
+                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                        font=dict(color='white'), height=290,
+                                        legend=dict(font=dict(color='white', size=9)),
+                                        margin=dict(t=10, b=30, l=40, r=10),
+                                    )
+                                    st.plotly_chart(_fig_md, use_container_width=True)
+                                    st.dataframe(pd.DataFrame({
+                                        'Atleta': _hist_atl_list,
+                                        'Dist. Média (m)': [round(float(v),1) for v in _mdists.mean(axis=1)],
+                                        'Dist. Máx (m)':   [round(float(v),1) for v in _mdists.max(axis=1)],
+                                        'Dist. Mín (m)':   [round(float(v),1) for v in _mdists.min(axis=1)],
+                                    }).sort_values('Dist. Média (m)', ascending=False),
+                                    use_container_width=True, hide_index=True)
+
+                                    st.markdown("---")
+
+                                    # 18 — Triângulos de Passe Naturais
+                                    st.markdown("#### 18 — Triângulos de Passe Naturais")
+                                    try:
+                                        from scipy.spatial import Delaunay as _Del2
+                                        _tnx = int(max(10, _hist_fl//5))
+                                        _tny = int(max(8, _hist_fw//5))
+                                        _tfreq = np.zeros((_tny, _tnx))
+                                        _txr = np.linspace(0, _hist_fl, _tnx+1)
+                                        _tyr = np.linspace(0, _hist_fw, _tny+1)
+                                        _ts_step = max(1, _n_frames//100)
+                                        for _tfi2 in range(0, _n_frames, _ts_step):
+                                            _tp = np.column_stack([_sync_xs[:,_tfi2], _sync_ys[:,_tfi2]])
+                                            if len(_tp) >= 3:
+                                                _tt = _Del2(_tp)
+                                                for _ts2 in _tt.simplices:
+                                                    _cx2 = float(_tp[_ts2,0].mean())
+                                                    _cy2 = float(_tp[_ts2,1].mean())
+                                                    _ix2 = int(np.clip(np.searchsorted(_txr,_cx2)-1, 0, _tnx-1))
+                                                    _iy2 = int(np.clip(np.searchsorted(_tyr,_cy2)-1, 0, _tny-1))
+                                                    _tfreq[_iy2,_ix2] += 1
+                                        _fig_trf = go.Figure(go.Heatmap(
+                                            z=_tfreq.tolist(),
+                                            x=[(_txr[i]+_txr[i+1])/2 for i in range(_tnx)],
+                                            y=[(_tyr[i]+_tyr[i+1])/2 for i in range(_tny)],
+                                            colorscale='YlOrRd',
+                                            colorbar=dict(title='Freq.', tickfont=dict(color='white'), titlefont=dict(color='white')),
+                                        ))
+                                        _fig_trf.add_shape(type='rect', x0=0, y0=0, x1=_hist_fl, y1=_hist_fw,
+                                                           line=dict(color='white', width=2))
+                                        _fig_trf.add_shape(type='line', x0=_hist_fl/2, y0=0, x1=_hist_fl/2, y1=_hist_fw,
+                                                           line=dict(color='white', width=1))
+                                        _fig_trf.update_layout(
+                                            title='Frequência de triângulos de passe por zona',
+                                            plot_bgcolor='#1a3a18', paper_bgcolor='#0e1117',
+                                            font=dict(color='white'), height=320,
+                                            margin=dict(t=45, b=20, l=20, r=60),
+                                            xaxis=dict(showgrid=False, zeroline=False, range=[-3, _hist_fl+3]),
+                                            yaxis=dict(showgrid=False, zeroline=False, range=[-3, _hist_fw+3], scaleanchor='x', scaleratio=1),
+                                        )
+                                        st.plotly_chart(_fig_trf, use_container_width=True)
+                                        st.caption("Zonas quentes = onde a equipa forma triângulos com maior frequência.")
+                                    except Exception as _etri:
+                                        st.warning(f"scipy indisponível para triângulos: {_etri}")
+
+                                    st.markdown("---")
+
+                                    # 19 — Assimetria Lateral
+                                    st.markdown("#### 19 — Assimetria Lateral da Equipa")
+                                    _fig_as = go.Figure()
+                                    _fig_as.add_trace(go.Scatter(
+                                        x=list(_ft_arr), y=list(_lat_asym),
+                                        mode='lines', line=dict(color='#DDA0DD', width=2),
+                                        fill='tozeroy', fillcolor='rgba(221,160,221,0.2)',
+                                    ))
+                                    _fig_as.add_hline(y=0, line_dash='dash', line_color='white', line_width=1)
+                                    _fig_as.update_layout(
+                                        xaxis_title='Tempo (s)',
+                                        yaxis_title='Desvio do eixo central (m)',
+                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                        font=dict(color='white'), height=255,
+                                        margin=dict(t=10, b=30, l=60, r=10), showlegend=False,
+                                    )
+                                    st.plotly_chart(_fig_as, use_container_width=True)
+                                    _asym_avg = float(_lat_asym.mean())
+                                    _a_side   = "Esquerdo 👈" if _asym_avg < -1 else ("Direito 👉" if _asym_avg > 1 else "Equilibrado ⚖️")
+                                    _pL2 = float((_lat_asym < -1).mean())*100
+                                    _pR2 = float((_lat_asym >  1).mean())*100
+                                    _as1, _as2, _as3, _as4 = st.columns(4)
+                                    _as1.metric("Lado dominante", _a_side)
+                                    _as2.metric("Flanco Esquerdo", f"{_pL2:.0f}%")
+                                    _as3.metric("Equilibrado", f"{100-_pL2-_pR2:.0f}%")
+                                    _as4.metric("Flanco Direito", f"{_pR2:.0f}%")
+
+                                # ──────────────────────────────────────────────
+                                # TAB AUTOMÁTICA  (20)
+                                # ──────────────────────────────────────────────
+                                with _tac_tabs[4]:
+                                    st.markdown("### 🤖 Fase de Jogo Automática")
+                                    st.markdown("#### 20 — Clustering Temporal (K-Means)")
+                                    _km_k = st.select_slider("Nº de fases (k):", options=[2,3,4,5,6], value=4, key="tac_kmk")
+
+                                    def _mm(arr):
+                                        _r = arr.max() - arr.min()
+                                        return (arr - arr.min()) / _r if _r > 0 else arr * 0.0
+
+                                    _km_X = np.column_stack([_mm(_ctr_x), _mm(_ctr_y), _mm(_compact), _mm(_team_spd)])
+                                    _rng_km = np.random.default_rng(42)
+                                    _km_cents = _km_X[_rng_km.choice(_n_frames, size=_km_k, replace=False)].copy()
+                                    _km_lbl   = np.zeros(_n_frames, dtype=int)
+                                    for _ in range(60):
+                                        _km_d   = np.array([np.linalg.norm(_km_X - _km_cents[k], axis=1) for k in range(_km_k)])
+                                        _km_new = _km_d.argmin(axis=0)
+                                        if np.all(_km_new == _km_lbl): break
+                                        _km_lbl = _km_new
+                                        for k in range(_km_k):
+                                            _mk = _km_lbl == k
+                                            if _mk.any(): _km_cents[k] = _km_X[_mk].mean(axis=0)
+
+                                    _km_cx_avg  = [float(_ctr_x[_km_lbl==k].mean()) if (_km_lbl==k).any() else 0.0 for k in range(_km_k)]
+                                    _km_ord     = np.argsort(_km_cx_avg)
+                                    _km_ph_map  = {}
+                                    if _km_k >= 2:
+                                        _km_ph_map[int(_km_ord[0])]  = "🔴 Bloco Baixo"
+                                        _km_ph_map[int(_km_ord[-1])] = "🟢 Pressão Alta"
+                                    if _km_k >= 3:
+                                        _km_ph_map[int(_km_ord[_km_k//2])] = "🟡 Fase Média"
+                                    _km_colors  = ['#FF6B6B','#FFEAA7','#4ECDC4','#96CEB4','#DDA0DD','#45B7D1']
+                                    _km_lbl_map = {k: _km_ph_map.get(k, f"🔵 Fase {k+1}") for k in range(_km_k)}
+
+                                    _fig_km = go.Figure()
+                                    for k in range(_km_k):
+                                        _mk = _km_lbl == k
+                                        if not _mk.any(): continue
+                                        _fig_km.add_trace(go.Scatter(
+                                            x=list(_ft_arr[_mk]), y=[_km_cx_avg[k]]*int(_mk.sum()),
+                                            mode='markers',
+                                            marker=dict(color=_km_colors[k%len(_km_colors)], size=7, symbol='square'),
+                                            name=_km_lbl_map[k],
+                                        ))
+                                    _fig_km.update_layout(
+                                        title='Fases de Jogo ao Longo do Tempo',
+                                        xaxis_title='Tempo (s)', yaxis_title='Centróide X (m)',
+                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                        font=dict(color='white'), height=270,
+                                        legend=dict(font=dict(color='white')),
+                                        margin=dict(t=40, b=30, l=50, r=10),
+                                    )
+                                    st.plotly_chart(_fig_km, use_container_width=True)
+
+                                    _km_counts = [int((_km_lbl==k).sum()) for k in range(_km_k)]
+                                    _kc1, _kc2 = st.columns([1,2])
+                                    with _kc1:
+                                        _fig_pie = go.Figure(go.Pie(
+                                            labels=[_km_lbl_map[k] for k in range(_km_k)],
+                                            values=_km_counts,
+                                            marker=dict(colors=[_km_colors[k%len(_km_colors)] for k in range(_km_k)]),
+                                            textfont=dict(color='white'),
+                                        ))
+                                        _fig_pie.update_layout(
+                                            plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                            font=dict(color='white'), height=260,
+                                            margin=dict(t=10, b=10, l=10, r=10), showlegend=False,
+                                        )
+                                        st.plotly_chart(_fig_pie, use_container_width=True)
+                                    with _kc2:
+                                        _km_rows = []
+                                        for k in range(_km_k):
+                                            _mk = _km_lbl == k
+                                            if not _mk.any(): continue
+                                            _km_rows.append({
+                                                'Fase': _km_lbl_map[k],
+                                                '% Tempo': f"{_mk.sum()/_n_frames*100:.0f}%",
+                                                'Duração (s)': f"{int(_mk.sum()*_dt_frame)}",
+                                                'Centróide X': f"{float(_ctr_x[_mk].mean()):.1f} m",
+                                                'Compacidade': f"{float(_compact[_mk].mean()):.1f} m",
+                                                'Vel. Equipa': f"{float(_team_spd[_mk].mean()):.1f} km/h",
+                                            })
+                                        if _km_rows:
+                                            st.dataframe(pd.DataFrame(_km_rows), use_container_width=True, hide_index=True)
+                                    st.caption("K-Means sobre: centróide X/Y, compacidade e velocidade média da equipa.")
 
         else:
             st.warning("Nenhum dado encontrado")
