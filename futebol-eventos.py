@@ -6947,6 +6947,7 @@ Escolha um ou mais atletas para análise simultânea.
                         ]
 
                         _hist_coords = {}
+                        _hist_gps_fallback_used = False
                         for _ha in _hist_atletas_sel:
                             _hd = dados_posicao_por_periodo[_hist_periodo_sel].get(_ha, {})
                             _hxs = list(_hd.get('xs', []))
@@ -6954,24 +6955,64 @@ Escolha um ou mais atletas para análise simultânea.
                             _hvl = list(_hd.get('vel', []))
                             _hts = list(_hd.get('ts_pos', []))
                             if _hxs and _hts and len(_hxs) == len(_hts):
+                                # Coordenadas de campo (x,y) disponíveis diretamente
                                 _hist_coords[_ha] = {
                                     'xs': _hxs, 'ys': _hys,
                                     'vel': _hvl if len(_hvl) == len(_hxs) else [0.0]*len(_hxs),
                                     'ts': _hts,
                                 }
+                            elif _hd.get('lats') and _hd.get('ts_gps') and _hist_cfg:
+                                # Fallback: converter GPS → coordenadas de campo
+                                _hlats   = _hd['lats']
+                                _hlons   = _hd.get('lons', [])
+                                _hts_gps = _hd['ts_gps']
+                                _hvl_gps = _hd.get('vels_gps', [])
+                                if _hlons and len(_hlats) == len(_hlons) == len(_hts_gps):
+                                    try:
+                                        _hfx, _hfy = gps_para_campo_coords(
+                                            _hlats, _hlons, _hist_cfg
+                                        )
+                                        if _hfx:
+                                            _hist_coords[_ha] = {
+                                                'xs': _hfx, 'ys': _hfy,
+                                                'vel': (list(_hvl_gps)
+                                                        if len(_hvl_gps) == len(_hfx)
+                                                        else [0.0] * len(_hfx)),
+                                                'ts': list(_hts_gps),
+                                            }
+                                            _hist_gps_fallback_used = True
+                                    except Exception:
+                                        pass
+
+                        if _hist_gps_fallback_used:
+                            st.info(
+                                "📡 Animação gerada a partir de dados **GPS** convertidos para coordenadas "
+                                "de campo. Para usar dados de campo nativos (x,y), verifique a "
+                                "configuração do sistema Catapult."
+                            )
 
                         if not _hist_coords:
                             _n_sem_xy = len([a for a in _hist_atletas_sel
                                              if not dados_posicao_por_periodo
                                                 .get(_hist_periodo_sel, {})
                                                 .get(a, {}).get('xs')])
+                            _n_sem_gps = len([a for a in _hist_atletas_sel
+                                              if not dados_posicao_por_periodo
+                                                 .get(_hist_periodo_sel, {})
+                                                 .get(a, {}).get('lats')])
+                            _cfg_aviso = (
+                                "" if _hist_cfg else
+                                "\n- ⚠️ **Campo não configurado** — acesse a aba "
+                                "**🗺️ Campo de Futebol** e configure o campo para "
+                                "habilitar a conversão GPS→campo"
+                            )
                             st.warning(
                                 f"⚠️ **{_n_sem_xy}/{len(_hist_atletas_sel)} atleta(s) sem dados de campo (x,y)** "
                                 f"para o período **{_hist_periodo_sel}**.\n\n"
-                                "A animação requer coordenadas de campo. Possíveis causas:\n"
-                                "- O campo não está configurado no sistema Catapult para este período\n"
-                                "- Os sensores não capturaram dados de posição de campo\n"
-                                "- Tente selecionar o período **1 Tempo** — geralmente tem mais dados xy"
+                                f"{_n_sem_gps}/{len(_hist_atletas_sel)} atleta(s) também sem dados GPS.\n\n"
+                                "Possíveis causas:\n"
+                                "- Os sensores não capturaram dados de posição neste período"
+                                + _cfg_aviso
                             )
                         else:
                             # ── Normalizar timestamps ──────────────────────
