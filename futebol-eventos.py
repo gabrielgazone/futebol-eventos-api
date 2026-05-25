@@ -438,7 +438,6 @@ class CatapultAPI:
     
     _SENSOR_PARAMS = (
         ("parameters", "ts,lat,long,v,a,hr,pl,xy"),
-        ("xy_middle",  "1"),
         ("nulls",      "1"),
     )
 
@@ -3964,9 +3963,6 @@ Escolha um ou mais atletas para análise simultânea.
         else:
             _atividade_nome = st.session_state.get('_atividade_sel_cached', '')
 
-        st.info(f"📌 Atividade: {_atividade_nome}")
-        st.info(f"📌 Períodos selecionados: {', '.join(periodos_selecionados)}")
-        
         # Dicionários para armazenar dados por período
         resultados_por_periodo = {}
         dados_sensor_por_atleta_por_periodo = {}
@@ -3979,6 +3975,15 @@ Escolha um ou mais atletas para análise simultânea.
         eventos_futebol_sel = st.session_state.get('eventos_futebol_sel', list(FUTEBOL_EVENTS_CONFIG.keys()))
         eventos_futebol_str = ','.join(eventos_futebol_sel) if eventos_futebol_sel else ''
 
+        # ── Container único de carregamento (substituído a cada atleta, apagado no fim) ──
+        _n_per_ld   = len(periodos_selecionados)
+        _n_atl_ld   = len(st.session_state.atletas_sel)
+        _total_ld   = max(1, _n_per_ld * _n_atl_ld)
+        _done_ld    = 0
+        _ok_ld      = 0
+        _warn_ld    = []
+        _ld_box     = st.empty()
+
         for periodo_nome in periodos_selecionados:
             period_id = period_ids.get(periodo_nome)
 
@@ -3988,12 +3993,26 @@ Escolha um ou mais atletas para análise simultânea.
             dados_efforts_acc = {}
             dados_posicao = {}
             dados_eventos = {}   # ← eventos futebol deste período
-            
-            progresso = st.progress(0)
-            status_text = st.empty()
-            
+
+            _idx_per_ld = periodos_selecionados.index(periodo_nome) + 1
+
             for i, atleta_nome in enumerate(st.session_state.atletas_sel):
-                status_text.text(f"Processando {atleta_nome} - {periodo_nome}...")
+                _done_ld += 1
+                _pct_ld   = _done_ld / _total_ld
+                with _ld_box.container():
+                    st.markdown(
+                        f"<div style='padding:14px 20px;background:#111827;border-radius:10px;"
+                        f"border:1px solid #1f2937'>"
+                        f"<div style='color:#6b7280;font-size:12px;margin-bottom:6px'>"
+                        f"⏳ &nbsp;Período &nbsp;<b style='color:#93c5fd'>{periodo_nome}</b>"
+                        f"&nbsp; <span style='opacity:.6'>({_idx_per_ld}/{_n_per_ld})</span>"
+                        f"</div>"
+                        f"<div style='color:#f9fafb;font-size:15px;font-weight:600'>{atleta_nome}</div>"
+                        f"<div style='color:#6b7280;font-size:12px;margin-top:4px'>"
+                        f"{_done_ld} / {_total_ld} &nbsp;atletas</div></div>",
+                        unsafe_allow_html=True
+                    )
+                    st.progress(_pct_ld)
                 
                 athlete_row = st.session_state.atletas_filtrados[st.session_state.atletas_filtrados['nome'] == atleta_nome]
                 if athlete_row.empty:
@@ -4030,24 +4049,20 @@ Escolha um ou mais atletas para análise simultânea.
                         if acc_efforts:
                             dados_efforts_acc[atleta_nome] = acc_efforts
                     
-                    # Usa x,y da API com xy_middle=1 → origem (0,0) = CENTRO do campo.
-                    # Converte para origem no canto inferior esquerdo somando fl/2 e fw/2
-                    # usando dimensões do venue (ou padrão FIFA 105×68m).
-                    # Filtra nulos e projeções Mercator (valores na casa dos milhares/milhões).
+                    # A API devolve x,y com origem no canto inferior esquerdo (0,0).
+                    # Filtra nulos e artefactos de projeção GPS (valores absurdamente altos).
                     _venue   = st.session_state.get('venue', {})
                     _fl_v    = float(_venue.get('length') or 105)
                     _fw_v    = float(_venue.get('width')  or 68)
-                    _half_fl = _fl_v / 2.0
-                    _half_fw = _fw_v / 2.0
                     pontos_pos = [
-                        (float(p['x']) + _half_fl, float(p['y']) + _half_fw,
+                        (float(p['x']), float(p['y']),
                          (p.get('v') or 0) * 3.6,
                          float(p.get('a') or 0),
                          float(p.get('ts') or 0))
                         for p in sensor_points
                         if p.get('x') is not None and p.get('y') is not None
-                        and abs(float(p['x'])) < 90   # xy_middle → max ±60m (campo 120m) + margem
-                        and abs(float(p['y'])) < 60   # xy_middle → max ±45m (campo 90m) + margem
+                        and float(p['x']) > -15 and float(p['x']) < _fl_v + 15
+                        and float(p['y']) > -15 and float(p['y']) < _fw_v + 15
                     ]
                     if pontos_pos:
                         xs          = [pt[0] for pt in pontos_pos]
@@ -4102,23 +4117,33 @@ Escolha um ou mais atletas para análise simultânea.
                                 # campo_config será enriquecido depois, no momento da visualização
                             )
                             n_ev = sum(len(v) for v in ev_raw.values())
-                            st.success(f"✅ {atleta_nome}: {len(sensor_points)} pontos · {n_ev} eventos futebol")
+                            _ok_ld += 1
                         else:
-                            st.success(f"✅ {atleta_nome}: {len(sensor_points)} pontos · 0 eventos futebol")
+                            _ok_ld += 1
                     else:
-                        st.success(f"✅ {atleta_nome}: {len(sensor_points)} pontos")
+                        _ok_ld += 1
                 
-                progresso.progress((i + 1) / len(st.session_state.atletas_sel))
-            
-            status_text.empty()
-            progresso.empty()
-            
             resultados_por_periodo[periodo_nome] = resultados
             dados_sensor_por_atleta_por_periodo[periodo_nome] = dados_sensor_por_atleta
             dados_efforts_vel_por_periodo[periodo_nome] = dados_efforts_vel
             dados_efforts_acc_por_periodo[periodo_nome] = dados_efforts_acc
             dados_posicao_por_periodo[periodo_nome] = dados_posicao
             dados_eventos_por_periodo[periodo_nome] = dados_eventos
+
+        # Apagar container de loading e mostrar resumo compacto
+        _ld_box.empty()
+        _warn_ld_n = _n_atl_ld - _ok_ld
+        _per_label = ', '.join(periodos_selecionados)
+        st.markdown(
+            f"<div style='display:flex;align-items:center;gap:12px;padding:10px 16px;"
+            f"background:#052e16;border-radius:8px;border:1px solid #166534;margin-bottom:8px'>"
+            f"<span style='font-size:18px'>✅</span>"
+            f"<div><span style='color:#86efac;font-weight:600'>{_ok_ld} atletas carregados</span>"
+            f"<span style='color:#4ade80;font-size:12px'>&nbsp;·&nbsp;{_per_label}</span>"
+            + (f"<span style='color:#fca5a5;font-size:12px'>&nbsp;·&nbsp;{_warn_ld_n} sem dados</span>" if _warn_ld_n else "")
+            + f"</div></div>",
+            unsafe_allow_html=True
+        )
 
         # ── Gerar "Períodos Combinados" quando há mais de 1 período ──────────
         _CHAVE_COMBINADO = '📊 Períodos Combinados'
@@ -7481,10 +7506,10 @@ Escolha um ou mais atletas para análise simultânea.
                                         from scipy.spatial import Delaunay as _Del
                                         _gap_frames = [_n_frames//4, _n_frames//2, 3*_n_frames//4]
                                         _gcols = st.columns(len(_gap_frames))
-                                        for _gi, _gf in enumerate(_gap_frames):
-                                            _gx = _sync_xs[:, _gf]
-                                            _gy = _sync_ys[:, _gf]
-                                            _gts_lbl = float(_frame_ts[_gf])
+                                        for _gi, _gframe in enumerate(_gap_frames):
+                                            _gx = _sync_xs[:, _gframe]
+                                            _gy = _sync_ys[:, _gframe]
+                                            _gts_lbl = float(_frame_ts[_gframe])
                                             with _gcols[_gi]:
                                                 _fig_gap = desenhar_campo_futebol_bonito(
                                                     field_length=_hist_fl, field_width=_hist_fw,
