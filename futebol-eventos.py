@@ -7582,6 +7582,18 @@ Escolha um ou mais atletas para análise simultânea.
 
                                     # 11 — Pressing
                                     st.markdown("#### 11 — Índice de Pressing Coletivo")
+                                    with st.expander("ℹ️ Como é calculado?"):
+                                        st.markdown("""
+**Metodologia:**
+1. A cada frame sincronizado, conta-se quantos atletas possuem velocidade ≥ **Vel. mín.** (ex: 14 km/h) — atletas em alta intensidade (HSR)
+2. Um **momento de pressing coletivo** é identificado quando o número de atletas em HSR atinge ou supera o limiar de **Atletas simultâneos**
+3. O gráfico exibe essa contagem ao longo do tempo; a linha tracejada amarela marca o limiar configurado
+4. **Tempo em pressing (%)** = proporção de frames onde o pressing coletivo foi ativado
+5. **Duração total** = soma dos frames em pressing × intervalo real entre frames (em segundos)
+6. **Média atletas HSR** = média de atletas acima da velocidade mínima em todos os frames
+
+> 💡 Pressing coletivo requer simultaneidade: um único atleta em alta velocidade não ativa o índice.
+                                        """)
                                     _pr_v = st.slider("Vel. mín. de pressing (km/h):", 10, 21, 14, key="tac_prv")
                                     _pr_n = st.slider("Atletas simultâneos (mín.):", 2, min(_n_ha,8), min(3,_n_ha), key="tac_prn")
                                     _press_idx = (_sync_vl >= _pr_v).sum(axis=0).astype(float)
@@ -7612,6 +7624,18 @@ Escolha um ou mais atletas para análise simultânea.
 
                                     # 12 — Transições
                                     st.markdown("#### 12 — Detecção de Transições")
+                                    with st.expander("ℹ️ Como é calculado?"):
+                                        st.markdown("""
+**Metodologia:**
+1. Calcula-se o **centróide da equipa** em X (média da posição longitudinal de todos os atletas) a cada frame
+2. Aplica-se o **gradiente temporal** sobre o centróide X → obtém-se a velocidade de deslocamento coletivo (m/s), positiva para avanço e negativa para recuo
+3. Suavização por **média móvel de 5 frames** para eliminar oscilações de GPS
+4. **Transição ofensiva**: o centróide avança com velocidade > Threshold → equipa progride coletivamente no campo
+5. **Transição defensiva**: o centróide recua com velocidade < −Threshold → equipa recua coletivamente
+6. Contagem de episódios: cada cruzamento do limiar que se mantém por pelo menos um frame conta como uma transição
+
+> 💡 O threshold controla a sensibilidade: valores baixos (0.5 m/s) detectam micro-transições; valores altos (3+ m/s) capturam apenas transições explosivas.
+                                        """)
                                     _dctr = np.gradient(_ctr_x, _ft_arr)
                                     _sm   = np.convolve(_dctr, np.ones(5)/5, mode='same')
                                     _tr_thr = st.slider("Threshold (m/s):", 0.5, 5.0, 1.5, step=0.5, key="tac_trthr")
@@ -7645,97 +7669,6 @@ Escolha um ou mais atletas para análise simultânea.
 
                                     st.markdown("---")
 
-                                    # 13 — Sincronização de Velocidade
-                                    st.markdown("#### 13 — Sincronização de Velocidade da Equipa")
-                                    _corr = np.corrcoef(_sync_vl)
-                                    _short_names = [a.split(' ')[0] for a in _hist_atl_list]
-                                    _fig_cr = go.Figure(go.Heatmap(
-                                        z=_corr.tolist(),
-                                        x=_short_names, y=_short_names,
-                                        colorscale='RdBu', zmin=-1, zmax=1,
-                                        text=[[f"{_corr[r,c]:.2f}" for c in range(_n_ha)] for r in range(_n_ha)],
-                                        texttemplate='%{text}', textfont=dict(size=9),
-                                        colorbar=dict(title=dict(text='r', font=dict(color='white')), tickfont=dict(color='white')),
-                                    ))
-                                    _fig_cr.update_layout(
-                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                        font=dict(color='white'), height=max(300, _n_ha*35+80),
-                                        margin=dict(t=20, b=30, l=80, r=30),
-                                    )
-                                    st.plotly_chart(_fig_cr, use_container_width=True)
-                                    _upper = np.triu(np.ones_like(_corr, dtype=bool), k=1)
-                                    _sync_score = float(_corr[_upper].mean())
-                                    _best = np.unravel_index(np.argmax(_corr * _upper), _corr.shape)
-                                    _sy1, _sy2 = st.columns(2)
-                                    _sy1.metric("Índice de sincronia global", f"{_sync_score:.3f}")
-                                    _sy2.metric("Par mais sincronizado",
-                                        f"{_short_names[_best[0]]} & {_short_names[_best[1]]}",
-                                        f"r = {_corr[_best]:.2f}")
-
-                                    st.markdown("---")
-
-                                    # 14 — Team Speed
-                                    st.markdown("#### 14 — Velocidade do Bloco (Team Speed)")
-                                    _fig_ts = go.Figure()
-                                    _fig_ts.add_trace(go.Scatter(
-                                        x=list(_ft_arr), y=list(_team_spd),
-                                        line=dict(color='#FFB347', width=2),
-                                        fill='tozeroy', fillcolor='rgba(255,179,71,0.2)',
-                                    ))
-                                    _p75ts = float(np.percentile(_team_spd, 75))
-                                    _fig_ts.add_hline(y=_p75ts, line_dash='dot', line_color='#FFD700',
-                                                      annotation_text=f"P75: {_p75ts:.1f} km/h",
-                                                      annotation_font_color='#FFD700')
-                                    _fig_ts.update_layout(
-                                        xaxis_title='Tempo (s)', yaxis_title='Vel. média (km/h)',
-                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                        font=dict(color='white'), height=255,
-                                        margin=dict(t=10, b=30, l=40, r=10), showlegend=False,
-                                    )
-                                    st.plotly_chart(_fig_ts, use_container_width=True)
-                                    _peak_t = float(_ft_arr[int(np.argmax(_team_spd))])
-                                    _ts1, _ts2, _ts3 = st.columns(3)
-                                    _ts1.metric("Vel. média global", f"{float(_team_spd.mean()):.1f} km/h")
-                                    _ts2.metric("Pico coletivo", f"{float(_team_spd.max()):.1f} km/h")
-                                    _ts3.metric("Pico em", f"{int(_peak_t//60):02d}:{int(_peak_t%60):02d}")
-
-                                    st.markdown("---")
-
-                                    # 15 — Compressão Defensiva
-                                    st.markdown("#### 15 — Índice de Compressão Defensiva")
-                                    _cd_d = st.slider("Profundidade máx (m):", 10, 40, 20, key="tac_cdd")
-                                    _cd_w = st.slider("Largura máx (m):", 15, 55, 35, key="tac_cdw")
-                                    _cbin = ((_depth <= _cd_d) & (_width <= _cd_w)).astype(float)
-                                    _fig_cd = go.Figure()
-                                    _fig_cd.add_trace(go.Scatter(x=list(_ft_arr), y=list(_depth),
-                                        name='Profundidade', line=dict(color='#45B7D1', width=1.5)))
-                                    _fig_cd.add_trace(go.Scatter(x=list(_ft_arr), y=list(_width),
-                                        name='Largura', line=dict(color='#FF6B6B', width=1.5)))
-                                    _in_c = False
-                                    _c_regs = []
-                                    for _ci in range(_n_frames):
-                                        if _cbin[_ci] and not _in_c:
-                                            _cs = float(_ft_arr[_ci]); _in_c = True
-                                        elif not _cbin[_ci] and _in_c:
-                                            _c_regs.append((_cs, float(_ft_arr[_ci]))); _in_c = False
-                                    if _in_c: _c_regs.append((_cs, float(_ft_arr[-1])))
-                                    for _cr0, _cr1 in _c_regs[:25]:
-                                        _fig_cd.add_vrect(x0=_cr0, x1=_cr1,
-                                            fillcolor='rgba(150,206,180,0.25)', line_width=0)
-                                    _fig_cd.add_hline(y=_cd_d, line_dash='dash', line_color='#45B7D1', line_width=1)
-                                    _fig_cd.add_hline(y=_cd_w, line_dash='dash', line_color='#FF6B6B', line_width=1)
-                                    _fig_cd.update_layout(
-                                        xaxis_title='Tempo (s)', yaxis_title='Metros',
-                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                        font=dict(color='white'), height=270,
-                                        legend=dict(font=dict(color='white')),
-                                        margin=dict(t=10, b=30, l=40, r=10),
-                                    )
-                                    st.plotly_chart(_fig_cd, use_container_width=True)
-                                    _cd1, _cd2, _cd3 = st.columns(3)
-                                    _cd1.metric("Tempo em bloco compacto", f"{float(_cbin.mean())*100:.1f}%")
-                                    _cd2.metric("Episódios de compressão", f"{len(_c_regs)}")
-                                    _cd3.metric("Profundidade média", f"{float(_depth.mean()):.1f} m")
 
                                 # ──────────────────────────────────────────────
                                 # TAB RELAÇÕES  (16, 17, 18, 19)
@@ -7834,52 +7767,6 @@ Escolha um ou mais atletas para análise simultânea.
                                         'Dist. Mín (m)':   [round(float(v),1) for v in _mdists.min(axis=1)],
                                     }).sort_values('Dist. Média (m)', ascending=False),
                                     use_container_width=True, hide_index=True)
-
-                                    st.markdown("---")
-
-                                    # 18 — Triângulos de Passe Naturais
-                                    st.markdown("#### 18 — Triângulos de Passe Naturais")
-                                    try:
-                                        from scipy.spatial import Delaunay as _Del2
-                                        _tnx = int(max(10, _hist_fl//5))
-                                        _tny = int(max(8, _hist_fw//5))
-                                        _tfreq = np.zeros((_tny, _tnx))
-                                        _txr = np.linspace(0, _hist_fl, _tnx+1)
-                                        _tyr = np.linspace(0, _hist_fw, _tny+1)
-                                        _ts_step = max(1, _n_frames//100)
-                                        for _tfi2 in range(0, _n_frames, _ts_step):
-                                            _tp = np.column_stack([_sync_xs[:,_tfi2], _sync_ys[:,_tfi2]])
-                                            if len(_tp) >= 3:
-                                                _tt = _Del2(_tp)
-                                                for _ts2 in _tt.simplices:
-                                                    _cx2 = float(_tp[_ts2,0].mean())
-                                                    _cy2 = float(_tp[_ts2,1].mean())
-                                                    _ix2 = int(np.clip(np.searchsorted(_txr,_cx2)-1, 0, _tnx-1))
-                                                    _iy2 = int(np.clip(np.searchsorted(_tyr,_cy2)-1, 0, _tny-1))
-                                                    _tfreq[_iy2,_ix2] += 1
-                                        _fig_trf = go.Figure(go.Heatmap(
-                                            z=_tfreq.tolist(),
-                                            x=[(_txr[i]+_txr[i+1])/2 for i in range(_tnx)],
-                                            y=[(_tyr[i]+_tyr[i+1])/2 for i in range(_tny)],
-                                            colorscale='YlOrRd',
-                                            colorbar=dict(title=dict(text='Freq.', font=dict(color='white')), tickfont=dict(color='white')),
-                                        ))
-                                        _fig_trf.add_shape(type='rect', x0=0, y0=0, x1=_hist_fl, y1=_hist_fw,
-                                                           line=dict(color='white', width=2))
-                                        _fig_trf.add_shape(type='line', x0=_hist_fl/2, y0=0, x1=_hist_fl/2, y1=_hist_fw,
-                                                           line=dict(color='white', width=1))
-                                        _fig_trf.update_layout(
-                                            title='Frequência de triângulos de passe por zona',
-                                            plot_bgcolor='#1a3a18', paper_bgcolor='#0e1117',
-                                            font=dict(color='white'), height=320,
-                                            margin=dict(t=45, b=20, l=20, r=60),
-                                            xaxis=dict(showgrid=False, zeroline=False, range=[-3, _hist_fl+3]),
-                                            yaxis=dict(showgrid=False, zeroline=False, range=[-3, _hist_fw+3], scaleanchor='x', scaleratio=1),
-                                        )
-                                        st.plotly_chart(_fig_trf, use_container_width=True)
-                                        st.caption("Zonas quentes = onde a equipa forma triângulos com maior frequência.")
-                                    except Exception as _etri:
-                                        st.warning(f"scipy indisponível para triângulos: {_etri}")
 
                                     st.markdown("---")
 
