@@ -1398,6 +1398,7 @@ def stats_quadrante(x_coords, y_coords, velocidades, aceleracoes, x0, x1, y0, y1
     }
 
 
+@st.cache_data(show_spinner=False)
 def gps_para_campo_coords(lats, lons, campo_config):
     """
     Converte pontos GPS (lat/lon) para coordenadas relativas ao campo (x/y em metros,
@@ -7190,7 +7191,7 @@ Escolha um ou mais atletas para análise simultânea.
                                     name=_ha, showlegend=False, hoverinfo='skip',
                                 ))
 
-                            # Marker: posição atual animada
+                            # Marker: posição atual animada (cor por velocidade, borda = cor do atleta)
                             for _i, _ha in enumerate(_hist_atl_list):
                                 _hc = _hist_coords[_ha]
                                 _col = _HIST_COLORS[_i % len(_HIST_COLORS)]
@@ -7200,8 +7201,9 @@ Escolha um ou mais atletas para análise simultânea.
                                     x=[_hc['xs'][0]], y=[_hc['ys'][0]],
                                     mode='markers+text',
                                     marker=dict(
-                                        size=14, color=_col,
-                                        line=dict(color='white', width=1.5),
+                                        size=18,
+                                        color='#64B5F6',        # azul = andando (padrão inicial)
+                                        line=dict(color=_col, width=2.5),  # borda = identidade
                                         symbol='circle',
                                     ),
                                     text=[_ha.split(' ')[0]],
@@ -7216,18 +7218,42 @@ Escolha um ou mais atletas para análise simultânea.
                                     ),
                                 ))
 
+                            # Convex hull da equipa (começa vazio, atualizado por frame)
+                            _fig_hist.add_trace(go.Scatter(
+                                x=[], y=[],
+                                mode='lines',
+                                fill='toself',
+                                fillcolor='rgba(255,255,255,0.06)',
+                                line=dict(color='rgba(255,255,255,0.22)', width=1.5, dash='dot'),
+                                name='Área equipa',
+                                showlegend=True,
+                                hoverinfo='skip',
+                            ))
+                            _hull_trace_idx = _n_static + 3 * _n_ha
+
                             # ── Índices dos traces animados ────────────────
                             # ghost  → n_static + i
                             # trail  → n_static + n_ha + i
                             # marker → n_static + 2*n_ha + i
+                            # hull   → n_static + 3*n_ha
+
+                            # Paleta de velocidade (precomputada)
+                            def _vel_color(v):
+                                if v < 7:   return '#64B5F6'  # andando — azul
+                                if v < 14:  return '#66BB6A'  # trotando — verde
+                                if v < 19:  return '#FFA726'  # correndo — laranja
+                                return      '#EF5350'          # sprint   — vermelho
 
                             # ── Montar frames ──────────────────────────────
                             _frames_list = []
                             for _fi, _fts in enumerate(_frame_ts):
                                 _frame_data   = []
                                 _frame_traces = []
+                                _hull_pts_x   = []
+                                _hull_pts_y   = []
                                 for _i, _ha in enumerate(_hist_atl_list):
                                     _hc = _hist_coords[_ha]
+                                    _col = _HIST_COLORS[_i % len(_HIST_COLORS)]
                                     _ts_arr = np.array(_hc['ts_norm'])
                                     _xs_arr = np.array(_hc['xs'])
                                     _ys_arr = np.array(_hc['ys'])
@@ -7246,21 +7272,45 @@ Escolha um ou mais atletas para análise simultânea.
                                     _cur_x = float(_xs_arr[_cur_idx])
                                     _cur_y = float(_ys_arr[_cur_idx])
                                     _cur_v = float(_vl_arr[_cur_idx]) if _cur_idx < len(_vl_arr) else 0.0
+                                    _hull_pts_x.append(_cur_x)
+                                    _hull_pts_y.append(_cur_y)
 
                                     # Trail trace update
                                     _frame_data.append(go.Scatter(x=_trail_x, y=_trail_y))
                                     _frame_traces.append(_n_static + _n_ha + _i)
 
-                                    # Marker trace update
+                                    # Marker trace update — cor por velocidade, borda = identidade
                                     _frame_data.append(go.Scatter(
                                         x=[_cur_x], y=[_cur_y],
+                                        mode='markers+text',
+                                        marker=dict(
+                                            size=18,
+                                            color=_vel_color(_cur_v),
+                                            line=dict(color=_col, width=2.5),
+                                        ),
                                         text=[_ha.split(' ')[0]],
+                                        textfont=dict(size=9, color='white'),
+                                        textposition='top center',
                                         hovertemplate=(
                                             f"<b>{_ha}</b><br>"
                                             f"Vel: {_cur_v:.1f} km/h<extra></extra>"
                                         ),
                                     ))
                                     _frame_traces.append(_n_static + 2 * _n_ha + _i)
+
+                                # Convex hull da equipa
+                                if len(_hull_pts_x) >= 3:
+                                    try:
+                                        from scipy.spatial import ConvexHull as _CH
+                                        _hpts = np.column_stack([_hull_pts_x, _hull_pts_y])
+                                        _chull = _CH(_hpts)
+                                        _hv = _chull.vertices.tolist() + [_chull.vertices[0]]
+                                        _hx = [_hull_pts_x[j] for j in _hv]
+                                        _hy = [_hull_pts_y[j] for j in _hv]
+                                    except Exception:
+                                        _hx, _hy = _hull_pts_x + [_hull_pts_x[0]], _hull_pts_y + [_hull_pts_y[0]]
+                                    _frame_data.append(go.Scatter(x=_hx, y=_hy))
+                                    _frame_traces.append(_hull_trace_idx)
 
                                 _mins = int(_fts // 60)
                                 _secs = int(_fts % 60)
@@ -7457,8 +7507,9 @@ Escolha um ou mais atletas para análise simultânea.
                                     # 5 — Linhas Táticas
                                     st.markdown("#### 5 — Linhas Táticas (Defesa / Meio / Ataque)")
 
-                                    # Sugestão automática por posição X média
-                                    _avg_x_atl  = _sync_xs.mean(axis=1)
+                                    # Sugestão automática por percentil 25 de X
+                                    # (posição mais recuada típica, robusta a transições)
+                                    _avg_x_atl  = np.percentile(_sync_xs, 25, axis=1)
                                     _sorted_idx = np.argsort(_avg_x_atl)
                                     _n3         = max(1, _n_ha // 3)
                                     _def_default = [_hist_atl_list[i] for i in _sorted_idx[:_n3]]
@@ -7525,7 +7576,7 @@ Escolha um ou mais atletas para análise simultânea.
 
                                     # 9 — Gaps Táticos (Delaunay)
                                     st.markdown("#### 9 — Espaços Descobertos (Gaps Táticos)")
-                                    _gap_thr = st.slider("Threshold de gap (m²):", 5, 50, 10, step=5, key="tac_gap")
+                                    _gap_thr = st.slider("Threshold de gap (m²):", 50, 500, 150, step=25, key="tac_gap")
                                     try:
                                         from scipy.spatial import Delaunay as _Del
                                         _gap_frames = [_n_frames//4, _n_frames//2, 3*_n_frames//4]
@@ -7884,6 +7935,86 @@ Escolha um ou mais atletas para análise simultânea.
                                         if _km_rows:
                                             st.dataframe(pd.DataFrame(_km_rows), use_container_width=True, hide_index=True)
                                     st.caption("K-Means sobre: centróide X/Y, compacidade e velocidade média da equipa.")
+
+                            # ══════════════════════════════════════════════════════
+                            # COMPARATIVO ENTRE PERÍODOS
+                            # ══════════════════════════════════════════════════════
+                            st.markdown("---")
+                            with st.expander("📊 Comparativo entre Períodos", expanded=False):
+                                st.caption("Métricas de velocidade agregadas por período — todos os atletas com dados GPS.")
+                                _comp_rows = []
+                                for _cp in list(dados_posicao_por_periodo.keys()):
+                                    _cp_atl = [
+                                        a for a, d in dados_posicao_por_periodo[_cp].items()
+                                        if d.get('vels_gps') or d.get('vel')
+                                    ]
+                                    _cp_vels = []
+                                    for _ca in _cp_atl:
+                                        _vg = dados_posicao_por_periodo[_cp][_ca].get(
+                                            'vels_gps',
+                                            dados_posicao_por_periodo[_cp][_ca].get('vel', [])
+                                        )
+                                        if _vg:
+                                            _cp_vels.extend(_vg)
+                                    if not _cp_vels:
+                                        continue
+                                    _cv = np.array(_cp_vels, dtype=float)
+                                    _dur_cp = st.session_state.get(f'_hist_dur_{_cp}', 0.0)
+                                    _comp_rows.append({
+                                        'Período': _cp,
+                                        'Atletas': len(_cp_atl),
+                                        'Duração (min)': (
+                                            f"{int(_dur_cp//60):02d}:{int(_dur_cp%60):02d}"
+                                            if _dur_cp > 0 else '—'
+                                        ),
+                                        'Vel. Média (km/h)': round(float(np.mean(_cv)), 1),
+                                        'Vel. Máx (km/h)': round(float(np.max(_cv)), 1),
+                                        'Corrida >14 km/h (%)': round(float((_cv >= 14).mean() * 100), 1),
+                                        'Sprint >21 km/h (%)': round(float((_cv >= 21).mean() * 100), 1),
+                                    })
+                                if _comp_rows:
+                                    _df_comp = pd.DataFrame(_comp_rows)
+                                    # Gráfico de barras agrupadas
+                                    _comp_metrics = [
+                                        'Vel. Média (km/h)',
+                                        'Corrida >14 km/h (%)',
+                                        'Sprint >21 km/h (%)',
+                                    ]
+                                    _comp_colors = ['#4FC3F7', '#81C784', '#FF8A65']
+                                    _fig_comp = go.Figure()
+                                    for _cm, _cc in zip(_comp_metrics, _comp_colors):
+                                        _fig_comp.add_trace(go.Bar(
+                                            name=_cm,
+                                            x=_df_comp['Período'].tolist(),
+                                            y=_df_comp[_cm].tolist(),
+                                            marker_color=_cc,
+                                        ))
+                                    _fig_comp.update_layout(
+                                        barmode='group',
+                                        plot_bgcolor='#0e1117',
+                                        paper_bgcolor='#0e1117',
+                                        font=dict(color='white'),
+                                        height=320,
+                                        legend=dict(font=dict(color='white')),
+                                        xaxis=dict(tickfont=dict(color='white')),
+                                        yaxis=dict(tickfont=dict(color='white')),
+                                        margin=dict(t=20, b=40, l=50, r=10),
+                                    )
+                                    st.plotly_chart(_fig_comp, use_container_width=True)
+
+                                    # Tabela com velocidade máxima também
+                                    _show_cols = [
+                                        'Período', 'Atletas', 'Duração (min)',
+                                        'Vel. Média (km/h)', 'Vel. Máx (km/h)',
+                                        'Corrida >14 km/h (%)', 'Sprint >21 km/h (%)',
+                                    ]
+                                    st.dataframe(
+                                        _df_comp[_show_cols],
+                                        use_container_width=True,
+                                        hide_index=True,
+                                    )
+                                else:
+                                    st.info("Nenhum dado de velocidade disponível para comparação entre períodos.")
 
         else:
             st.warning("Nenhum dado encontrado")
