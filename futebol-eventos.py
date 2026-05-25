@@ -5440,6 +5440,107 @@ Escolha um ou mais atletas para análise simultânea.
                                             _ai3.metric("🏁 Vel. Inicial",  f"{_anim_effort_row['Vel. Inicial (km/h)']} km/h")
                                             _ai4.metric("📏 Distância",     f"{_anim_effort_row['Distância (m)']} m")
                                             _ai5.metric("📊 % do Máximo",   f"{_anim_effort_row['% do Máximo']}%")
+
+                                            # ──────────────────────────────────────────────
+                                            # PERFIL DE SPRINT — FASES E EFICIÊNCIA (item 6)
+                                            # ──────────────────────────────────────────────
+                                            st.markdown("---")
+                                            st.markdown("#### 🏃 Perfil do Sprint — Fases e Eficiência")
+                                            st.caption(
+                                                "Decomposição em 3 fases: 🟠 Aceleração (derivada >+0.5 m/s²) · "
+                                                "🔴 Pico (≥95% da vel. máxima) · 🔵 Desaceleração (derivada <−0.5 m/s²)"
+                                            )
+
+                                            _sp_vel = np.array(vel_a, dtype=float)
+                                            _sp_acc = np.array(acc_a, dtype=float)
+                                            _sp_t   = np.arange(len(_sp_vel)) * 0.1
+
+                                            # Suavização para detecção de fases
+                                            _sp_wl = min(11, len(_sp_vel) - (1 - len(_sp_vel) % 2))
+                                            if len(_sp_vel) >= 5:
+                                                from scipy.signal import savgol_filter as _svgf
+                                                _sp_sm = np.clip(_svgf(_sp_vel, max(5, _sp_wl), 2), 0, None)
+                                            else:
+                                                _sp_sm = np.clip(_sp_vel, 0, None)
+
+                                            _sp_grad = np.gradient(_sp_sm, 0.1)
+                                            _sp_vmax = float(_sp_sm.max()) if _sp_sm.max() > 0 else 1.0
+
+                                            _sp_phases = np.where(
+                                                _sp_sm >= _sp_vmax * 0.95, 2,           # pico
+                                                np.where(_sp_grad >= 0.5, 1,            # aceleração
+                                                np.where(_sp_grad <= -0.5, 3, 2))       # desaceleração / pico
+                                            )
+
+                                            _ph_clrs = {1: '#FFA726', 2: '#EF5350', 3: '#42A5F5'}
+                                            _ph_lbls = {1: 'Aceleração', 2: 'Pico', 3: 'Desaceleração'}
+
+                                            _fig_sp = go.Figure()
+                                            # Linha de velocidade (fundo)
+                                            _fig_sp.add_trace(go.Scatter(
+                                                x=_sp_t, y=_sp_sm, mode='lines',
+                                                line=dict(color='rgba(255,255,255,0.25)', width=1.5),
+                                                showlegend=False, hoverinfo='skip'
+                                            ))
+                                            # Pontos coloridos por fase
+                                            for _ph in [1, 2, 3]:
+                                                _msk_ph = _sp_phases == _ph
+                                                if _msk_ph.any():
+                                                    _fig_sp.add_trace(go.Scatter(
+                                                        x=_sp_t[_msk_ph],
+                                                        y=_sp_sm[_msk_ph],
+                                                        mode='markers',
+                                                        name=_ph_lbls[_ph],
+                                                        marker=dict(size=6,
+                                                                    color=_ph_clrs[_ph],
+                                                                    line=dict(width=0)),
+                                                    ))
+                                            # Linha de vel. máxima
+                                            _fig_sp.add_hline(
+                                                y=_sp_vmax, line_dash='dot',
+                                                line_color='rgba(255,255,255,0.5)', line_width=1,
+                                                annotation_text=f"Vmáx {_sp_vmax:.1f} km/h",
+                                                annotation_font_color='white',
+                                                annotation_font_size=10,
+                                            )
+                                            _fig_sp.update_layout(
+                                                xaxis=dict(title='Tempo (s)', color='white',
+                                                           gridcolor='rgba(255,255,255,0.1)'),
+                                                yaxis=dict(title='Velocidade (km/h)', color='white',
+                                                           gridcolor='rgba(255,255,255,0.1)'),
+                                                plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                                font=dict(color='white'), height=270,
+                                                legend=dict(font=dict(color='white'),
+                                                            orientation='h', y=1.10),
+                                                margin=dict(t=10, b=40, l=55, r=10),
+                                            )
+                                            st.plotly_chart(_fig_sp, use_container_width=True)
+
+                                            # Métricas por fase
+                                            _sp_mc = st.columns(3)
+                                            _ph_icons = {1: '🟠', 2: '🔴', 3: '🔵'}
+                                            for _phi in [1, 2, 3]:
+                                                _msk_ph = _sp_phases == _phi
+                                                _ph_dur  = float(_msk_ph.sum()) * 0.1
+                                                _ph_vavg = (float(_sp_sm[_msk_ph].mean())
+                                                            if _msk_ph.any() else 0.0)
+                                                _ph_dist = (float((_sp_sm[_msk_ph] / 3.6 / 10).sum())
+                                                            if _msk_ph.any() else 0.0)
+                                                _ph_gacc = (float(_sp_acc[_msk_ph].mean())
+                                                            if _msk_ph.any() and len(_sp_acc) == len(_sp_vel)
+                                                            else 0.0)
+                                                with _sp_mc[_phi - 1]:
+                                                    st.markdown(
+                                                        f"**{_ph_icons[_phi]} {_ph_lbls[_phi]}**"
+                                                    )
+                                                    st.metric("Duração", f"{_ph_dur:.1f} s")
+                                                    st.metric("Vel. Média", f"{_ph_vavg:.1f} km/h")
+                                                    st.metric("Distância", f"{_ph_dist:.1f} m")
+                                                    if abs(_ph_gacc) > 0.01:
+                                                        st.metric(
+                                                            "Acc. Média",
+                                                            f"{_ph_gacc:+.2f} m/s²"
+                                                        )
                                         else:
                                             st.warning(
                                                 "⚠️ Não foi possível localizar os pontos de campo para este esforço. "
@@ -5733,6 +5834,298 @@ Escolha um ou mais atletas para análise simultânea.
                                         else:
                                             st.info("Dados de velocidade/aceleração insuficientes "
                                                     "para este período.")
+
+                                    # ══════════════════════════════════════════════
+                                    # ANÁLISE — PICO DE DEMANDA (PEAK DEMAND WINDOWS)
+                                    # ══════════════════════════════════════════════
+                                    st.markdown("---")
+                                    with st.expander("⚡ Pico de Demanda por Janela Rolante (Peak Demand Windows)", expanded=False):
+                                        st.markdown(
+                                            "Identifica o intervalo de tempo onde o atleta atingiu a **maior demanda "
+                                            "física** da sessão — o chamado **worst-case scenario** (WCS). "
+                                            "É o teto que o treino deve superar para garantir preparação adequada. "
+                                            "_(Delaney et al., 2018; Martín-García et al., 2018)_"
+                                        )
+                                        _pdw_hz  = 10.0
+                                        _pdw_vel = np.array(vel_raw_campo, dtype=float)
+                                        _pdw_acc = np.array(acc_raw_campo, dtype=float)
+                                        _pdw_xn  = np.array(xn, dtype=float)
+                                        _pdw_yn  = np.array(yn, dtype=float)
+
+                                        if len(_pdw_vel) < 60:
+                                            st.info("Dados insuficientes para análise de janela rolante (mínimo: 60 pontos).")
+                                        else:
+                                            _pw_col1, _pw_col2 = st.columns([1, 2])
+                                            with _pw_col1:
+                                                _pdw_wins_sel = st.multiselect(
+                                                    "Janelas de tempo:",
+                                                    [1, 3, 5, 10], default=[1, 5],
+                                                    format_func=lambda x: f"{x} min",
+                                                    key="pdw_windows"
+                                                )
+                                            with _pw_col2:
+                                                _pdw_metric = st.radio(
+                                                    "Métrica de demanda:",
+                                                    ["Distância (m)", "Dist. >14 km/h (m)",
+                                                     "Dist. >21 km/h (m)", "Acc. >2 m/s² (n)"],
+                                                    horizontal=True, key="pdw_metric"
+                                                )
+
+                                            _pdw_results, _pdw_segs = [], {}
+                                            _pdw_metric_col = _pdw_metric
+
+                                            for _wm in sorted(_pdw_wins_sel or [1, 5]):
+                                                _wn = int(_wm * 60 * _pdw_hz)
+                                                if _wn >= len(_pdw_vel):
+                                                    continue
+                                                _dt = 1.0 / _pdw_hz / 3.6  # m per sample per km/h
+                                                if _pdw_metric == "Distância (m)":
+                                                    _series = _pdw_vel * _dt
+                                                elif _pdw_metric == "Dist. >14 km/h (m)":
+                                                    _series = np.where(_pdw_vel >= 14, _pdw_vel, 0) * _dt
+                                                elif _pdw_metric == "Dist. >21 km/h (m)":
+                                                    _series = np.where(_pdw_vel >= 21, _pdw_vel, 0) * _dt
+                                                else:
+                                                    _series = (_pdw_acc >= 2.0).astype(float)
+
+                                                _rolling = np.convolve(_series, np.ones(_wn), 'valid')
+                                                _pk_i    = int(np.argmax(_rolling))
+                                                _pk_val  = float(_rolling[_pk_i])
+                                                _t_ini   = _pk_i / (_pdw_hz * 60)
+                                                _t_fim   = (_pk_i + _wn) / (_pdw_hz * 60)
+
+                                                _pdw_results.append({
+                                                    'Janela': f"{_wm} min",
+                                                    _pdw_metric_col: round(_pk_val, 1),
+                                                    'Início (min)': round(_t_ini, 1),
+                                                    'Fim (min)': round(_t_fim, 1),
+                                                })
+                                                _pdw_segs[_wm] = (_pk_i, _pk_i + _wn)
+
+                                            if _pdw_results:
+                                                _pw_clrs = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4']
+                                                _fig_pdw = go.Figure()
+                                                for _ri, _rr in enumerate(_pdw_results):
+                                                    _fig_pdw.add_trace(go.Bar(
+                                                        x=[_rr['Janela']], y=[_rr[_pdw_metric_col]],
+                                                        name=_rr['Janela'],
+                                                        marker_color=_pw_clrs[_ri % 4],
+                                                        text=[f"{_rr[_pdw_metric_col]:.1f}"],
+                                                        textposition='outside',
+                                                        textfont=dict(color='white', size=12),
+                                                    ))
+                                                _fig_pdw.update_layout(
+                                                    title=dict(text=f"WCS — {_pdw_metric_col}",
+                                                               font=dict(color='white', size=13)),
+                                                    plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                                    font=dict(color='white'), height=290,
+                                                    showlegend=False,
+                                                    yaxis=dict(title=_pdw_metric_col,
+                                                               gridcolor='rgba(255,255,255,0.1)',
+                                                               color='white'),
+                                                    xaxis=dict(color='white'),
+                                                    margin=dict(t=40, b=30, l=60, r=10),
+                                                )
+                                                st.plotly_chart(_fig_pdw, use_container_width=True)
+                                                st.dataframe(pd.DataFrame(_pdw_results),
+                                                             use_container_width=True, hide_index=True)
+
+                                                # Campo da janela de pico selecionada
+                                                _pdw_show = st.selectbox(
+                                                    "Visualizar no campo:",
+                                                    [r['Janela'] for r in _pdw_results],
+                                                    key="pdw_show_win"
+                                                )
+                                                _sel_wm = int(_pdw_show.split()[0])
+                                                if _sel_wm in _pdw_segs:
+                                                    _si_p, _ei_p = _pdw_segs[_sel_wm]
+                                                    _ei_p = min(_ei_p, len(_pdw_xn))
+                                                    _rr_show = next(r for r in _pdw_results if r['Janela'] == _pdw_show)
+                                                    _fig_pdw_c = desenhar_campo_futebol_bonito(
+                                                        title=(f"WCS — {_pdw_show} "
+                                                               f"(início: {_rr_show['Início (min)']} min)")
+                                                    )
+                                                    _sbg_p = max(1, len(_pdw_xn) // 3000)
+                                                    _fig_pdw_c.add_trace(go.Scatter(
+                                                        x=_pdw_xn[::_sbg_p], y=_pdw_yn[::_sbg_p],
+                                                        mode='markers',
+                                                        marker=dict(size=1.5, color='rgba(255,255,255,0.07)'),
+                                                        showlegend=False, hoverinfo='skip'
+                                                    ))
+                                                    _xpk  = _pdw_xn[_si_p:_ei_p]
+                                                    _ypk  = _pdw_yn[_si_p:_ei_p]
+                                                    _vpk  = _pdw_vel[_si_p:_ei_p]
+                                                    _sbpk = max(1, len(_xpk) // 2000)
+                                                    _fig_pdw_c.add_trace(go.Scatter(
+                                                        x=_xpk[::_sbpk], y=_ypk[::_sbpk],
+                                                        mode='markers',
+                                                        marker=dict(
+                                                            size=5, color=_vpk[::_sbpk],
+                                                            colorscale=[
+                                                                [0, '#4FC3F7'], [0.4, '#66BB6A'],
+                                                                [0.7, '#FFA726'], [1, '#EF5350']],
+                                                            cmin=0, cmax=float(max(_vpk.max(), 1)),
+                                                            showscale=True,
+                                                            colorbar=dict(
+                                                                title=dict(text='km/h',
+                                                                           font=dict(color='white')),
+                                                                tickfont=dict(color='white'),
+                                                                len=0.5,
+                                                            ),
+                                                            opacity=0.85,
+                                                        ),
+                                                        showlegend=False,
+                                                    ))
+                                                    # Início / fim da janela
+                                                    for _px, _py, _sym, _clr, _lbl in [
+                                                        (_xpk[0], _ypk[0], 'circle', '#4CAF50', '▶'),
+                                                        (_xpk[-1], _ypk[-1], 'square', '#F44336', '■'),
+                                                    ]:
+                                                        _fig_pdw_c.add_trace(go.Scatter(
+                                                            x=[_px], y=[_py], mode='markers+text',
+                                                            marker=dict(size=13, color=_clr, symbol=_sym,
+                                                                        line=dict(color='white', width=2)),
+                                                            text=[_lbl], textposition='top center',
+                                                            textfont=dict(color='white', size=10),
+                                                            showlegend=False, hoverinfo='skip'
+                                                        ))
+                                                    st.plotly_chart(_fig_pdw_c, use_container_width=True)
+                                                st.caption(
+                                                    "⚡ Worst-Case Scenario: identifica a janela de maior exigência "
+                                                    "para prescrição de cargas de treino acima do jogo."
+                                                )
+
+                                    # ══════════════════════════════════════════════
+                                    # ANÁLISE — MAPA DE ALTA INTENSIDADE POSICIONAL
+                                    # ══════════════════════════════════════════════
+                                    st.markdown("---")
+                                    with st.expander("🗺️ Mapa de Alta Intensidade Posicional (HSR Zone Map)", expanded=False):
+                                        st.markdown(
+                                            "Mostra **onde no campo** o atleta realiza ações de alta intensidade. "
+                                            "Vai além do heatmap global — filtra apenas os momentos acima do "
+                                            "limiar configurado, revelando corredores de sprint, zonas de "
+                                            "pressing e rotas de recuperação."
+                                        )
+                                        _hsr_vel_thr = st.select_slider(
+                                            "Limiar de alta intensidade:",
+                                            options=[7, 10, 14, 17, 19, 21, 24],
+                                            value=14,
+                                            format_func=lambda x: f">{x} km/h",
+                                            key="hsr_vel_thr"
+                                        )
+                                        _hsr_vel_arr = np.array(vel_raw_campo, dtype=float)
+                                        _hsr_xn = np.array(xn, dtype=float)
+                                        _hsr_yn = np.array(yn, dtype=float)
+                                        _hsr_mask = _hsr_vel_arr >= _hsr_vel_thr
+
+                                        _hm1, _hm2, _hm3 = st.columns(3)
+                                        _hm1.metric(f"Pontos >{_hsr_vel_thr} km/h", f"{int(_hsr_mask.sum()):,}")
+                                        _hm2.metric("% tempo em HSR",
+                                                    f"{float(_hsr_mask.mean())*100:.1f}%")
+                                        _hm3.metric("Distância HSR (m)",
+                                                    f"{float((_hsr_vel_arr[_hsr_mask]/3.6/10).sum()):.0f}")
+
+                                        if _hsr_mask.sum() >= 10:
+                                            _hsr_fl = float(st.session_state.get('venue', {}).get('length') or 105)
+                                            _hsr_fw = float(st.session_state.get('venue', {}).get('width')  or 68)
+                                            _n_lng, _n_lat = 5, 3
+                                            _z_lng = ['Def. Prof.', 'Defensivo', 'Meio-Campo',
+                                                      'Ofensivo', 'Ataque Prof.']
+                                            _z_lat = ['Flanco Esq.', 'Centro', 'Flanco Dir.']
+
+                                            _hsr_xz = _hsr_xn[_hsr_mask]
+                                            _hsr_yz = _hsr_yn[_hsr_mask]
+                                            _hsr_vz = _hsr_vel_arr[_hsr_mask]
+
+                                            _zone_cnt = np.zeros((_n_lat, _n_lng))
+                                            _zone_vel = np.zeros((_n_lat, _n_lng))
+                                            for _px, _py, _pv in zip(_hsr_xz, _hsr_yz, _hsr_vz):
+                                                _ci = min(int(_px / _hsr_fl * _n_lng), _n_lng - 1)
+                                                _ri = min(int(_py / _hsr_fw * _n_lat), _n_lat - 1)
+                                                _zone_cnt[_ri, _ci] += 1
+                                                _zone_vel[_ri, _ci] += _pv
+                                            _zone_vavg = np.where(
+                                                _zone_cnt > 0, _zone_vel / _zone_cnt, 0)
+
+                                            _hc1, _hc2 = st.columns([2, 1])
+                                            with _hc1:
+                                                _fig_hsr = desenhar_campo_futebol_bonito(
+                                                    title=(f"HSR >{_hsr_vel_thr} km/h "
+                                                           f"— {atleta_mapa}")
+                                                )
+                                                _sbg_h = max(1, len(_hsr_xn) // 3000)
+                                                _fig_hsr.add_trace(go.Scatter(
+                                                    x=_hsr_xn[::_sbg_h], y=_hsr_yn[::_sbg_h],
+                                                    mode='markers',
+                                                    marker=dict(size=1.5,
+                                                                color='rgba(255,255,255,0.06)'),
+                                                    showlegend=False, hoverinfo='skip'
+                                                ))
+                                                _sbg_hs = max(1, int(_hsr_mask.sum()) // 3000)
+                                                _fig_hsr.add_trace(go.Scatter(
+                                                    x=_hsr_xz[::_sbg_hs],
+                                                    y=_hsr_yz[::_sbg_hs],
+                                                    mode='markers',
+                                                    marker=dict(
+                                                        size=4,
+                                                        color=_hsr_vz[::_sbg_hs],
+                                                        colorscale=[
+                                                            [0, '#66BB6A'], [0.4, '#FFA726'],
+                                                            [0.7, '#EF5350'], [1, '#B71C1C']],
+                                                        cmin=float(_hsr_vel_thr),
+                                                        cmax=float(min(_hsr_vz.max(), 40)),
+                                                        showscale=True,
+                                                        colorbar=dict(
+                                                            title=dict(text='km/h',
+                                                                       font=dict(color='white')),
+                                                            tickfont=dict(color='white'), len=0.55,
+                                                        ),
+                                                        opacity=0.78,
+                                                    ),
+                                                    showlegend=False,
+                                                ))
+                                                st.plotly_chart(_fig_hsr, use_container_width=True)
+
+                                            with _hc2:
+                                                _fig_zmap = go.Figure(go.Heatmap(
+                                                    z=_zone_cnt.tolist(),
+                                                    x=_z_lng, y=_z_lat,
+                                                    colorscale='YlOrRd',
+                                                    text=[[f"{int(_zone_cnt[r, c])}"
+                                                           for c in range(_n_lng)]
+                                                          for r in range(_n_lat)],
+                                                    texttemplate='%{text}',
+                                                    textfont=dict(size=10, color='black'),
+                                                    showscale=False,
+                                                    hovertemplate=(
+                                                        '%{x} / %{y}<br>'
+                                                        'Pontos HSR: %{z}<extra></extra>'
+                                                    ),
+                                                ))
+                                                _fig_zmap.update_layout(
+                                                    title=dict(text='Freq. por Zona',
+                                                               font=dict(color='white', size=12)),
+                                                    plot_bgcolor='#0e1117',
+                                                    paper_bgcolor='#0e1117',
+                                                    font=dict(color='white'), height=290,
+                                                    margin=dict(t=40, b=60, l=90, r=10),
+                                                    xaxis=dict(tickfont=dict(color='white', size=8),
+                                                               tickangle=-30),
+                                                    yaxis=dict(tickfont=dict(color='white', size=8)),
+                                                )
+                                                st.plotly_chart(_fig_zmap, use_container_width=True)
+                                                _max_ri2, _max_ci2 = np.unravel_index(
+                                                    _zone_cnt.argmax(), _zone_cnt.shape)
+                                                st.caption(
+                                                    f"📍 Zona mais ativa: **{_z_lat[_max_ri2]}** × "
+                                                    f"**{_z_lng[_max_ci2]}** "
+                                                    f"({int(_zone_cnt[_max_ri2, _max_ci2])} ações)"
+                                                )
+                                        else:
+                                            st.info(
+                                                f"Nenhum ponto com velocidade >{_hsr_vel_thr} km/h. "
+                                                "Tente reduzir o limiar."
+                                            )
 
                                     # ══════════════════════════════════════════════
                                     # ANÁLISE 5 — DISTÂNCIA ENTRE ATLETAS
