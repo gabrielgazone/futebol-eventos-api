@@ -30,7 +30,22 @@
       "Bash(git -C \"C:\\\\Users\\\\User\\\\Desktop\\\\curso\\\\futebol-eventos-api\" log --all --oneline --format=\"%H %s\")",
       "Bash(git -C \"C:\\\\Users\\\\User\\\\Desktop\\\\curso\\\\futebol-eventos-api\" show 67cadfb:futebol-eventos.py)",
       "Bash(python -m py_compile \"C:\\\\Users\\\\User\\\\Desktop\\\\curso\\\\futebol-eventos-api\\\\futebol-eventos.py\")",
-      "Bash(git -C 'C:\\\\Users\\\\User\\\\Desktop\\\\curso\\\\futebol-eventos-api' commit -m ' *)"
+      "Bash(git -C 'C:\\\\Users\\\\User\\\\Desktop\\\\curso\\\\futebol-eventos-api' commit -m ' *)",
+      "WebFetch(domain:cloud.catapultsports.com)",
+      "WebFetch(domain:docs.catapultsports.com)",
+      "WebFetch(domain:connect-us.catapultsports.com)",
+      "WebSearch",
+      "WebFetch(domain:catapultr.catapultsports.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:usermanual.wiki)",
+      "WebFetch(domain:support.catapultsports.com)",
+      "WebFetch(domain:gist.github.com)",
+      "WebFetch(domain:www.catapult.com)",
+      "Bash(python -c \"print\\(sum\\(1 for _ in open\\(r'C:\\\\Users\\\\User\\\\Desktop\\\\curso\\\\futebol-eventos-api\\\\futebol-eventos.py', encoding='utf-8'\\)\\)\\)\")",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"print\\(sum\\(1 for _ in open\\('futebol-eventos.py', encoding='utf-8'\\)\\), 'linhas'\\)\")",
+      "Bash(wc -l \"/mnt/c/Users/User/Desktop/curso/futebol-eventos-api/futebol-eventos.py\")"
     ]
   }
 }
