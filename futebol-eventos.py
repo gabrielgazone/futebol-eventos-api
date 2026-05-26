@@ -437,7 +437,7 @@ class CatapultAPI:
         return _api_fetch(self.base_url, self._token, "parameters")
     
     _SENSOR_PARAMS = (
-        ("parameters", "ts,lat,long,v,a,hr,pl,xy,pq,hdop,ref,o"),
+        ("parameters", "ts,lat,long,v,rv,a,hr,pl,xy,pq,hdop,ref,o,mp"),
         ("nulls",      "1"),
     )
 
@@ -524,6 +524,111 @@ class CatapultAPI:
         except Exception:
             return None
 
+    # ── Velocity zones ───────────────────────────────────────────────────────
+    def get_velocity_zones(self):
+        """Bandas de velocidade configuradas na conta (GET /velocity_zones)."""
+        return _api_fetch(self.base_url, self._token, "velocity_zones")
+
+    def get_athlete_velocity_zones(self, athlete_id):
+        """Bandas de velocidade personalizadas por atleta (GET /athletes/{id}/velocity_zones)."""
+        return _api_fetch(self.base_url, self._token, f"athletes/{athlete_id}/velocity_zones")
+
+    # ── Activity/period summaries (pre-computed by OpenField) ───────────────
+    def get_athlete_activity_summary(self, activity_id, athlete_id):
+        """Resumo pré-computado pelo OpenField (GET /activities/{id}/athletes/{aid}/summary)."""
+        return _api_fetch(self.base_url, self._token,
+                          f"activities/{activity_id}/athletes/{athlete_id}/summary")
+
+    def get_athlete_period_summary(self, period_id, athlete_id):
+        """Resumo pré-computado por período (GET /periods/{id}/athletes/{aid}/summary)."""
+        return _api_fetch(self.base_url, self._token,
+                          f"periods/{period_id}/athletes/{athlete_id}/summary")
+
+    # ── Session parameters (dynamic device discovery) ────────────────────────
+    def get_session_parameters(self, activity_id):
+        """Parâmetros disponíveis nesta sessão (GET /activities/{id}/parameters)."""
+        return _api_fetch(self.base_url, self._token, f"activities/{activity_id}/parameters")
+
+    # ── Venues from Catapult account ─────────────────────────────────────────
+    def get_venues(self):
+        """Venues cadastrados na conta (GET /venues)."""
+        return _api_fetch(self.base_url, self._token, "venues")
+
+    # ── Annotations ──────────────────────────────────────────────────────────
+    def get_activity_annotations(self, activity_id):
+        """Lista anotações de uma atividade (GET /activities/{id}/annotations)."""
+        return _api_fetch(self.base_url, self._token, f"activities/{activity_id}/annotations")
+
+    def create_activity_annotation(self, activity_id, name, start_time, end_time,
+                                   annotation_type="phase"):
+        """Cria nova anotação (POST /activities/{id}/annotations)."""
+        import requests as _req
+        try:
+            payload = {
+                "name": name,
+                "start_time": start_time,
+                "end_time": end_time,
+                "annotation_type": annotation_type,
+            }
+            r = _req.post(
+                f"{self.base_url}/activities/{activity_id}/annotations",
+                headers={**self.headers, "Content-Type": "application/json"},
+                json=payload, timeout=20,
+            )
+            return r.json() if r.status_code in (200, 201) else None
+        except Exception:
+            return None
+
+    def delete_annotation(self, annotation_id):
+        """Remove uma anotação (DELETE /annotations/{id})."""
+        import requests as _req
+        try:
+            r = _req.delete(
+                f"{self.base_url}/annotations/{annotation_id}",
+                headers=self.headers, timeout=15,
+            )
+            return r.status_code in (200, 204)
+        except Exception:
+            return False
+
+    # ── Async export ─────────────────────────────────────────────────────────
+    def submit_export(self, payload):
+        """Submete job de exportação assíncrona (POST /export)."""
+        import requests as _req
+        try:
+            r = _req.post(
+                f"{self.base_url}/export",
+                headers={**self.headers, "Content-Type": "application/json"},
+                json=payload, timeout=20,
+            )
+            return r.json() if r.status_code in (200, 201, 202) else None
+        except Exception:
+            return None
+
+    def get_export_status(self, job_id):
+        """Verifica status de um job de exportação (GET /export/{job_id})."""
+        import requests as _req
+        try:
+            r = _req.get(
+                f"{self.base_url}/export/{job_id}",
+                headers=self.headers, timeout=15,
+            )
+            return r.json() if r.status_code == 200 else None
+        except Exception:
+            return None
+
+    def download_export(self, job_id):
+        """Download do arquivo exportado (GET /export/{job_id}/download)."""
+        import requests as _req
+        try:
+            r = _req.get(
+                f"{self.base_url}/export/{job_id}/download",
+                headers=self.headers, timeout=60,
+            )
+            return r.content if r.status_code == 200 else None
+        except Exception:
+            return None
+
     # PARTE 2 - FUNÇÕES DE EXTRAÇÃO, CONVERSÃO E CÁLCULO
 
 # ── Parâmetros globais de duração mínima de esforço (segundos) ────────────────
@@ -581,11 +686,14 @@ def extrair_dados_sensor(response_data):
 
 def extrair_efforts_data(response_data):
     if not response_data:
-        return [], []
-    
+        return [], [], [], [], []
+
     velocity_efforts = []
     acceleration_efforts = []
-    
+    heart_rate_efforts = []
+    jump_efforts = []
+    step_balance_efforts = []
+
     if isinstance(response_data, list) and len(response_data) > 0:
         item = response_data[0]
         if isinstance(item, dict) and 'data' in item:
@@ -593,8 +701,11 @@ def extrair_efforts_data(response_data):
             if isinstance(data_obj, dict):
                 velocity_efforts = data_obj.get('velocity_efforts', [])
                 acceleration_efforts = data_obj.get('acceleration_efforts', [])
-    
-    return velocity_efforts, acceleration_efforts
+                heart_rate_efforts = data_obj.get('heart_rate_efforts', [])
+                jump_efforts = data_obj.get('jump_efforts', [])
+                step_balance_efforts = data_obj.get('step_balance_efforts', [])
+
+    return velocity_efforts, acceleration_efforts, heart_rate_efforts, jump_efforts, step_balance_efforts
 
 # ==================== CONVERSÃO DE COORDENADAS GPS → CAMPO ====================
 
@@ -806,6 +917,54 @@ BANDAS_ACC = {
     'D2': {'label': 'Dec -2 — -1 a -2 m/s²',                'min': -2,    'max': -1,   'color': '#FF6D00'},
     'D3': {'label': 'Dec -3 — < -2 m/s² (Alta Desacel.)',   'min': -9999, 'max': -2,   'color': '#DD2C00'},
 }
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BANDAS DE VELOCIDADE — helpers de zonas individuais / da conta
+# ══════════════════════════════════════════════════════════════════════════════
+
+_DEFAULT_VELOCITY_ZONES = [
+    {'name': 'B1 — Caminhada',        'min_ms': 0/3.6,   'max_ms': 7/3.6,   'color': '#2196F3'},
+    {'name': 'B2 — Trote',            'min_ms': 7/3.6,   'max_ms': 14/3.6,  'color': '#4CAF50'},
+    {'name': 'B3 — Corrida',          'min_ms': 14/3.6,  'max_ms': 19/3.6,  'color': '#CDDC39'},
+    {'name': 'B4 — Corrida Intensa',  'min_ms': 19/3.6,  'max_ms': 24/3.6,  'color': '#FF9800'},
+    {'name': 'B5 — Alta Velocidade',  'min_ms': 24/3.6,  'max_ms': 30/3.6,  'color': '#FF5722'},
+    {'name': 'B6 — Sprint',           'min_ms': 30/3.6,  'max_ms': 9999,    'color': '#F44336'},
+]
+
+
+def _parse_api_velocity_zones(api_response):
+    """Converte resposta da API /velocity_zones para lista de dicts padronizados."""
+    if not api_response:
+        return _DEFAULT_VELOCITY_ZONES[:]
+    try:
+        zones_raw = api_response if isinstance(api_response, list) else api_response.get('data', [])
+        if not zones_raw:
+            return _DEFAULT_VELOCITY_ZONES[:]
+        result = []
+        for z in zones_raw:
+            min_val = z.get('min_velocity', z.get('min', 0))
+            max_val = z.get('max_velocity', z.get('max', 9999))
+            result.append({
+                'name': z.get('name', ''),
+                'min_ms': float(min_val),
+                'max_ms': float(max_val),
+                'color': z.get('color', '#888888'),
+            })
+        return result if result else _DEFAULT_VELOCITY_ZONES[:]
+    except Exception:
+        return _DEFAULT_VELOCITY_ZONES[:]
+
+
+def get_zones_for_athlete(athlete_name):
+    """Retorna zonas de velocidade para o atleta (override > conta > defaults)."""
+    overrides = st.session_state.get('velocity_zones_athlete', {})
+    if athlete_name in overrides and overrides[athlete_name]:
+        return overrides[athlete_name]
+    account_zones = st.session_state.get('velocity_zones_account')
+    if account_zones:
+        return account_zones
+    return _DEFAULT_VELOCITY_ZONES[:]
+
 
 # ── Configuração dos tipos de eventos futebol ──────────────────────────────
 FUTEBOL_EVENTS_CONFIG = {
@@ -2173,21 +2332,36 @@ def lat_lon_to_xy(latitudes, longitudes):
     
     return x, y
 
-def calcular_metricas(sensor_points, athlete_name, min_dur_s=None):
+def calcular_metricas(sensor_points, athlete_name, min_dur_s=None, zones=None):
+    """Calcula métricas de desempenho a partir dos sensor_points.
+
+    zones: lista de dicts {'name', 'min_ms', 'max_ms', 'color'} com as zonas de velocidade
+           individuais do atleta. Se None, usa limiares padrão (19 e 24 km/h).
+    """
     if not sensor_points:
         return None
 
     if min_dur_s is None:
         min_dur_s = get_min_dur_s()
 
+    # Determinar limiares de zona alta (HSR) e sprint a partir das zonas fornecidas
+    if zones and len(zones) >= 2:
+        # Zona n-2 (penúltima) = HSR, zona n-1 (última) = Sprint
+        _z_hsr    = zones[-2]['min_ms'] * 3.6   # em km/h
+        _z_sprint = zones[-1]['min_ms'] * 3.6   # em km/h
+    else:
+        _z_hsr    = 19.0   # km/h padrão
+        _z_sprint = 24.0   # km/h padrão
+
     distancia_total = 0
     dist_hi = 0
     dist_sprint = 0
-    dist_z4 = 0          # Zone 4: 19-24 km/h
+    dist_z4 = 0          # Zone intermediária entre HSR e sprint
     player_load = 0
     velocidades = []
     fcs = []
     acc_list = []
+    mp_list = []
 
     prev_v = None
     in_sprint = False
@@ -2208,30 +2382,30 @@ def calcular_metricas(sensor_points, athlete_name, min_dur_s=None):
                 dt = 0.1  # 10 Hz
                 dist_seg = ((prev_v + v_ms) / 2) * dt
                 distancia_total += dist_seg
-                if v_kmh > 19:
+                if v_kmh > _z_hsr:
                     dist_hi += dist_seg
-                if v_kmh > 24:
+                if v_kmh > _z_sprint:
                     dist_sprint += dist_seg
-                if 19 < v_kmh <= 24:
+                if _z_hsr < v_kmh <= _z_sprint:
                     dist_z4 += dist_seg
 
-            if v_kmh > 24 and not in_sprint:
+            if v_kmh > _z_sprint and not in_sprint:
                 sprints += 1
                 in_sprint = True
-            elif v_kmh <= 24:
+            elif v_kmh <= _z_sprint:
                 in_sprint = False
 
-            if v_kmh > 19 and not in_hi:
+            if v_kmh > _z_hsr and not in_hi:
                 n_esforcos_hi += 1
                 in_hi = True
-            elif v_kmh <= 19:
+            elif v_kmh <= _z_hsr:
                 in_hi = False
 
             # Registra frame de entrada em alta intensidade para RHIE
-            if v_kmh > 19 and not _in_hi_rhie:
+            if v_kmh > _z_hsr and not _in_hi_rhie:
                 rhie_effort_frames.append(_frame_idx)
                 _in_hi_rhie = True
-            elif v_kmh <= 19:
+            elif v_kmh <= _z_hsr:
                 _in_hi_rhie = False
 
             prev_v = v_ms
@@ -2248,6 +2422,11 @@ def calcular_metricas(sensor_points, athlete_name, min_dur_s=None):
             hr = float(ponto['hr'])
             if hr > 0:
                 fcs.append(hr)
+
+        if ponto.get('mp') is not None:
+            mp_val = float(ponto['mp'])
+            if mp_val > 0:
+                mp_list.append(mp_val)
 
     # Conta eventos de acc/dec com duração mínima sustentada
     acc_arr = np.array(acc_list)
@@ -2303,7 +2482,9 @@ def calcular_metricas(sensor_points, athlete_name, min_dur_s=None):
         'Acc Max (m/s²)': round(acc_max, 2),
         'Dcc Max (m/s²)': round(abs(dcc_max), 2),
         'RHIE Blocos': rhie_blocos,
-        'Total Pontos': len(sensor_points)
+        'Total Pontos': len(sensor_points),
+        'MP Médio (W/kg)': round(float(np.mean(mp_list)), 2) if mp_list else 0,
+        'MP Máx (W/kg)': round(float(np.max(mp_list)), 2) if mp_list else 0,
     }
 
 # PARTE 3 - FUNÇÕES DE HRV, JANELAS E ESFORÇOS
@@ -2490,20 +2671,29 @@ def calcular_distancia_janelas_discretas_10s(sensor_points, window_minutes):
     
     return tempos_final, valores_final
 
-def processar_efforts_velocidade(efforts_data):
+def processar_efforts_velocidade(efforts_data, historical_vmax_ms=None):
+    """Processa esforços de velocidade.
+
+    historical_vmax_ms: Vmax histórico em m/s para calcular '% do Máximo'.
+                        Se None, usa o máximo da sessão como denominador.
+    """
     if not efforts_data:
         return pd.DataFrame()
-    
+
     records = []
     max_vel_encontrada = 0
-    
+
     for effort in efforts_data:
         max_vel = effort.get('max_velocity', 0)
         if max_vel:
             max_vel_encontrada = max(max_vel_encontrada, max_vel)
-    
-    velocidade_max = max_vel_encontrada
-    
+
+    # Se histórico fornecido e é maior que o da sessão, usa histórico
+    if historical_vmax_ms and historical_vmax_ms > max_vel_encontrada:
+        velocidade_max = historical_vmax_ms
+    else:
+        velocidade_max = max_vel_encontrada
+
     for i, effort in enumerate(efforts_data, 1):
         start_time = effort.get('start_time', 0)
         max_vel = effort.get('max_velocity', 0)
@@ -2512,16 +2702,16 @@ def processar_efforts_velocidade(efforts_data):
         duration = (end_time - start_time) if end_time else 0
         distance = effort.get('distance', 0)
         band = effort.get('band', '')
-        
+
         percent_of_max = (max_vel / velocidade_max * 100) if velocidade_max > 0 else 0
-        
+
         hora_str = ''
         if start_time:
             try:
                 hora_str = datetime.fromtimestamp(start_time).strftime('%H:%M:%S')
-            except:
+            except Exception:
                 hora_str = str(start_time)
-        
+
         records.append({
             'Esforço': i,
             'Duração (s)': round(duration, 1),
@@ -2532,26 +2722,34 @@ def processar_efforts_velocidade(efforts_data):
             '% do Máximo': round(percent_of_max, 1),
             'Banda': band,
             '_start_ts': start_time,
-            '_end_ts': end_time
+            '_end_ts': end_time,
         })
-    
+
     return pd.DataFrame(records)
 
-def processar_efforts_aceleracao(efforts_data):
+def processar_efforts_aceleracao(efforts_data, historical_max_acc=None):
+    """Processa esforços de aceleração.
+
+    historical_max_acc: aceleração máxima histórica (m/s²) para '% do Máximo'.
+                        Se None, usa o máximo da sessão.
+    """
     if not efforts_data:
         return pd.DataFrame()
-    
+
     records = []
-    
+
     max_acc_positiva = 0
     max_acc_negativa = 0
-    
+
     for effort in efforts_data:
         acc = effort.get('acceleration', 0)
         if acc > 0:
             max_acc_positiva = max(max_acc_positiva, acc)
         elif acc < 0:
             max_acc_negativa = min(max_acc_negativa, acc)
+
+    if historical_max_acc and historical_max_acc > max_acc_positiva:
+        max_acc_positiva = historical_max_acc
     
     for i, effort in enumerate(efforts_data, 1):
         start_time = effort.get('start_time', 0)
@@ -3862,6 +4060,51 @@ Escolha um ou mais atletas para análise simultânea.
                 else:
                     st.session_state.venue = {}
 
+                # ── FEATURE 6: Descoberta dinâmica de parâmetros ─────────────
+                _api_params_disc = st.session_state.get('api')
+                if _api_params_disc:
+                    try:
+                        _sess_params_raw = _api_params_disc.get_session_parameters(activity_id)
+                        if _sess_params_raw:
+                            _p_list = (_sess_params_raw if isinstance(_sess_params_raw, list)
+                                       else _sess_params_raw.get('data', []))
+                            _param_names = []
+                            for _pp in _p_list:
+                                _pn = _pp.get('name') or _pp.get('slug') or str(_pp)
+                                if _pn:
+                                    _param_names.append(_pn)
+                            st.session_state['available_params'] = _param_names
+                    except Exception:
+                        pass
+
+                # ── FEATURE 7: Venues da conta Catapult ──────────────────────
+                _api_venues = st.session_state.get('api')
+                if _api_venues:
+                    try:
+                        if 'venues_catapult' not in st.session_state:
+                            _venues_raw = _api_venues.get_venues()
+                            if _venues_raw:
+                                _venues_list = (_venues_raw if isinstance(_venues_raw, list)
+                                                else _venues_raw.get('data', []))
+                                st.session_state['venues_catapult'] = _venues_list
+                    except Exception:
+                        pass
+
+                # Auto-match venue desta atividade com venues da conta
+                _venue_act = st.session_state.get('venue', {})
+                _venue_name_act = str(_venue_act.get('name', _venue_act.get('venue_name', '')))
+                _venues_cat = st.session_state.get('venues_catapult', [])
+                for _vc in _venues_cat:
+                    _vc_name = str(_vc.get('name', ''))
+                    if _vc_name and _vc_name.lower() == _venue_name_act.lower():
+                        st.info(f"✅ Campo carregado automaticamente da conta Catapult: {_vc_name}")
+                        # Auto-populate lat/lng/rotation/dimensions if available
+                        for _fld in ('lat', 'lng', 'lon', 'rotation', 'length', 'width'):
+                            if _vc.get(_fld) is not None:
+                                _venue_act[_fld] = _vc[_fld]
+                        st.session_state['venue'] = _venue_act
+                        break
+
                 # ── Item 14: Tags da Atividade ────────────────────────────────
                 _api_tags = st.session_state.get('api')
                 if _api_tags:
@@ -4041,7 +4284,104 @@ Escolha um ou mais atletas para análise simultânea.
             if eventos_futebol_sel:
                 st.caption(f"{len(eventos_futebol_sel)} tipo(s) selecionado(s). "
                            "Os eventos serão carregados junto com os dados.")
-    
+
+        # ── Máximo Histórico (CORRECTION 1) ──────────────────────────────
+        if not st.session_state.get('df_activities', pd.DataFrame()).empty and token:
+            st.markdown("---")
+            with st.expander("📊 Máximo Histórico", expanded=False):
+                st.caption(
+                    "Informe o Vmax histórico de cada atleta (em km/h) para que "
+                    "'% do Máximo' compare contra o histórico individual e não a "
+                    "sessão atual."
+                )
+                _hist_api = st.session_state.get('api')
+                if _hist_api and st.button("🔄 Buscar via /stats", key="btn_fetch_hist_vmax"):
+                    try:
+                        _stats_resp = _hist_api.get_stats({
+                            "group_by": ["athlete"],
+                            "parameters": ["max_velocity"],
+                            "source": "cached_stats",
+                        })
+                        if _stats_resp:
+                            _sv_list = _stats_resp if isinstance(_stats_resp, list) else _stats_resp.get('data', [])
+                            _hvm = st.session_state.get('hist_vmax', {})
+                            for _sv in (_sv_list or []):
+                                _sv_name = str(_sv.get('athlete') or _sv.get('athlete_name', ''))
+                                _sv_val  = _sv.get('parameters', _sv).get('max_velocity', 0) or 0
+                                if _sv_name and float(_sv_val) > 0:
+                                    _hvm[_sv_name] = float(_sv_val)   # m/s
+                            st.session_state['hist_vmax'] = _hvm
+                            st.success(f"Histórico atualizado para {len(_hvm)} atleta(s).")
+                    except Exception as _hve:
+                        st.error(f"Erro: {_hve}")
+
+                _atletas_sidebar = (
+                    st.session_state.atletas_sel
+                    if st.session_state.get('atletas_sel') else []
+                )
+                _hvm_dict = st.session_state.get('hist_vmax', {})
+                for _an in _atletas_sidebar:
+                    _cur_ms = _hvm_dict.get(_an, 0.0)
+                    _cur_kmh = round(_cur_ms * 3.6, 1) if _cur_ms else 0.0
+                    _inp = st.number_input(
+                        f"{_an} — Vmax hist. (km/h):",
+                        min_value=0.0, max_value=50.0,
+                        value=_cur_kmh,
+                        step=0.1,
+                        key=f"hist_vmax_{_an}",
+                    )
+                    if _inp > 0:
+                        _hvm_dict[_an] = _inp / 3.6   # armazena em m/s
+                st.session_state['hist_vmax'] = _hvm_dict
+
+        # ── Bandas de Velocidade (CORRECTION 2) ──────────────────────────
+        if not st.session_state.get('df_activities', pd.DataFrame()).empty and token:
+            with st.expander("🏷️ Bandas de Velocidade", expanded=False):
+                _vz_api = st.session_state.get('api')
+                if _vz_api and st.button("🔄 Carregar zonas da conta", key="btn_load_vel_zones"):
+                    try:
+                        _vz_raw = _vz_api.get_velocity_zones()
+                        _parsed = _parse_api_velocity_zones(_vz_raw)
+                        st.session_state['velocity_zones_account'] = _parsed
+                        st.success(f"{len(_parsed)} zonas carregadas da conta.")
+                    except Exception as _vze:
+                        st.error(f"Erro: {_vze}")
+
+                _cur_zones = (
+                    st.session_state.get('velocity_zones_account')
+                    or _DEFAULT_VELOCITY_ZONES
+                )
+                _df_zones = pd.DataFrame([
+                    {
+                        'Zona': z['name'],
+                        'Mín (km/h)': round(z['min_ms'] * 3.6, 1),
+                        'Máx (km/h)': round(z['max_ms'] * 3.6, 1) if z['max_ms'] < 9000 else '∞',
+                    }
+                    for z in _cur_zones
+                ])
+                st.dataframe(_df_zones, use_container_width=True, hide_index=True)
+
+        # ── Parâmetros disponíveis (FEATURE 6) ───────────────────────────
+        _avail_params = st.session_state.get('available_params')
+        if _avail_params:
+            with st.expander("🔧 Parâmetros disponíveis", expanded=False):
+                _desired = {"ts", "lat", "long", "v", "rv", "a", "hr", "pl",
+                            "xy", "pq", "hdop", "ref", "o", "mp"}
+                _ap_set = set(_avail_params) if isinstance(_avail_params, list) else set()
+                _present = _desired & _ap_set
+                _missing = _desired - _ap_set
+                st.caption(f"Dispositivo: {len(_present)} parâmetros disponíveis.")
+                if _missing:
+                    st.warning(
+                        f"Parâmetros não disponíveis neste dispositivo: "
+                        f"`{'`, `'.join(sorted(_missing))}`"
+                    )
+                    if 'rv' in _missing:
+                        st.info("rv (velocidade bruta) não disponível — perfil F-V usará v.")
+                    if 'mp' in _missing:
+                        st.info("mp (potência metabólica) não disponível.")
+                st.write("Disponíveis:", sorted(_present))
+
     # Área principal
     if ('api' in st.session_state and 'atletas_sel' in st.session_state and
         st.session_state.atletas_sel and 'activity_id' in st.session_state):
@@ -4061,6 +4401,9 @@ Escolha um ou mais atletas para análise simultânea.
         dados_sensor_por_atleta_por_periodo = {}
         dados_efforts_vel_por_periodo = {}
         dados_efforts_acc_por_periodo = {}
+        dados_hr_efforts_por_periodo = {}
+        dados_jump_efforts_por_periodo = {}
+        dados_step_efforts_por_periodo = {}
         dados_posicao_por_periodo = {}
         dados_eventos_por_periodo = {}   # ← eventos futebol
 
@@ -4084,6 +4427,9 @@ Escolha um ou mais atletas para análise simultânea.
             dados_sensor_por_atleta = {}
             dados_efforts_vel = {}
             dados_efforts_acc = {}
+            dados_hr_efforts = {}
+            dados_jump_efforts = {}
+            dados_step_efforts = {}
             dados_posicao = {}
             dados_eventos = {}   # ← eventos futebol deste período
 
@@ -4136,30 +4482,57 @@ Escolha um ou mais atletas para análise simultânea.
 
                 if period_id:
                     response         = api.get_period_sensor_data(period_id, athlete_id)
-                    efforts_response = api.get_period_efforts(period_id, athlete_id, "velocity,acceleration")
+                    efforts_response = api.get_period_efforts(period_id, athlete_id,
+                                                             "velocity,acceleration,heart_rate,jump,step_balance")
                     events_response  = api.get_period_events(period_id, athlete_id, eventos_futebol_str) if eventos_futebol_str else None
                 else:
                     response         = api.get_sensor_data(activity_id, athlete_id)
-                    efforts_response = api.get_activity_efforts(activity_id, athlete_id, "velocity,acceleration")
+                    efforts_response = api.get_activity_efforts(activity_id, athlete_id,
+                                                               "velocity,acceleration,heart_rate,jump,step_balance")
                     events_response  = api.get_activity_events(activity_id, athlete_id, eventos_futebol_str) if eventos_futebol_str else None
                 
                 sensor_points = extrair_dados_sensor(response)
                 
                 if sensor_points:
                     dados_sensor_por_atleta[atleta_nome] = sensor_points
-                    
-                    metricas = calcular_metricas(sensor_points, atleta_nome)
+
+                    _atleta_zones = get_zones_for_athlete(atleta_nome)
+                    metricas = calcular_metricas(sensor_points, atleta_nome,
+                                                 zones=_atleta_zones)
                     if metricas:
                         metricas['Posição'] = athlete_posicao
                         metricas['Equipe'] = athlete_equipe
                         resultados.append(metricas)
-                    
+
                     if efforts_response:
-                        vel_efforts, acc_efforts = extrair_efforts_data(efforts_response)
-                        if vel_efforts:
-                            dados_efforts_vel[atleta_nome] = vel_efforts
-                        if acc_efforts:
-                            dados_efforts_acc[atleta_nome] = acc_efforts
+                        _vel_eff, _acc_eff, _hr_eff, _jmp_eff, _step_eff = extrair_efforts_data(efforts_response)
+                        if _vel_eff:
+                            dados_efforts_vel[atleta_nome] = _vel_eff
+                        if _acc_eff:
+                            dados_efforts_acc[atleta_nome] = _acc_eff
+                        if _hr_eff:
+                            dados_hr_efforts[atleta_nome] = _hr_eff
+                        if _jmp_eff:
+                            dados_jump_efforts[atleta_nome] = _jmp_eff
+                        if _step_eff:
+                            dados_step_efforts[atleta_nome] = _step_eff
+
+                    # ── OpenField pre-computed summary ────────────────────────
+                    try:
+                        if period_id:
+                            _of_sum = api.get_athlete_period_summary(period_id, athlete_id)
+                        else:
+                            _of_sum = api.get_athlete_activity_summary(activity_id, athlete_id)
+                        if _of_sum:
+                            if atleta_nome not in dados_posicao:
+                                dados_posicao[atleta_nome] = {
+                                    'vel': [], 'xs': [], 'ys': [], 'acc': [], 'ts_pos': [],
+                                    'posicao': athlete_posicao, 'equipe': athlete_equipe,
+                                    'n_pontos': 0,
+                                }
+                            dados_posicao[atleta_nome]['openfield_summary'] = _of_sum
+                    except Exception:
+                        pass
                     
                     # A API devolve x,y com origem no canto inferior esquerdo (0,0).
                     # Filtra nulos e artefactos de projeção GPS (valores absurdamente altos).
@@ -4263,6 +4636,9 @@ Escolha um ou mais atletas para análise simultânea.
             dados_sensor_por_atleta_por_periodo[periodo_nome] = dados_sensor_por_atleta
             dados_efforts_vel_por_periodo[periodo_nome] = dados_efforts_vel
             dados_efforts_acc_por_periodo[periodo_nome] = dados_efforts_acc
+            dados_hr_efforts_por_periodo[periodo_nome] = dados_hr_efforts
+            dados_jump_efforts_por_periodo[periodo_nome] = dados_jump_efforts
+            dados_step_efforts_por_periodo[periodo_nome] = dados_step_efforts
             dados_posicao_por_periodo[periodo_nome] = dados_posicao
             dados_eventos_por_periodo[periodo_nome] = dados_eventos
 
@@ -4447,6 +4823,7 @@ Escolha um ou mais atletas para análise simultânea.
                 "🔍 Exploração Livre",
                 "💬 Pergunte ao App",
                 "📡 Ao Vivo",
+                "📅 Evolução & ACWR",
             ])
             
             # ==================== ABA 1: GRÁFICOS COMPARATIVOS ====================
@@ -6690,6 +7067,110 @@ Escolha um ou mais atletas para análise simultânea.
                 else:
                     st.info("Dados de posição não disponíveis. Verifique se o sensor GPS estava ativo durante a sessão.")
 
+                # ── FEATURE 5: Anotações Táticas ─────────────────────────────
+                st.markdown("---")
+                st.markdown("### 📌 Anotações Táticas")
+                _ann_api = st.session_state.get('api')
+                _ann_act_id = st.session_state.get('activity_id')
+
+                if _ann_api and _ann_act_id:
+                    # Carregar anotações existentes
+                    if st.button("🔄 Carregar anotações", key="btn_load_ann"):
+                        try:
+                            _ann_raw = _ann_api.get_activity_annotations(_ann_act_id)
+                            st.session_state['annotations'] = _ann_raw
+                        except Exception as _ae:
+                            st.error(f"Erro: {_ae}")
+
+                    _annotations = st.session_state.get('annotations')
+                    if _annotations:
+                        try:
+                            _ann_list = (_annotations if isinstance(_annotations, list)
+                                         else _annotations.get('data', []))
+                            if _ann_list:
+                                st.markdown("#### Anotações existentes")
+                                # Timeline visual
+                                _ann_ts0 = min(
+                                    (float(a.get('start_time', 0)) for a in _ann_list if a.get('start_time')),
+                                    default=0
+                                )
+                                _fig_ann = go.Figure()
+                                for _ia, _ann in enumerate(_ann_list):
+                                    _t0 = float(_ann.get('start_time', 0)) - _ann_ts0
+                                    _t1 = float(_ann.get('end_time', _ann.get('start_time', 0))) - _ann_ts0
+                                    _ann_name = _ann.get('name', f'Anotação {_ia+1}')
+                                    _fig_ann.add_shape(
+                                        type='rect',
+                                        x0=_t0, x1=max(_t1, _t0 + 1),
+                                        y0=_ia, y1=_ia + 0.8,
+                                        fillcolor='#2196F3', opacity=0.6,
+                                        line_width=0,
+                                    )
+                                    _fig_ann.add_annotation(
+                                        x=(_t0 + _t1) / 2, y=_ia + 0.4,
+                                        text=_ann_name, showarrow=False,
+                                        font=dict(color='white', size=10),
+                                    )
+                                _fig_ann.update_layout(
+                                    paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+                                    font=dict(color='white'),
+                                    xaxis=dict(title='Tempo (s)', gridcolor='#333'),
+                                    yaxis=dict(visible=False),
+                                    height=max(120, len(_ann_list) * 40 + 40),
+                                    margin=dict(t=10, b=30),
+                                )
+                                st.plotly_chart(_fig_ann, use_container_width=True)
+
+                                # Lista com botão de deletar
+                                for _ann in _ann_list:
+                                    _ann_id = _ann.get('id', '')
+                                    _ann_nm = _ann.get('name', '—')
+                                    _c1, _c2 = st.columns([4, 1])
+                                    _c1.write(f"**{_ann_nm}** (id: {_ann_id})")
+                                    if _c2.button("🗑️", key=f"del_ann_{_ann_id}"):
+                                        try:
+                                            _del_ok = _ann_api.delete_annotation(_ann_id)
+                                            if _del_ok:
+                                                st.success("Anotação removida.")
+                                                st.session_state.pop('annotations', None)
+                                                st.rerun()
+                                        except Exception as _de:
+                                            st.error(f"Erro: {_de}")
+                        except Exception as _ep:
+                            st.error(f"Erro ao processar anotações: {_ep}")
+
+                    # Criar nova anotação
+                    with st.expander("➕ Nova Anotação", expanded=False):
+                        _ann_c1, _ann_c2 = st.columns(2)
+                        with _ann_c1:
+                            _ann_new_name = st.text_input("Nome:", key="ann_new_name")
+                            _ann_new_start = st.number_input("Início (s Unix):", value=0, key="ann_new_start")
+                        with _ann_c2:
+                            _ann_new_type = st.selectbox(
+                                "Tipo:", ["phase", "event", "highlight"],
+                                key="ann_new_type"
+                            )
+                            _ann_new_end = st.number_input("Fim (s Unix):", value=0, key="ann_new_end")
+                        if st.button("✅ Criar Anotação", key="btn_create_ann"):
+                            if _ann_new_name:
+                                try:
+                                    _cr_resp = _ann_api.create_activity_annotation(
+                                        _ann_act_id, _ann_new_name,
+                                        _ann_new_start, _ann_new_end,
+                                        _ann_new_type,
+                                    )
+                                    if _cr_resp:
+                                        st.success("Anotação criada!")
+                                        st.session_state.pop('annotations', None)
+                                    else:
+                                        st.warning("Endpoint de anotações pode não estar disponível nesta licença.")
+                                except Exception as _cae:
+                                    st.error(f"Erro: {_cae}")
+                            else:
+                                st.warning("Informe um nome para a anotação.")
+                else:
+                    st.info("Carregue os dados de uma atividade para usar anotações.")
+
             # ==================== ABA 3: ESFORÇOS AO LONGO DO TEMPO ====================
             with abas[2]:
                 st.subheader("⏱️ Esforços ao Longo do Tempo")
@@ -6749,27 +7230,100 @@ Escolha um ou mais atletas para análise simultânea.
                             st.plotly_chart(fig_acc, use_container_width=True)
                         
                         st.markdown("## 📋 Tabela de Esforços")
-                        tipo_esforco = st.radio("Tipo de esforço:", ["Velocidade", "Aceleração"], horizontal=True)
-                        
+                        tipo_esforco = st.selectbox(
+                            "Tipo de esforço:",
+                            ["Velocidade", "Aceleração", "Frequência Cardíaca", "Saltos", "Simetria de Passada"],
+                            key="tipo_esforco_sel",
+                        )
+
+                        # Recuperar esforços do tipo escolhido
                         efforts_df = pd.DataFrame()
+                        _hist_vmax_ms = st.session_state.get('hist_vmax', {}).get(atleta_escolhido)
                         if _esf_modo_todos:
                             _esf_raw = []
                             for _pk in dados_sensor_por_atleta_por_periodo.keys():
                                 if tipo_esforco == "Velocidade":
                                     _esf_raw += dados_efforts_vel_por_periodo.get(_pk, {}).get(atleta_escolhido, [])
-                                else:
+                                elif tipo_esforco == "Aceleração":
                                     _esf_raw += dados_efforts_acc_por_periodo.get(_pk, {}).get(atleta_escolhido, [])
+                                elif tipo_esforco == "Frequência Cardíaca":
+                                    _esf_raw += dados_hr_efforts_por_periodo.get(_pk, {}).get(atleta_escolhido, [])
+                                elif tipo_esforco == "Saltos":
+                                    _esf_raw += dados_jump_efforts_por_periodo.get(_pk, {}).get(atleta_escolhido, [])
+                                else:
+                                    _esf_raw += dados_step_efforts_por_periodo.get(_pk, {}).get(atleta_escolhido, [])
                             if _esf_raw:
-                                efforts_df = (processar_efforts_velocidade(_esf_raw)
-                                              if tipo_esforco == "Velocidade"
-                                              else processar_efforts_aceleracao(_esf_raw))
+                                if tipo_esforco == "Velocidade":
+                                    efforts_df = processar_efforts_velocidade(_esf_raw, _hist_vmax_ms)
+                                elif tipo_esforco == "Aceleração":
+                                    efforts_df = processar_efforts_aceleracao(_esf_raw)
+                                else:
+                                    try:
+                                        efforts_df = pd.DataFrame(_esf_raw)
+                                    except Exception:
+                                        pass
                         else:
                             if tipo_esforco == "Velocidade":
-                                if atleta_escolhido in dados_efforts_vel_por_periodo.get(periodo_escolhido, {}):
-                                    efforts_df = processar_efforts_velocidade(dados_efforts_vel_por_periodo[periodo_escolhido][atleta_escolhido])
-                            else:
-                                if atleta_escolhido in dados_efforts_acc_por_periodo.get(periodo_escolhido, {}):
-                                    efforts_df = processar_efforts_aceleracao(dados_efforts_acc_por_periodo[periodo_escolhido][atleta_escolhido])
+                                _rd = dados_efforts_vel_por_periodo.get(periodo_escolhido, {})
+                                if atleta_escolhido in _rd:
+                                    efforts_df = processar_efforts_velocidade(_rd[atleta_escolhido], _hist_vmax_ms)
+                            elif tipo_esforco == "Aceleração":
+                                _rd = dados_efforts_acc_por_periodo.get(periodo_escolhido, {})
+                                if atleta_escolhido in _rd:
+                                    efforts_df = processar_efforts_aceleracao(_rd[atleta_escolhido])
+                            elif tipo_esforco == "Frequência Cardíaca":
+                                _rd = dados_hr_efforts_por_periodo.get(periodo_escolhido, {})
+                                if atleta_escolhido in _rd:
+                                    try:
+                                        efforts_df = pd.DataFrame(_rd[atleta_escolhido])
+                                    except Exception:
+                                        pass
+                            elif tipo_esforco == "Saltos":
+                                _rd = dados_jump_efforts_por_periodo.get(periodo_escolhido, {})
+                                if atleta_escolhido in _rd:
+                                    try:
+                                        _jdf = pd.DataFrame(_rd[atleta_escolhido])
+                                        efforts_df = _jdf
+                                        # Mostrar distribuição de altura de salto
+                                        if 'height' in _jdf.columns and not _jdf.empty:
+                                            st.markdown("#### 📊 Distribuição de Altura de Salto")
+                                            _fig_jump = px.histogram(
+                                                _jdf, x='height', nbins=20,
+                                                title="Distribuição de Altura dos Saltos",
+                                                labels={'height': 'Altura (m)'},
+                                            )
+                                            _fig_jump.update_layout(
+                                                plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                                font=dict(color='white'),
+                                            )
+                                            st.plotly_chart(_fig_jump, use_container_width=True)
+                                    except Exception:
+                                        pass
+                            else:  # Simetria de Passada
+                                _rd = dados_step_efforts_por_periodo.get(periodo_escolhido, {})
+                                if atleta_escolhido in _rd:
+                                    try:
+                                        _sdf = pd.DataFrame(_rd[atleta_escolhido])
+                                        efforts_df = _sdf
+                                        # Mostrar assimetria esquerda/direita
+                                        if not _sdf.empty:
+                                            _left_col = next((c for c in _sdf.columns if 'left' in c.lower()), None)
+                                            _right_col = next((c for c in _sdf.columns if 'right' in c.lower()), None)
+                                            if _left_col and _right_col:
+                                                st.markdown("#### ↔️ Assimetria Esquerda/Direita")
+                                                _sdf['asymmetry'] = (_sdf[_left_col] - _sdf[_right_col]).abs()
+                                                _fig_asym = px.line(
+                                                    _sdf.reset_index(), x='index',
+                                                    y=['asymmetry'],
+                                                    title="Assimetria de Passada ao Longo do Tempo",
+                                                )
+                                                _fig_asym.update_layout(
+                                                    plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                                    font=dict(color='white'),
+                                                )
+                                                st.plotly_chart(_fig_asym, use_container_width=True)
+                                    except Exception:
+                                        pass
                         
                         if not efforts_df.empty:
                             if 'Banda' in efforts_df.columns:
@@ -7087,8 +7641,112 @@ Escolha um ou mais atletas para análise simultânea.
                                     "Ative este tipo de evento na sidebar ou verifique se o dispositivo "
                                     "suporta IMA (Inertial Movement Analysis)."
                                 )
+                        # ── Metabolic Power chart (FEATURE 3) ───────────────────
+                        st.markdown("---")
+                        _mp_vals_esf = [
+                            float(p['mp'])
+                            for p in sensor_points
+                            if p.get('mp') and float(p.get('mp', 0)) > 0
+                        ]
+                        if _mp_vals_esf:
+                            st.markdown("### ⚡ Potência Metabólica ao Longo do Tempo")
+                            _ts0_mp = float(sensor_points[0].get('ts') or 0)
+                            _mp_ts = [
+                                (float(p.get('ts') or 0) - _ts0_mp)
+                                for p in sensor_points
+                                if p.get('mp') and float(p.get('mp', 0)) > 0
+                            ]
+                            _fig_mp = go.Figure()
+                            _fig_mp.add_trace(go.Scatter(
+                                x=_mp_ts, y=_mp_vals_esf,
+                                mode='lines',
+                                name='MP (W/kg)',
+                                line=dict(color='#FF9800', width=1.5),
+                                hovertemplate='%{x:.0f}s — %{y:.1f} W/kg<extra></extra>',
+                            ))
+                            _fig_mp.add_hline(y=20, line=dict(color='#F44336', dash='dash'),
+                                              annotation_text='20 W/kg', annotation_font=dict(color='#F44336', size=9))
+                            _fig_mp.add_hline(y=25, line=dict(color='#9C27B0', dash='dash'),
+                                              annotation_text='25 W/kg', annotation_font=dict(color='#9C27B0', size=9))
+                            _fig_mp.update_layout(
+                                plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                font=dict(color='white'),
+                                xaxis=dict(title='Tempo (s)', gridcolor='#333'),
+                                yaxis=dict(title='MP (W/kg)', gridcolor='#333'),
+                                height=320,
+                            )
+                            st.plotly_chart(_fig_mp, use_container_width=True)
+                            _mp_above20 = sum(1 for v in _mp_vals_esf if v > 20) / max(1, len(_mp_vals_esf)) * 100
+                            _mp_above25_s = sum(1 for v in _mp_vals_esf if v > 25) * 0.1
+                            _mc1, _mc2, _mc3, _mc4 = st.columns(4)
+                            _mc1.metric("MP Médio (W/kg)", f"{float(np.mean(_mp_vals_esf)):.1f}")
+                            _mc2.metric("MP Máx (W/kg)", f"{float(np.max(_mp_vals_esf)):.1f}")
+                            _mc3.metric("MP > 20 W/kg (%)", f"{_mp_above20:.1f}%")
+                            _mc4.metric("Tempo > 25 W/kg (s)", f"{_mp_above25_s:.0f}s")
+
                 else:
                     st.info("Dados de sensor não disponíveis")
+
+                # ── FEATURE 10: Exportação em Lote (Async Export) ────────────
+                st.markdown("---")
+                with st.expander("📦 Exportação em Lote (sessões longas)", expanded=False):
+                    st.info(
+                        "Para sessões > 90 min, use exportação assíncrona para evitar timeout. "
+                        "A API Catapult processará o arquivo em background."
+                    )
+                    _exp_api = st.session_state.get('api')
+                    _exp_act_id = st.session_state.get('activity_id')
+
+                    if _exp_api and _exp_act_id:
+                        if st.button("📤 Solicitar exportação", key="btn_submit_export"):
+                            try:
+                                _exp_payload = {
+                                    "activity_id": _exp_act_id,
+                                    "format": "csv",
+                                    "parameters": ["ts", "v", "a", "hr", "pl", "mp"],
+                                }
+                                _exp_resp = _exp_api.submit_export(_exp_payload)
+                                if _exp_resp:
+                                    _job_id = (
+                                        _exp_resp.get('id') or
+                                        _exp_resp.get('job_id') or
+                                        str(_exp_resp)
+                                    )
+                                    st.session_state['export_job_id'] = _job_id
+                                    st.success(f"Job submetido! ID: {_job_id}")
+                                else:
+                                    st.warning("Nenhuma resposta do servidor de exportação.")
+                            except Exception as _ee:
+                                st.error(f"Erro: {_ee}")
+
+                        _job_id = st.session_state.get('export_job_id')
+                        if _job_id:
+                            st.caption(f"Job ID: `{_job_id}`")
+                            if st.button("🔄 Verificar status", key="btn_check_export"):
+                                try:
+                                    _status_resp = _exp_api.get_export_status(_job_id)
+                                    if _status_resp:
+                                        _status = (_status_resp.get('status') or
+                                                   _status_resp.get('state', 'DESCONHECIDO'))
+                                        st.info(f"Status: **{_status}**")
+                                        if str(_status).upper() in ('COMPLETE', 'COMPLETED', 'DONE'):
+                                            if st.button("⬇️ Download", key="btn_dl_export"):
+                                                try:
+                                                    _dl = _exp_api.download_export(_job_id)
+                                                    if _dl:
+                                                        st.download_button(
+                                                            "📥 Baixar arquivo exportado",
+                                                            _dl,
+                                                            file_name=f"export_{_job_id}.csv",
+                                                        )
+                                                except Exception as _de:
+                                                    st.error(f"Erro no download: {_de}")
+                                    else:
+                                        st.warning("Sem resposta de status.")
+                                except Exception as _se:
+                                    st.error(f"Erro ao verificar status: {_se}")
+                    else:
+                        st.info("Carregue dados de uma atividade primeiro.")
 
                 # ── FEATURE 8: PDF Export ────────────────────────────────────
                 st.markdown("---")
@@ -7316,6 +7974,31 @@ Escolha um ou mais atletas para análise simultânea.
                             )
                         else:
                             st.info("Dados de aceleração insuficientes para este atleta/período.")
+
+                        # ── FEATURE 3: Potência Metabólica na aba Carga Neuromuscular ──
+                        st.markdown("---")
+                        st.markdown("### ⚡ Potência Metabólica (W/kg)")
+                        _nm_mp_pts = _nm_sp
+                        _nm_mp_vals = [
+                            float(p['mp']) for p in _nm_mp_pts
+                            if p.get('mp') and float(p.get('mp', 0)) > 0
+                        ]
+                        if _nm_mp_vals:
+                            _nm_mp_mean = float(np.mean(_nm_mp_vals))
+                            _nm_mp_max  = float(np.max(_nm_mp_vals))
+                            _nm_mp_pct20 = sum(1 for v in _nm_mp_vals if v > 20) / max(1, len(_nm_mp_vals)) * 100
+                            _nm_mp_t25   = sum(1 for v in _nm_mp_vals if v > 25) * 0.1
+                            _mc1, _mc2, _mc3, _mc4 = st.columns(4)
+                            _mc1.metric("MP Médio (W/kg)", f"{_nm_mp_mean:.1f}")
+                            _mc2.metric("MP Máx (W/kg)", f"{_nm_mp_max:.1f}")
+                            _mc3.metric("MP > 20 W/kg (%)", f"{_nm_mp_pct20:.1f}%")
+                            _mc4.metric("Tempo > 25 W/kg (s)", f"{_nm_mp_t25:.0f}s")
+                        else:
+                            st.info(
+                                "Dados de potência metabólica (mp) não disponíveis. "
+                                "Verifique se o dispositivo suporta este parâmetro."
+                            )
+
                 else:
                     st.info("Carregue os dados de um atleta para analisar a carga neuromuscular.")
 
@@ -7381,10 +8064,40 @@ Escolha um ou mais atletas para análise simultânea.
                         if not _av_dados:
                             st.warning("Dados de aceleração não disponíveis para os atletas selecionados.")
                         else:
+                            # ── FEATURE 3: toggle para velocidade bruta (rv) ─
+                            _av_use_rv = st.toggle(
+                                "Usar velocidade bruta (rv) para F-V profiling",
+                                value=False, key="av_use_rv",
+                                help="rv = velocidade bruta do sensor (mais preciso para F-V). "
+                                     "Requer que o dispositivo suporte o parâmetro rv.",
+                            )
+                            if _av_use_rv:
+                                st.caption("📍 **Perfil F-V (velocidade bruta — mais preciso)**")
+                                # Recalcula usando rv ao invés de v
+                                for _av_atl in list(_av_dados.keys()):
+                                    if _av_per == _AV_TODOS:
+                                        _spts_rv = []
+                                        for _pv2 in dados_sensor_por_atleta_por_periodo.values():
+                                            _spts_rv += _pv2.get(_av_atl, [])
+                                    else:
+                                        _spts_rv = dados_sensor_por_atleta_por_periodo.get(_av_per, {}).get(_av_atl, [])
+                                    _vels_rv, _accs_rv = [], []
+                                    for _p in _spts_rv:
+                                        _rv = _p.get('rv')
+                                        _a = _p.get('a')
+                                        if _rv is not None and _a is not None:
+                                            _vels_rv.append(float(_rv) * 3.6)
+                                            _accs_rv.append(float(_a))
+                                    if _vels_rv:
+                                        _av_dados[_av_atl]['vel'] = np.array(_vels_rv)
+                                        _av_dados[_av_atl]['acc'] = np.array(_accs_rv)
+
                             # ════════════════════════════════════════════════
                             # SEÇÃO 1 — SCATTER ACC × VEL (multi-atleta)
                             # ════════════════════════════════════════════════
-                            st.markdown("### 📍 Scatter Aceleração × Velocidade")
+                            _sc_title = ("📍 Perfil F-V (velocidade bruta — mais preciso)"
+                                         if _av_use_rv else "📍 Scatter Aceleração × Velocidade")
+                            st.markdown(f"### {_sc_title}")
                             _fig_sc = go.Figure()
 
                             for _av_atl, _d in _av_dados.items():
@@ -7693,10 +8406,26 @@ Escolha um ou mais atletas para análise simultânea.
                     if resultados_por_periodo.get(_td_periodo_sel):
                         _df_td = pd.DataFrame(resultados_por_periodo[_td_periodo_sel])
 
-                        # Calcula %Vmax relativo ao máximo do grupo
+                        # ── Usar dados OpenField pré-computados (FEATURE 2) ─────
+                        _use_of = st.toggle(
+                            "Usar dados OpenField (pré-computados)",
+                            value=False,
+                            key="td_use_openfield",
+                            help="Compara os valores calculados localmente com os pré-computados pelo OpenField Cloud.",
+                        )
+
+                        # Calcula %Vmax relativo ao histórico individual ou máximo do grupo
                         if 'Velocidade Máx (km/h)' in _df_td.columns:
+                            _hist_vmax_dict = st.session_state.get('hist_vmax', {})
                             _vmax_grupo = _df_td['Velocidade Máx (km/h)'].max()
-                            _df_td['%Vmax'] = (_df_td['Velocidade Máx (km/h)'] / _vmax_grupo * 100).round(1) if _vmax_grupo > 0 else 0
+
+                            def _calc_pct_vmax(row):
+                                _ath_hist_ms = _hist_vmax_dict.get(row.get('Atleta', ''), 0)
+                                _ath_hist_kmh = _ath_hist_ms * 3.6 if _ath_hist_ms else 0
+                                _denom = max(_ath_hist_kmh, row.get('Velocidade Máx (km/h)', 0), _vmax_grupo, 0.001)
+                                return round(row.get('Velocidade Máx (km/h)', 0) / _denom * 100, 1)
+
+                            _df_td['%Vmax'] = _df_td.apply(_calc_pct_vmax, axis=1)
 
                         # Colunas exibidas na tabela (ordem igual ao Power BI)
                         _TD_COLS = [c for c in [
@@ -7755,6 +8484,56 @@ Escolha um ou mais atletas para análise simultânea.
                             .format(_td_fmt, na_rep='—')
                         )
                         st.dataframe(_styled_td, use_container_width=True, hide_index=True)
+
+                        # ── OpenField vs Calculado Localmente (FEATURE 2) ─────────
+                        if _use_of:
+                            st.markdown("---")
+                            st.markdown("### 🔬 OpenField vs Calculado Localmente")
+                            _pos_dados_td = dados_posicao_por_periodo.get(_td_periodo_sel, {})
+                            _of_comparisons = []
+                            for _td_row in resultados_por_periodo.get(_td_periodo_sel, []):
+                                _td_atl = _td_row.get('Atleta', '')
+                                _of_sum = _pos_dados_td.get(_td_atl, {}).get('openfield_summary')
+                                if _of_sum and isinstance(_of_sum, (dict, list)):
+                                    _of_data = _of_sum if isinstance(_of_sum, dict) else (_of_sum[0] if _of_sum else {})
+                                    _of_params = _of_data.get('parameters', _of_data)
+                                    _of_dist = float(_of_params.get('total_distance', 0) or 0)
+                                    _loc_dist = _td_row.get('Distância (m)', 0)
+                                    _of_vmax = float(_of_params.get('max_velocity', 0) or 0) * 3.6
+                                    _loc_vmax = _td_row.get('Velocidade Máx (km/h)', 0)
+                                    _of_comparisons.append({
+                                        'Atleta': _td_atl,
+                                        'Dist. OpenField (m)': round(_of_dist, 0),
+                                        'Dist. Local (m)': _loc_dist,
+                                        'Δ Distância (m)': round(_of_dist - _loc_dist, 0),
+                                        'Vmax OpenField (km/h)': round(_of_vmax, 1),
+                                        'Vmax Local (km/h)': _loc_vmax,
+                                        'Δ Vmax (km/h)': round(_of_vmax - _loc_vmax, 1),
+                                    })
+                            if _of_comparisons:
+                                _df_of_cmp = pd.DataFrame(_of_comparisons)
+
+                                def _color_delta(val):
+                                    try:
+                                        v = float(val)
+                                        if abs(v) < 5:
+                                            return 'color:#4CAF50'
+                                        elif abs(v) < 20:
+                                            return 'color:#FF9800'
+                                        return 'color:#F44336'
+                                    except Exception:
+                                        return ''
+
+                                _delta_cols = ['Δ Distância (m)', 'Δ Vmax (km/h)']
+                                _of_styled = _df_of_cmp.style.applymap(
+                                    _color_delta, subset=_delta_cols
+                                )
+                                st.dataframe(_of_styled, use_container_width=True, hide_index=True)
+                            else:
+                                st.info(
+                                    "Dados OpenField não disponíveis. O endpoint `/activities/{id}/athletes/{id}/summary` "
+                                    "pode não estar habilitado na licença desta conta."
+                                )
 
                         # ── Valores Médios do Grupo ──────────────────────────────
                         st.markdown("---")
@@ -8008,7 +8787,7 @@ Escolha um ou mais atletas para análise simultânea.
                                 use_container_width=True, hide_index=True
                             )
 
-                            # ── Item 16: Consulta /stats por posição (longitudinal) ──
+                            # ── FEATURE 11: Consulta /stats por posição (longitudinal) ──
                             st.markdown("---")
                             with st.expander("📊 Perfil Longitudinal por Posição via /stats (multi-sessão)", expanded=False):
                                 st.caption(
@@ -8016,29 +8795,120 @@ Escolha um ou mais atletas para análise simultânea.
                                     "por posição em múltiplas sessões. Requer dados históricos na plataforma."
                                 )
                                 _stats_api = st.session_state.get('api')
+
+                                # Date range filter
+                                _dr_c1, _dr_c2, _dr_c3 = st.columns([2, 2, 1])
+                                with _dr_c1:
+                                    _stats_start = st.date_input(
+                                        "Data inicial:", key="stats_pos_start_date",
+                                        value=None,
+                                    )
+                                with _dr_c2:
+                                    _stats_end = st.date_input(
+                                        "Data final:", key="stats_pos_end_date",
+                                        value=None,
+                                    )
+                                with _dr_c3:
+                                    _stats_grp_week = st.checkbox(
+                                        "Agrupar por semana", value=False, key="stats_pos_byweek"
+                                    )
+
                                 if _stats_api and st.button("🔄 Consultar /stats por posição", key="btn_stats_pos"):
                                     with st.spinner("Consultando /stats..."):
                                         _stats_payload = {
-                                            "group_by": ["position"],
+                                            "group_by": (
+                                                ["position", "week"] if _stats_grp_week else ["position"]
+                                            ),
                                             "parameters": [
                                                 "total_distance", "hsr_distance", "sprint_distance",
                                                 "player_load", "max_velocity",
                                             ],
                                             "source": "cached_stats",
                                         }
+                                        if _stats_start:
+                                            import time as _tm_s
+                                            _stats_payload["start_time"] = int(
+                                                _tm_s.mktime(_stats_start.timetuple())
+                                            )
+                                        if _stats_end:
+                                            import time as _tm_e
+                                            _stats_payload["end_time"] = int(
+                                                _tm_e.mktime(_stats_end.timetuple())
+                                            )
                                         _stats_resp = _stats_api.get_stats(_stats_payload)
-                                    if _stats_resp:
-                                        try:
-                                            _sd = _stats_resp if isinstance(_stats_resp, list) else _stats_resp.get('data', [])
-                                            if _sd:
-                                                _df_stats = pd.DataFrame(_sd)
-                                                st.dataframe(_df_stats, use_container_width=True, hide_index=True)
-                                            else:
-                                                st.info("Nenhum dado retornado pelo /stats.")
-                                        except Exception as _e:
-                                            st.error(f"Erro ao processar /stats: {_e}")
-                                    else:
-                                        st.warning("⚠️ Endpoint /stats não respondeu. Verifique permissões da API ou se há dados históricos suficientes.")
+                                        st.session_state['stats_pos_resp'] = _stats_resp
+
+                                _stats_resp = st.session_state.get('stats_pos_resp')
+                                if _stats_resp:
+                                    try:
+                                        _sd = _stats_resp if isinstance(_stats_resp, list) else _stats_resp.get('data', [])
+                                        if _sd:
+                                            _df_stats = pd.DataFrame(_sd)
+                                            st.dataframe(_df_stats, use_container_width=True, hide_index=True)
+
+                                            # Radar chart por posição dos dados históricos
+                                            st.markdown("#### 🕸️ Radar por Posição (Dados Históricos)")
+                                            _stats_pos_col = next(
+                                                (c for c in _df_stats.columns
+                                                 if 'position' in c.lower() or 'pos' == c.lower()), None
+                                            )
+                                            if _stats_pos_col:
+                                                _radar_hist_metrics = [
+                                                    c for c in _df_stats.columns
+                                                    if c != _stats_pos_col and pd.api.types.is_numeric_dtype(_df_stats[c])
+                                                ]
+                                                if len(_radar_hist_metrics) >= 3:
+                                                    _fig_radar_hist = go.Figure()
+                                                    _df_stats_norm = _df_stats.copy()
+                                                    for _rm in _radar_hist_metrics:
+                                                        _col_max = _df_stats_norm[_rm].max()
+                                                        if _col_max > 0:
+                                                            _df_stats_norm[_rm] = (_df_stats_norm[_rm] / _col_max * 100)
+                                                    for _, _prow in _df_stats_norm.iterrows():
+                                                        _r_vals = [float(_prow.get(_rm, 0) or 0) for _rm in _radar_hist_metrics]
+                                                        _fig_radar_hist.add_trace(go.Scatterpolar(
+                                                            r=_r_vals + [_r_vals[0]],
+                                                            theta=_radar_hist_metrics + [_radar_hist_metrics[0]],
+                                                            fill='toself',
+                                                            name=str(_prow.get(_stats_pos_col, '—')),
+                                                            opacity=0.7,
+                                                        ))
+                                                    _fig_radar_hist.update_layout(
+                                                        polar=dict(
+                                                            radialaxis=dict(visible=True, range=[0, 105]),
+                                                            bgcolor='#0e1117',
+                                                        ),
+                                                        paper_bgcolor='#0e1117',
+                                                        font=dict(color='white'),
+                                                        height=420,
+                                                        legend=dict(font=dict(color='white')),
+                                                    )
+                                                    st.plotly_chart(_fig_radar_hist, use_container_width=True)
+
+                                            # Week-over-week evolution if grouped by week
+                                            if _stats_grp_week and 'week' in ' '.join(_df_stats.columns).lower():
+                                                _wk_col = next(
+                                                    (c for c in _df_stats.columns if 'week' in c.lower()), None
+                                                )
+                                                if _wk_col and _stats_pos_col and 'total_distance' in _df_stats.columns:
+                                                    st.markdown("#### 📈 Evolução Semanal por Posição")
+                                                    _fig_wk = px.line(
+                                                        _df_stats, x=_wk_col, y='total_distance',
+                                                        color=_stats_pos_col,
+                                                        title="Distância Total por Semana e Posição",
+                                                        markers=True,
+                                                    )
+                                                    _fig_wk.update_layout(
+                                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                                        font=dict(color='white'),
+                                                    )
+                                                    st.plotly_chart(_fig_wk, use_container_width=True)
+                                        else:
+                                            st.info("Nenhum dado retornado pelo /stats.")
+                                    except Exception as _e:
+                                        st.error(f"Erro ao processar /stats: {_e}")
+                                else:
+                                    st.warning("⚠️ Endpoint /stats não respondeu. Verifique permissões da API ou se há dados históricos suficientes.")
                     else:
                         st.info("Nenhum dado disponível para este período.")
                 else:
@@ -10310,6 +11180,165 @@ Escolha um ou mais atletas para análise simultânea.
                         "dados no OpenField Cloud agora. O endpoint `/live` só retorna dados "
                         "durante sessões ativas."
                     )
+
+            # ==================== ABA 13: EVOLUÇÃO & ACWR ====================
+            with abas[12]:
+                st.subheader("📅 Evolução & ACWR")
+                st.markdown(
+                    "Carregue o histórico semanal via `/stats` para calcular ACWR e "
+                    "visualizar a periodização das cargas."
+                )
+
+                _acwr_api = st.session_state.get('api')
+
+                # ── Seção 1: Histórico via /stats ─────────────────────────────
+                st.markdown("### 📊 Histórico Semanal (POST /stats)")
+                _acwr_col1, _acwr_col2 = st.columns([2, 1])
+                with _acwr_col2:
+                    _acwr_src = st.selectbox(
+                        "Fonte dos dados:",
+                        ["cached_stats", "raw"],
+                        key="acwr_source",
+                    )
+                with _acwr_col1:
+                    if st.button("🔄 Carregar histórico via /stats", key="btn_acwr_load"):
+                        if _acwr_api:
+                            try:
+                                _acwr_payload = {
+                                    "group_by": ["athlete", "week"],
+                                    "parameters": [
+                                        "player_load", "total_distance",
+                                        "hsr_distance", "sprint_distance", "max_velocity",
+                                    ],
+                                    "source": _acwr_src,
+                                }
+                                _acwr_raw = _acwr_api.get_stats(_acwr_payload)
+                                st.session_state['acwr_raw'] = _acwr_raw
+                            except Exception as _e:
+                                st.error(f"Erro ao carregar histórico: {_e}")
+                        else:
+                            st.warning("API não disponível.")
+
+                _acwr_raw = st.session_state.get('acwr_raw')
+                if _acwr_raw:
+                    try:
+                        # Parsear resposta em DataFrame
+                        _acwr_rows = []
+                        _raw_list = _acwr_raw if isinstance(_acwr_raw, list) else _acwr_raw.get('data', [])
+                        for _item in (_raw_list or []):
+                            _ath = _item.get('athlete') or _item.get('athlete_name', '')
+                            _week = _item.get('week') or _item.get('period', '')
+                            _params = _item.get('parameters', _item)
+                            _acwr_rows.append({
+                                'Atleta': str(_ath),
+                                'Semana': str(_week),
+                                'PlayerLoad': float(_params.get('player_load', 0) or 0),
+                                'Distância (m)': float(_params.get('total_distance', 0) or 0),
+                                'HSR (m)': float(_params.get('hsr_distance', 0) or 0),
+                                'Sprint (m)': float(_params.get('sprint_distance', 0) or 0),
+                                'Vmax (km/h)': float(_params.get('max_velocity', 0) or 0) * 3.6,
+                            })
+                        if _acwr_rows:
+                            _df_acwr = pd.DataFrame(_acwr_rows).sort_values(['Atleta', 'Semana'])
+                            st.dataframe(_df_acwr, use_container_width=True, hide_index=True)
+
+                            # ACWR por atleta
+                            st.markdown("### ⚡ ACWR por Atleta")
+                            _acwr_results = []
+                            for _ath_name, _gdf in _df_acwr.groupby('Atleta'):
+                                _gdf = _gdf.sort_values('Semana')
+                                _loads = _gdf['PlayerLoad'].tolist()
+                                if len(_loads) >= 4:
+                                    _acute = _loads[-1]
+                                    _chronic = float(np.mean(_loads[-4:-1])) if len(_loads) >= 4 else _acute
+                                    _acwr_val = _acute / _chronic if _chronic > 0 else 0
+                                    _zone = (
+                                        "🟢 Seguro" if 0.8 <= _acwr_val <= 1.3 else
+                                        "🟡 Atenção" if (0.5 <= _acwr_val < 0.8) or (1.3 < _acwr_val <= 1.5) else
+                                        "🔴 Risco"
+                                    )
+                                    _acwr_results.append({
+                                        'Atleta': _ath_name,
+                                        'ACWR': round(_acwr_val, 2),
+                                        'Carga Aguda': round(_acute, 0),
+                                        'Carga Crônica': round(_chronic, 0),
+                                        'Status': _zone,
+                                    })
+                            if _acwr_results:
+                                _df_acwr_res = pd.DataFrame(_acwr_results)
+                                st.dataframe(_df_acwr_res, use_container_width=True, hide_index=True)
+
+                            # Gráfico de linha: PlayerLoad semanal por atleta
+                            st.markdown("### 📈 PlayerLoad Semanal")
+                            _fig_acwr = px.line(
+                                _df_acwr, x='Semana', y='PlayerLoad',
+                                color='Atleta', markers=True,
+                                title="PlayerLoad Semanal por Atleta",
+                            )
+                            _fig_acwr.update_layout(
+                                plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                font=dict(color='white'),
+                            )
+                            st.plotly_chart(_fig_acwr, use_container_width=True)
+                        else:
+                            st.info("Nenhum dado retornado pelo /stats.")
+                    except Exception as _ep:
+                        st.error(f"Erro ao processar dados: {_ep}")
+
+                # ── Seção 2: Comparação longitudinal de atividades ────────────
+                st.markdown("---")
+                st.markdown("### 🔄 Comparação de Atividades (Longitudinal)")
+
+                _df_acts = st.session_state.get('df_activities')
+                if _df_acts is not None and not _df_acts.empty:
+                    _act_opts = _df_acts['nome'].tolist() if 'nome' in _df_acts.columns else []
+                    _sel_acts = st.multiselect(
+                        "Selecione atividades para comparar (máx. 10):",
+                        _act_opts,
+                        max_selections=10,
+                        key="longit_acts_sel",
+                    )
+
+                    if _sel_acts and st.button("🔄 Comparar atividades", key="btn_longit_compare"):
+                        if _acwr_api:
+                            try:
+                                _sel_ids = _df_acts[_df_acts['nome'].isin(_sel_acts)]['id'].tolist()
+                                _longit_payload = {
+                                    "group_by": ["athlete"],
+                                    "parameters": [
+                                        "player_load", "total_distance", "max_velocity",
+                                        "hsr_distance", "sprint_distance",
+                                    ],
+                                    "activity_ids": _sel_ids,
+                                    "source": "cached_stats",
+                                }
+                                _longit_raw = _acwr_api.get_stats(_longit_payload)
+                                st.session_state['longit_compare_raw'] = _longit_raw
+                                st.session_state['longit_compare_acts'] = _sel_acts
+                            except Exception as _el:
+                                st.error(f"Erro: {_el}")
+
+                    _longit_raw = st.session_state.get('longit_compare_raw')
+                    if _longit_raw:
+                        try:
+                            _longit_list = _longit_raw if isinstance(_longit_raw, list) else _longit_raw.get('data', [])
+                            _longit_rows = []
+                            for _li in (_longit_list or []):
+                                _la = _li.get('athlete') or _li.get('athlete_name', '')
+                                _lp = _li.get('parameters', _li)
+                                _longit_rows.append({
+                                    'Atleta': str(_la),
+                                    'Distância (m)': float(_lp.get('total_distance', 0) or 0),
+                                    'PlayerLoad': float(_lp.get('player_load', 0) or 0),
+                                    'Vmax (km/h)': float(_lp.get('max_velocity', 0) or 0) * 3.6,
+                                })
+                            if _longit_rows:
+                                _df_longit = pd.DataFrame(_longit_rows)
+                                st.dataframe(_df_longit, use_container_width=True, hide_index=True)
+                        except Exception as _elp:
+                            st.error(f"Erro ao processar: {_elp}")
+                else:
+                    st.info("Carregue atividades na sidebar para usar a comparação longitudinal.")
 
         else:
             st.warning("Nenhum dado encontrado")
