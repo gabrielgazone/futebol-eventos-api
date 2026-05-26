@@ -4219,7 +4219,44 @@ Escolha um ou mais atletas para análise simultânea.
                 
                 if 'atletas_filtrados' in st.session_state and not st.session_state.atletas_filtrados.empty:
                     st.subheader("🏃 Selecionar Atletas")
-                    atletas_sel = st.multiselect("Selecione os atletas para análise:", st.session_state.atletas_filtrados['nome'].tolist())
+
+                    # Search box
+                    _busca_atl = st.text_input("🔍 Buscar atleta:", placeholder="Nome ou camisa...", key="busca_atleta")
+
+                    # Position preset buttons
+                    if not st.session_state.atletas_filtrados.empty and 'posicao' in st.session_state.atletas_filtrados.columns:
+                        _posicoes_disponiveis = sorted(
+                            st.session_state.atletas_filtrados['posicao'].dropna().unique().tolist()
+                        )
+                        if _posicoes_disponiveis:
+                            _pos_cols = st.columns(min(len(_posicoes_disponiveis) + 1, 4))
+                            with _pos_cols[0]:
+                                if st.button("👥 Todos", key="preset_todos", use_container_width=True):
+                                    st.session_state['_preset_posicao'] = None
+                            for _pi, _pn in enumerate(_posicoes_disponiveis[:3]):
+                                with _pos_cols[_pi + 1]:
+                                    if st.button(_pn[:8], key=f"preset_{_pn}", use_container_width=True):
+                                        st.session_state['_preset_posicao'] = _pn
+
+                    # Apply filters
+                    _preset_pos = st.session_state.get('_preset_posicao')
+                    _df_atl_disp = st.session_state.atletas_filtrados.copy()
+                    if _busca_atl:
+                        _df_atl_disp = _df_atl_disp[
+                            _df_atl_disp['nome'].str.contains(_busca_atl, case=False, na=False) |
+                            _df_atl_disp['camisa'].astype(str).str.contains(_busca_atl, case=False, na=False)
+                        ]
+                    if _preset_pos:
+                        _df_atl_disp = _df_atl_disp[_df_atl_disp['posicao'] == _preset_pos]
+
+                    atletas_disponiveis_sidebar = _df_atl_disp['nome'].tolist()
+
+                    atletas_sel = st.multiselect(
+                        "Atletas selecionados:",
+                        options=atletas_disponiveis_sidebar,
+                        default=st.session_state.get('atletas_sel', atletas_disponiveis_sidebar[:min(5, len(atletas_disponiveis_sidebar))]),
+                        key="atletas_selecionados"
+                    )
                     st.session_state.atletas_sel = atletas_sel
 
         # ── Parâmetros de análise de esforço ─────────────────────────
@@ -4667,6 +4704,24 @@ Escolha um ou mais atletas para análise simultânea.
             if _res_combinado:
                 resultados_por_periodo[_CHAVE_COMBINADO] = _res_combinado
 
+        # ── Paleta global persistente por atleta ──────────────────────────────
+        _GLOBAL_PALETTE = [
+            '#2196F3','#4CAF50','#FF9800','#E91E63','#9C27B0',
+            '#00BCD4','#F44336','#FFEB3B','#26A69A','#78909C',
+            '#AB47BC','#EC407A','#66BB6A','#FFA726','#42A5F5',
+        ]
+        if 'athlete_colors' not in st.session_state:
+            st.session_state['athlete_colors'] = {}
+        _all_loaded_athletes = sorted({
+            r.get('Atleta', '')
+            for _p_res in resultados_por_periodo.values()
+            for r in _p_res
+            if r.get('Atleta')
+        })
+        for _i, _aname in enumerate(_all_loaded_athletes):
+            if _aname not in st.session_state['athlete_colors']:
+                st.session_state['athlete_colors'][_aname] = _GLOBAL_PALETTE[_i % len(_GLOBAL_PALETTE)]
+
         # ══════════════════════════════════════════════════════════════════
         # COACH AI — painel de insights pró-ativos na sidebar
         # ══════════════════════════════════════════════════════════════════
@@ -4784,6 +4839,49 @@ Escolha um ou mais atletas para análise simultânea.
                     st.caption("Carregue dados GPS para ver insights automáticos.")
                 st.caption("_Análise automática baseada nos dados carregados._")
 
+        # ── Onboarding guiado — primeiro uso ─────────────────────────────────────
+        if 'onboarding_done' not in st.session_state:
+            st.session_state['onboarding_done'] = False
+        if 'onboarding_step' not in st.session_state:
+            st.session_state['onboarding_step'] = 1
+
+        if not st.session_state['onboarding_done'] and 'api' not in st.session_state:
+            with st.container():
+                _ob_step = st.session_state['onboarding_step']
+
+                _ob_steps = {
+                    1: ("🔐 Token de Acesso", "Insira seu token Catapult Connect na sidebar à esquerda. O token é gerado em **Settings → API** na sua conta."),
+                    2: ("🔄 Carregar Dados", "Clique em **🔄 Carregar Dados** na sidebar. Aguarde o carregamento de equipes, atletas e atividades."),
+                    3: ("📅 Selecionar Sessão", "Escolha a **atividade** (sessão de treino ou jogo) e os **períodos** que deseja analisar."),
+                    4: ("👥 Selecionar Atletas", "Busque atletas pelo nome ou use os **presets de posição**. Clique em ✅ Carregar Dados da Sessão."),
+                }
+
+                _ob_title, _ob_text = _ob_steps.get(_ob_step, ("✅ Pronto!", "Seu dashboard está configurado."))
+
+                st.markdown(
+                    f"<div style='background:linear-gradient(135deg,#1a3a5c,#0d2137);border:1px solid #2d5a8e;"
+                    f"border-radius:12px;padding:20px 24px;margin-bottom:16px'>"
+                    f"<div style='display:flex;justify-content:space-between;align-items:center'>"
+                    f"<div>"
+                    f"<div style='color:#90CAF9;font-size:11px;font-weight:600;letter-spacing:1px'>PASSO {_ob_step}/4</div>"
+                    f"<div style='color:white;font-size:18px;font-weight:700;margin:4px 0'>{_ob_title}</div>"
+                    f"<div style='color:#bcd;font-size:13px'>{_ob_text}</div>"
+                    f"</div>"
+                    f"<div style='display:flex;gap:6px;align-items:center'>"
+                    + "".join(f"<div style='width:8px;height:8px;border-radius:50%;background:{'#2196F3' if i+1==_ob_step else '#2d4a6a'}'></div>" for i in range(4))
+                    + f"</div></div></div>",
+                    unsafe_allow_html=True
+                )
+
+                _ob_col1, _ob_col2 = st.columns([1, 5])
+                with _ob_col1:
+                    if st.button("⏭️ Pular Tour", key="skip_onboarding", use_container_width=True):
+                        st.session_state['onboarding_done'] = True
+                        st.rerun()
+                # Auto-advance when API is connected
+                if _ob_step < 4 and 'df_activities' in st.session_state and not st.session_state.df_activities.empty:
+                    st.session_state['onboarding_step'] = min(_ob_step + 1, 4)
+
         if resultados_por_periodo:
             st.subheader("📊 Métricas Biométricas")
             col1, col2, col3, col4 = st.columns(4)
@@ -4800,7 +4898,7 @@ Escolha um ou mais atletas para análise simultânea.
                 for resultados in resultados_por_periodo.values():
                     for r in resultados:
                         total_pl += r.get('PlayerLoad', 0)
-                st.metric("⚡ PlayerLoad Total", f"{total_pl:,.0f}")
+                st.metric("⚡ PlayerLoad Total", f"{total_pl:,.0f}", help="Catapult PlayerLoad™: raiz quadrada da soma das acelerações ao quadrado nos 3 eixos (inercial)")
             with col4:
                 max_vel = 0
                 for resultados in resultados_por_periodo.values():
@@ -4810,22 +4908,105 @@ Escolha um ou mais atletas para análise simultânea.
             
             st.markdown("---")
             
-            abas = st.tabs([
-                "📈 Gráficos Comparativos",
-                "🗺️ Campo de Futebol",
-                "⏱️ Esforços ao Longo do Tempo",
-                "📊 Janelas Temporais Móveis",
-                "💪 Carga Neuromuscular",
-                "🏎️ Perfil Acc-Vel",
-                "📋 Tabela Descritiva",
-                "📊 Por Posição",
-                "🎬 História do Jogo",
-                "🔍 Exploração Livre",
-                "💬 Pergunte ao App",
+            _main_tabs = st.tabs([
+                "🏠 Resumo",
+                "🗺️ Campo & GPS",
+                "📈 Carga Física",
+                "🔬 Avançado",
+                "📊 Estatísticas",
                 "📡 Ao Vivo",
-                "📅 Evolução & ACWR",
             ])
-            
+
+            # ── Criar sub-tabs dentro de cada aba principal ────────────────────
+            with _main_tabs[1]:
+                _sub_campo = st.tabs(["🗺️ Campo de Futebol", "🎬 História do Jogo"])
+            with _main_tabs[2]:
+                _sub_carga = st.tabs(["⏱️ Esforços", "📊 Janelas Temporais", "💪 Neuromuscular", "🏎️ Acc-Vel"])
+            with _main_tabs[3]:
+                _sub_avancado = st.tabs(["🔍 Exploração Livre", "💬 Pergunte ao App", "📅 Evolução & ACWR"])
+            with _main_tabs[4]:
+                _sub_stats = st.tabs(["📈 Gráficos Comparativos", "📋 Tabela Descritiva", "📊 Por Posição"])
+
+            # Mapeamento: abas[N] aponta para o container correto na nova estrutura
+            abas = [
+                _sub_stats[0],    # 0: Gráficos Comparativos  → Estatísticas
+                _sub_campo[0],    # 1: Campo de Futebol        → Campo & GPS
+                _sub_carga[0],    # 2: Esforços                → Carga Física
+                _sub_carga[1],    # 3: Janelas Temporais       → Carga Física
+                _sub_carga[2],    # 4: Neuromuscular           → Carga Física
+                _sub_carga[3],    # 5: Acc-Vel                 → Carga Física
+                _sub_stats[1],    # 6: Tabela Descritiva       → Estatísticas
+                _sub_stats[2],    # 7: Por Posição             → Estatísticas
+                _sub_campo[1],    # 8: História do Jogo        → Campo & GPS
+                _sub_avancado[0], # 9: Exploração Livre        → Avançado
+                _sub_avancado[1], # 10: Pergunte ao App        → Avançado
+                _main_tabs[5],    # 11: Ao Vivo                → Ao Vivo (tab principal)
+                _sub_avancado[2], # 12: Evolução & ACWR        → Avançado
+            ]
+
+            # ==================== ABA RESUMO: OVERVIEW DASHBOARD ====================
+            with _main_tabs[0]:
+                st.markdown("## 📊 Resumo da Sessão")
+
+                if resultados_por_periodo:
+                    _ov_rows = []
+                    for _p, _rs in resultados_por_periodo.items():
+                        if _p == _CHAVE_COMBINADO:
+                            continue
+                        for _r in _rs:
+                            _row = dict(_r)
+                            _row['Período'] = _p
+                            _ov_rows.append(_row)
+
+                    if _ov_rows:
+                        _df_ov = pd.DataFrame(_ov_rows)
+
+                        _ov_c1, _ov_c2, _ov_c3, _ov_c4, _ov_c5 = st.columns(5)
+                        _ov_c1.metric("👥 Atletas", len(_df_ov['Atleta'].unique()) if 'Atleta' in _df_ov.columns else 0)
+                        _ov_c2.metric("📏 Dist. Média", f"{_df_ov['Distância (m)'].mean():.0f} m" if 'Distância (m)' in _df_ov.columns else "—")
+                        _ov_c3.metric("💨 Vmax do Dia", f"{_df_ov['Velocidade Máx (km/h)'].max():.1f} km/h" if 'Velocidade Máx (km/h)' in _df_ov.columns else "—")
+                        _ov_c4.metric("⚡ PL Médio", f"{_df_ov['PlayerLoad'].mean():.0f}" if 'PlayerLoad' in _df_ov.columns else "—", help="Catapult PlayerLoad™: raiz quadrada da soma das acelerações ao quadrado nos 3 eixos (inercial)")
+                        _hsr_col = 'Dist. > 19 km/h (m)'
+                        _ov_c5.metric("🏃 HSR Médio", f"{_df_ov[_hsr_col].mean():.0f} m" if _hsr_col in _df_ov.columns else "—", help="High Speed Running: distância percorrida acima de 19 km/h (ou limiar personalizado do atleta)")
+
+                        st.markdown("---")
+
+                        if 'Atleta' in _df_ov.columns and 'Distância (m)' in _df_ov.columns:
+                            _fig_ov = go.Figure()
+                            _fig_ov.add_trace(go.Bar(
+                                x=_df_ov['Atleta'], y=_df_ov['Distância (m)'],
+                                marker_color=[st.session_state.get('athlete_colors', {}).get(a, '#2196F3') for a in _df_ov['Atleta']],
+                                text=_df_ov['Distância (m)'].round(0), textposition='outside',
+                                hovertemplate='%{x}<br>Distância: %{y:.0f} m<extra></extra>',
+                            ))
+                            _fig_ov.update_layout(
+                                title=dict(text='Distância Total por Atleta', font=dict(color='white', size=14)),
+                                plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                font=dict(color='white'), xaxis=dict(gridcolor='#333', tickangle=-30),
+                                yaxis=dict(gridcolor='#333'), height=320, margin=dict(t=45,b=80,l=10,r=10),
+                                showlegend=False,
+                            )
+                            st.plotly_chart(_fig_ov, use_container_width=True)
+
+                        _ov_display_cols = [c for c in ['Atleta','Posição','Distância (m)','Velocidade Máx (km/h)',
+                                            'Sprints (>24 km/h)','PlayerLoad','RHIE Blocos'] if c in _df_ov.columns]
+                        if _ov_display_cols:
+                            _ov_sort_col = 'Distância (m)' if 'Distância (m)' in _ov_display_cols else _ov_display_cols[0]
+                            st.dataframe(
+                                _df_ov[_ov_display_cols].sort_values(_ov_sort_col, ascending=False).reset_index(drop=True),
+                                use_container_width=True, hide_index=True
+                            )
+                else:
+                    st.info("⚽ Carregue uma sessão na sidebar para visualizar o resumo.")
+                    st.markdown("""
+**Como começar:**
+1. 🔐 Insira seu token Catapult na sidebar
+2. 🔄 Clique em "Carregar Dados"
+3. 📅 Selecione a atividade
+4. 👥 Escolha os atletas
+5. ✅ Clique em "Carregar Dados da Sessão"
+                    """)
+
             # ==================== ABA 1: GRÁFICOS COMPARATIVOS ====================
             with abas[0]:
                 st.subheader("📈 Gráficos Comparativos")
@@ -4934,7 +5115,43 @@ Escolha um ou mais atletas para análise simultânea.
                 st.subheader("🗺️ Campo de Futebol — Análise de Movimentação")
                 st.caption(REFERENCIAS["campo"])
 
-                if dados_posicao_por_periodo:
+                # ── Split View toggle ──────────────────────────────────────────
+                _split_mode = st.toggle("⚖️ Modo Comparação (Split View)", value=False, key="split_view_mode")
+
+                if _split_mode and dados_posicao_por_periodo:
+                    _split_col_A, _split_col_B = st.columns(2)
+                    for _split_idx, _split_col in enumerate([_split_col_A, _split_col_B]):
+                        with _split_col:
+                            _lbl = "A" if _split_idx == 0 else "B"
+                            st.markdown(f"**Lado {_lbl}**")
+                            _sp_per = st.selectbox(f"Período {_lbl}:", list(dados_posicao_por_periodo.keys()), key=f"split_per_{_lbl}")
+                            _sp_ats = list(dados_posicao_por_periodo.get(_sp_per, {}).keys())
+                            _sp_atl = st.selectbox(f"Atleta {_lbl}:", _sp_ats, key=f"split_atl_{_lbl}") if _sp_ats else None
+                            if _sp_atl:
+                                _sp_d = dados_posicao_por_periodo.get(_sp_per, {}).get(_sp_atl, {})
+                                _sp_xs = _sp_d.get('xs', [])
+                                _sp_ys = _sp_d.get('ys', [])
+                                _sp_vs = _sp_d.get('vel', _sp_d.get('vels_gps', []))
+                                if _sp_xs:
+                                    _sp_fig = desenhar_campo_futebol_bonito(title=f"{_sp_atl} — {_sp_per}")
+                                    _sp_step = max(1, len(_sp_xs) // 5000)
+                                    _sp_vs_sub = [_sp_vs[i] for i in range(0, len(_sp_vs), _sp_step)] if _sp_vs else [0] * len(_sp_xs[::_sp_step])
+                                    _sp_fig.add_trace(go.Scatter(
+                                        x=_sp_xs[::_sp_step], y=_sp_ys[::_sp_step],
+                                        mode='markers',
+                                        marker=dict(
+                                            size=3,
+                                            color=_sp_vs_sub,
+                                            colorscale=[[0,'#2196F3'],[0.4,'#4CAF50'],[0.7,'#FF9800'],[1,'#F44336']],
+                                            showscale=False,
+                                        ),
+                                        hoverinfo='skip', showlegend=False,
+                                    ))
+                                    _sp_fig.update_layout(height=400, margin=dict(t=30,b=10,l=10,r=10))
+                                    st.plotly_chart(_sp_fig, use_container_width=True)
+                                else:
+                                    st.info("Sem dados de posição (x/y) para este atleta/período.")
+                elif dados_posicao_por_periodo:
                     _todos_periodos = list(dados_posicao_por_periodo.keys())
                     col1, col2 = st.columns(2)
                     with col1:
@@ -4987,6 +5204,7 @@ Escolha um ou mais atletas para análise simultânea.
                         st.caption(f"📡 Pontos campo (x/y): **{n_xy}** &nbsp;|&nbsp; 🌍 Pontos GPS: **{n_gps}** &nbsp;|&nbsp; 📅 **{_label_periodos}**")
 
                         # ── Item 8: Badge de qualidade GPS ──────────────────────
+                        st.caption("ℹ️ **HDOP** — Horizontal Dilution of Precision: qualidade do sinal GPS. <1.5 = excelente, 1.5–3 = bom, >3 = ruim", unsafe_allow_html=False)
                         _gps_q_parts = []
                         for _pm in periodos_mapa_sel:
                             _dq = dados_posicao_por_periodo.get(_pm, {}).get(atleta_mapa, {})
@@ -8033,9 +8251,12 @@ Escolha um ou mais atletas para análise simultânea.
                         )
 
                     if _av_atls_sel:
-                        # ── Paleta de cores por atleta ────────────────────────
+                        # ── Paleta de cores por atleta (usa paleta global persistente) ─────
                         _AV_PALETTE = ['#2196F3','#4CAF50','#FF9800','#E91E63','#9C27B0','#00BCD4']
-                        _av_cores = {a: _AV_PALETTE[i % len(_AV_PALETTE)] for i, a in enumerate(_av_atls_sel)}
+                        _av_cores = {
+                            a: st.session_state.get('athlete_colors', {}).get(a, _AV_PALETTE[i % len(_AV_PALETTE)])
+                            for i, a in enumerate(_av_atls_sel)
+                        }
 
                         # ── Extrai (v, a) de todos os atletas selecionados ────
                         _av_dados = {}
@@ -8301,7 +8522,7 @@ Escolha um ou mais atletas para análise simultânea.
 
                             # KPIs rápidos
                             _k1, _k2, _k3, _k4 = st.columns(4)
-                            _k1.metric("TRIMP Total", f"{_trimp_total:.1f}")
+                            _k1.metric("TRIMP Total", f"{_trimp_total:.1f}", help="Training Impulse (Edwards, 1993): carga interna = tempo em zona × multiplicador (Z1=1, Z2=2, Z3=3, Z4=4, Z5=5)")
                             _k2.metric("FC Média (bpm)", f"{np.mean(_hr_data):.0f}")
                             _k3.metric("FC Máx Atingida (bpm)", f"{max(_hr_data):.0f}")
                             _k4.metric("% FCmax atingida", f"{max(_hr_data)/_hrmax_v*100:.1f}%")
@@ -8398,6 +8619,7 @@ Escolha um ou mais atletas para análise simultânea.
             with abas[6]:
                 st.subheader("📋 Tabela Descritiva de Desempenho")
                 st.caption("Coloração por percentil do grupo: 🟢 Top 33% · 🟡 Médio · 🔴 Bottom 33%")
+                st.caption("ℹ️ **RHIE** — Repeated High Intensity Efforts: blocos de ≥2 esforços >19 km/h separados por <21s · **HSR** — High Speed Running: distância acima de 19 km/h · **M/min** — Metros por minuto: intensidade relativa à duração (elite: 110–130 m/min)")
 
                 _td_periodos = list(resultados_por_periodo.keys())
                 if _td_periodos:
@@ -11244,6 +11466,7 @@ Escolha um ou mais atletas para análise simultânea.
 
                             # ACWR por atleta
                             st.markdown("### ⚡ ACWR por Atleta")
+                            st.caption("ℹ️ **ACWR** — Acute:Chronic Workload Ratio: semana atual ÷ média 4 semanas. Zona segura: 0.8–1.3")
                             _acwr_results = []
                             for _ath_name, _gdf in _df_acwr.groupby('Atleta'):
                                 _gdf = _gdf.sort_values('Semana')
