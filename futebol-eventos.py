@@ -437,7 +437,7 @@ class CatapultAPI:
         return _api_fetch(self.base_url, self._token, "parameters")
     
     _SENSOR_PARAMS = (
-        ("parameters", "ts,lat,long,v,a,hr,pl,xy"),
+        ("parameters", "ts,lat,long,v,a,hr,pl,xy,pq,hdop,ref,o"),
         ("nulls",      "1"),
     )
 
@@ -493,6 +493,32 @@ class CatapultAPI:
             r = _req.get(
                 f"{self.base_url}/live",
                 headers=self.headers, timeout=8,
+            )
+            return r.json() if r.status_code == 200 else None
+        except Exception:
+            return None
+
+    # ── Tags, thresholds e stats (sem cache onde necessário) ─────────────
+    def get_tags(self):
+        """Todas as tags disponíveis no sistema (GET /tags)."""
+        return _api_fetch(self.base_url, self._token, "tags")
+
+    def get_activity_tags(self, activity_id):
+        """Tags associadas a uma atividade específica (GET /activities/{id}/tags)."""
+        return _api_fetch(self.base_url, self._token, f"activities/{activity_id}/tags")
+
+    def get_athlete_thresholds(self, athlete_id):
+        """Limiares individuais de velocidade/acc do atleta (GET /athletes/{id}/thresholds)."""
+        return _api_fetch(self.base_url, self._token, f"athletes/{athlete_id}/thresholds")
+
+    def get_stats(self, payload):
+        """Estatísticas agregadas por grupo (POST /stats). Não usa cache — dados dinâmicos."""
+        import requests as _req
+        try:
+            r = _req.post(
+                f"{self.base_url}/stats",
+                headers={**self.headers, "Content-Type": "application/json"},
+                json=payload, timeout=20,
             )
             return r.json() if r.status_code == 200 else None
         except Exception:
@@ -812,6 +838,16 @@ FUTEBOL_EVENTS_CONFIG = {
         'label': '🟢 Salto (IMA)',
         'color': '#4CAF50', 'marker': 'triangle-up', 'size': 11,
         'attrs': ['height'],
+    },
+    'running_symmetry': {
+        'label': '🔄 Simetria de Corrida',
+        'color': '#CE93D8', 'marker': 'circle', 'size': 10,
+        'attrs': ['left_right_ratio', 'asymmetry_index'],
+    },
+    'ima_acceleration': {
+        'label': '⚡ Acc. Explosiva (IMA)',
+        'color': '#FFD54F', 'marker': 'arrow-up', 'size': 12,
+        'attrs': ['direction', 'magnitude'],
     },
 }
 
@@ -3826,6 +3862,37 @@ Escolha um ou mais atletas para análise simultânea.
                 else:
                     st.session_state.venue = {}
 
+                # ── Item 14: Tags da Atividade ────────────────────────────────
+                _api_tags = st.session_state.get('api')
+                if _api_tags:
+                    try:
+                        _act_tags_raw = _api_tags.get_activity_tags(activity_id)
+                        _tag_list = []
+                        if _act_tags_raw:
+                            if isinstance(_act_tags_raw, list):
+                                for _tg in _act_tags_raw:
+                                    _tn = _tg.get('name') or _tg.get('label') or str(_tg)
+                                    if _tn:
+                                        _tag_list.append(_tn)
+                            elif isinstance(_act_tags_raw, dict):
+                                for _tg in _act_tags_raw.get('data', []):
+                                    _tn = _tg.get('name') or _tg.get('label') or ''
+                                    if _tn:
+                                        _tag_list.append(_tn)
+                        if _tag_list:
+                            _tags_html = "".join(
+                                f"<span style='background:#1e3a5f;color:#90CAF9;border-radius:12px;"
+                                f"padding:2px 10px;margin:2px 4px 2px 0;font-size:11px;"
+                                f"display:inline-block'>{_t}</span>"
+                                for _t in _tag_list
+                            )
+                            st.markdown(
+                                f"<div style='margin-bottom:6px'><strong>🏷️ Tags:</strong><br>{_tags_html}</div>",
+                                unsafe_allow_html=True
+                            )
+                    except Exception:
+                        pass
+
                 with st.spinner("Buscando períodos da atividade..."):
                     api = st.session_state.api
                     periods_raw = api.get_activity_periods(activity_id)
@@ -4047,7 +4114,26 @@ Escolha um ou mais atletas para análise simultânea.
                 athlete_id = athlete_row['id'].values[0]
                 athlete_posicao = athlete_row['posicao'].values[0] if 'posicao' in athlete_row.columns else ''
                 athlete_equipe = athlete_row['equipe'].values[0] if 'equipe' in athlete_row.columns else ''
-                
+
+                # ── Item 15: limiares individuais do atleta ───────────────────
+                # Tenta buscar limiares específicos deste atleta via API.
+                # Se disponíveis, usa-os para a análise (armazenado em session_state).
+                _thr_key = f"thresholds_{athlete_id}"
+                if _thr_key not in st.session_state:
+                    try:
+                        _thr_raw = api.get_athlete_thresholds(athlete_id)
+                        _thr_data = {}
+                        if _thr_raw:
+                            _thr_items = _thr_raw if isinstance(_thr_raw, list) else _thr_raw.get('data', [])
+                            for _thr in (_thr_items if isinstance(_thr_items, list) else []):
+                                _tname = _thr.get('name') or _thr.get('type', '')
+                                _tval  = _thr.get('value') or _thr.get('threshold')
+                                if _tname and _tval is not None:
+                                    _thr_data[_tname] = float(_tval)
+                        st.session_state[_thr_key] = _thr_data
+                    except Exception:
+                        st.session_state[_thr_key] = {}
+
                 if period_id:
                     response         = api.get_period_sensor_data(period_id, athlete_id)
                     efforts_response = api.get_period_efforts(period_id, athlete_id, "velocity,acceleration")
@@ -4129,6 +4215,30 @@ Escolha um ou mais atletas para análise simultânea.
                         dados_posicao[atleta_nome]['lons'] = [pt[1] for pt in gps_sub]
                         dados_posicao[atleta_nome]['vels_gps'] = [pt[2] for pt in gps_sub]
                         dados_posicao[atleta_nome]['ts_gps']  = [pt[3] for pt in gps_sub]
+
+                    # ── GPS Quality (pq, hdop, ref) e Odômetro (o) ────────────
+                    # Item 8: qualidade do sinal GPS; Item 12: distância pelo odômetro nativo
+                    _pq_vals   = [float(p['pq'])   for p in sensor_points if p.get('pq')   is not None and float(p.get('pq', 0)) > 0]
+                    _hdop_vals = [float(p['hdop'])  for p in sensor_points if p.get('hdop') is not None]
+                    _ref_vals  = [float(p['ref'])   for p in sensor_points if p.get('ref')  is not None and float(p.get('ref', 0)) > 0]
+                    _o_vals    = [float(p['o'])     for p in sensor_points if p.get('o')    is not None]
+                    if atleta_nome in dados_posicao:
+                        dados_posicao[atleta_nome]['pq_mean']   = round(float(np.mean(_pq_vals)),   1) if _pq_vals   else None
+                        dados_posicao[atleta_nome]['hdop_mean'] = round(float(np.mean(_hdop_vals)), 2) if _hdop_vals else None
+                        dados_posicao[atleta_nome]['ref_mean']  = round(float(np.mean(_ref_vals)),  1) if _ref_vals  else None
+                        # Odometer: distância acumulada nativa do dispositivo (mais preciso que integrar v)
+                        if len(_o_vals) >= 2:
+                            _o_start = min(_o_vals[0], _o_vals[-1])
+                            _o_end   = max(_o_vals[0], _o_vals[-1])
+                            dados_posicao[atleta_nome]['odometro_m'] = round(_o_end - _o_start, 1)
+                        else:
+                            dados_posicao[atleta_nome]['odometro_m'] = None
+                        # Série temporal do odômetro para gráfico de evolução
+                        if _o_vals:
+                            _o_base = _o_vals[0]
+                            dados_posicao[atleta_nome]['o_series'] = [v - _o_base for v in _o_vals]
+                        else:
+                            dados_posicao[atleta_nome]['o_series'] = []
 
                     # ── Processar eventos futebol ─────────────────────────────
                     if events_response:
@@ -4498,6 +4608,57 @@ Escolha um ou mais atletas para análise simultânea.
                         n_gps = len(lats_gps)
                         _label_periodos = " + ".join(periodos_mapa_sel)
                         st.caption(f"📡 Pontos campo (x/y): **{n_xy}** &nbsp;|&nbsp; 🌍 Pontos GPS: **{n_gps}** &nbsp;|&nbsp; 📅 **{_label_periodos}**")
+
+                        # ── Item 8: Badge de qualidade GPS ──────────────────────
+                        _gps_q_parts = []
+                        for _pm in periodos_mapa_sel:
+                            _dq = dados_posicao_por_periodo.get(_pm, {}).get(atleta_mapa, {})
+                            _pq_m  = _dq.get('pq_mean')
+                            _hdop_m = _dq.get('hdop_mean')
+                            _ref_m = _dq.get('ref_mean')
+                            if _pq_m is not None or _hdop_m is not None:
+                                _gps_q_parts.append((_pm, _pq_m, _hdop_m, _ref_m))
+                        if _gps_q_parts:
+                            _gps_badge_html = "<div style='display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px'>"
+                            for _pm, _pq, _hdop, _ref in _gps_q_parts:
+                                # pq: >80% good, 60-80% ok, <60% poor; hdop: <1.5 excellent, <3 good, >3 poor
+                                _pq_color  = ('#4CAF50' if (_pq  or 0) >= 80 else '#FF9800' if (_pq  or 0) >= 60 else '#F44336') if _pq  is not None else '#888'
+                                _hdop_color= ('#4CAF50' if (_hdop or 0) <= 1.5 else '#FF9800' if (_hdop or 0) <= 3.0 else '#F44336') if _hdop is not None else '#888'
+                                _pq_txt    = f"PQ: <b style='color:{_pq_color}'>{_pq:.0f}%</b>" if _pq  is not None else ""
+                                _hdop_txt  = f" HDOP: <b style='color:{_hdop_color}'>{_hdop:.2f}</b>" if _hdop is not None else ""
+                                _ref_txt   = f" Satélites: <b>{_ref:.0f}</b>" if _ref is not None else ""
+                                _gps_badge_html += (
+                                    f"<span style='background:#1e2d3d;border:1px solid #2d4a6a;border-radius:8px;"
+                                    f"padding:4px 10px;font-size:11px;color:#ccc'>"
+                                    f"📡 {_pm} — {_pq_txt}{_hdop_txt}{_ref_txt}</span>"
+                                )
+                            _gps_badge_html += "</div>"
+                            st.markdown(_gps_badge_html, unsafe_allow_html=True)
+
+                        # ── Item 12: Odômetro vs distância integrada ─────────────
+                        _odo_vals, _dist_vals = [], []
+                        for _pm in periodos_mapa_sel:
+                            _dq = dados_posicao_por_periodo.get(_pm, {}).get(atleta_mapa, {})
+                            _odo = _dq.get('odometro_m')
+                            if _odo is not None:
+                                _odo_vals.append(_odo)
+                        _res_rows = resultados_por_periodo.get(periodos_mapa_sel[0], []) if periodos_mapa_sel else []
+                        _dist_integrada = next((r.get('Distância (m)', 0) for r in _res_rows if r.get('Atleta') == atleta_mapa), None)
+                        if _odo_vals and _dist_integrada:
+                            _odo_total = sum(_odo_vals)
+                            _div = abs(_odo_total - _dist_integrada)
+                            _div_pct = _div / max(_dist_integrada, 1) * 100
+                            _odo_col = '#4CAF50' if _div_pct < 5 else '#FF9800' if _div_pct < 15 else '#F44336'
+                            st.markdown(
+                                f"<div style='display:flex;gap:12px;align-items:center;margin-bottom:6px;"
+                                f"background:#0d1f0d;border-left:3px solid #4CAF50;padding:6px 12px;border-radius:0 6px 6px 0'>"
+                                f"<span style='color:#86efac;font-size:12px'>🛣️ <b>Odômetro Catapult</b></span>"
+                                f"<span style='color:white;font-size:13px'><b>{_odo_total:,.0f} m</b></span>"
+                                f"<span style='color:#aaa;font-size:11px'>vs. GPS integrado: {_dist_integrada:,.0f} m</span>"
+                                f"<span style='color:{_odo_col};font-size:11px'>Δ {_div_pct:.1f}%</span>"
+                                f"</div>",
+                                unsafe_allow_html=True
+                            )
 
                         # Chave por atleta (campo físico não muda entre períodos)
                         campo_key = f"campo_cfg__{atleta_mapa}"
@@ -6630,6 +6791,107 @@ Escolha um ou mais atletas para análise simultânea.
                             csv_eff = efforts_df.to_csv(index=False)
                             st.download_button("📥 Exportar Esforços", csv_eff, f"esforcos_{atleta_escolhido}.csv")
 
+                            # ── Item 17: Distribuição por Banda + Densidade Temporal ──
+                            st.markdown("---")
+                            _eff_c1, _eff_c2 = st.columns(2)
+                            with _eff_c1:
+                                st.markdown("#### 📊 Distribuição por Banda")
+                                if 'Banda' in efforts_df.columns and efforts_df['Banda'].notna().any():
+                                    _banda_grp = efforts_df.groupby('Banda').agg(
+                                        Contagem=('Banda', 'count'),
+                                        Distancia_Total=('Distância (m)', 'sum'),
+                                        Duracao_Total=('Duração (s)', 'sum'),
+                                    ).reset_index()
+                                    _BAND_COLORS = {
+                                        'B1': '#4CAF50', 'B2': '#8BC34A', 'B3': '#FFEB3B',
+                                        'B4': '#FF9800', 'B5': '#F44336', 'B6': '#9C27B0', 'B7': '#E91E63',
+                                    }
+                                    _bc = [_BAND_COLORS.get(str(b).strip(), '#607D8B') for b in _banda_grp['Banda']]
+                                    _fig_band = go.Figure(go.Bar(
+                                        x=_banda_grp['Banda'], y=_banda_grp['Contagem'],
+                                        marker_color=_bc,
+                                        text=_banda_grp['Contagem'], textposition='outside',
+                                        customdata=np.stack([
+                                            _banda_grp['Distancia_Total'].round(1),
+                                            _banda_grp['Duracao_Total'].round(1),
+                                        ], axis=-1),
+                                        hovertemplate='Banda %{x}<br>Esforços: %{y}<br>Dist: %{customdata[0]} m<br>Dur: %{customdata[1]} s<extra></extra>',
+                                    ))
+                                    _fig_band.update_layout(
+                                        paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+                                        font=dict(color='white'),
+                                        xaxis=dict(title='Banda de velocidade', gridcolor='#333'),
+                                        yaxis=dict(title='Número de esforços', gridcolor='#333'),
+                                        height=300, margin=dict(t=15, b=10, l=10, r=10),
+                                        showlegend=False,
+                                    )
+                                    st.plotly_chart(_fig_band, use_container_width=True)
+                                else:
+                                    st.info("Dados de banda não disponíveis para este atleta.")
+
+                            with _eff_c2:
+                                st.markdown("#### 📈 Densidade de Esforços no Tempo")
+                                if '_start_ts' in efforts_df.columns and efforts_df['_start_ts'].sum() > 0:
+                                    _ts_eff = efforts_df['_start_ts'].dropna().sort_values()
+                                    _t0_eff = _ts_eff.min()
+                                    _ts_min = (_ts_eff - _t0_eff) / 60  # minutos
+                                    # Histograma de densidade: janelas de 5 min
+                                    _dur_tot_min = _ts_min.max()
+                                    _n_bins = max(6, int(_dur_tot_min / 5))
+                                    _counts, _edges = np.histogram(_ts_min, bins=_n_bins)
+                                    _bin_centers = (_edges[:-1] + _edges[1:]) / 2
+                                    _fig_dens = go.Figure(go.Bar(
+                                        x=_bin_centers, y=_counts,
+                                        marker_color='#2196F3',
+                                        opacity=0.8,
+                                        hovertemplate='%{x:.1f} min: %{y} esforços<extra></extra>',
+                                    ))
+                                    _fig_dens.update_layout(
+                                        paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+                                        font=dict(color='white'),
+                                        xaxis=dict(title='Tempo (min)', gridcolor='#333'),
+                                        yaxis=dict(title='Esforços / janela', gridcolor='#333'),
+                                        height=300, margin=dict(t=15, b=10, l=10, r=10),
+                                        showlegend=False,
+                                        bargap=0.1,
+                                    )
+                                    st.plotly_chart(_fig_dens, use_container_width=True)
+
+                                    # Duração + distância por esforço — box plot
+                                    with st.expander("📦 Distribuição de Duração e Distância por Esforço"):
+                                        _box_c1, _box_c2 = st.columns(2)
+                                        with _box_c1:
+                                            _fig_box_dur = go.Figure(go.Box(
+                                                y=efforts_df['Duração (s)'],
+                                                name='Duração (s)',
+                                                marker_color='#FF9800',
+                                                boxpoints='outliers',
+                                            ))
+                                            _fig_box_dur.update_layout(
+                                                paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+                                                font=dict(color='white'),
+                                                yaxis=dict(title='Duração (s)', gridcolor='#333'),
+                                                height=280, margin=dict(t=10, b=10),
+                                            )
+                                            st.plotly_chart(_fig_box_dur, use_container_width=True)
+                                        with _box_c2:
+                                            if 'Distância (m)' in efforts_df.columns:
+                                                _fig_box_dist = go.Figure(go.Box(
+                                                    y=efforts_df['Distância (m)'],
+                                                    name='Distância (m)',
+                                                    marker_color='#4CAF50',
+                                                    boxpoints='outliers',
+                                                ))
+                                                _fig_box_dist.update_layout(
+                                                    paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+                                                    font=dict(color='white'),
+                                                    yaxis=dict(title='Distância (m)', gridcolor='#333'),
+                                                    height=280, margin=dict(t=10, b=10),
+                                                )
+                                                st.plotly_chart(_fig_box_dist, use_container_width=True)
+                                else:
+                                    st.info("Timestamps de esforços não disponíveis para análise de densidade.")
+
                         # ── Timeline técnico-físico com eventos futebol ───────
                         st.markdown("---")
                         st.markdown("### ⚽ Timeline Técnico-Físico")
@@ -6689,6 +6951,142 @@ Escolha um ou mais atletas para análise simultânea.
                         else:
                             st.info("Nenhum evento de futebol carregado para este atleta. "
                                     "Ative os eventos na sidebar e recarregue os dados.")
+
+                        # ── Item 2: Simetria de Corrida ──────────────────────
+                        st.markdown("---")
+                        with st.expander("🔄 Simetria de Corrida (Running Symmetry — Item 2)", expanded=False):
+                            st.caption(
+                                "Assimetria bilateral calculada a partir de eventos `running_symmetry` da API Catapult. "
+                                "Índice de assimetria > 10% indica risco de lesão. "
+                                "Valores próximos a 0% = corrida simétrica."
+                            )
+                            # Coletar eventos running_symmetry
+                            _sym_evts = []
+                            if _esf_modo_todos:
+                                for _pk in dados_eventos_por_periodo.keys():
+                                    _sym_evts += dados_eventos_por_periodo.get(_pk, {}).get(
+                                        atleta_escolhido, {}).get('running_symmetry', [])
+                            else:
+                                _sym_evts = dados_eventos_por_periodo.get(
+                                    periodo_escolhido, {}).get(atleta_escolhido, {}).get('running_symmetry', [])
+
+                            if _sym_evts:
+                                _sym_ts = [(ev.get('start_time', 0), ev.get('asymmetry_index') or ev.get('left_right_ratio'))
+                                           for ev in _sym_evts if ev.get('asymmetry_index') is not None or ev.get('left_right_ratio') is not None]
+                                if _sym_ts:
+                                    _sym_t0 = _sym_ts[0][0]
+                                    _sym_x = [(t - _sym_t0) / 60 for t, _ in _sym_ts]
+                                    _sym_y = [float(v) for _, v in _sym_ts]
+                                    _sym_c = ['#F44336' if abs(v) > 10 else '#FF9800' if abs(v) > 5 else '#4CAF50' for v in _sym_y]
+                                    _fig_sym = go.Figure()
+                                    _fig_sym.add_trace(go.Scatter(
+                                        x=_sym_x, y=_sym_y, mode='markers+lines',
+                                        marker=dict(color=_sym_c, size=8),
+                                        line=dict(color='rgba(200,200,200,0.4)', width=1),
+                                        hovertemplate='%{x:.1f} min — AI: %{y:.1f}%<extra></extra>',
+                                        name='Assimetria',
+                                    ))
+                                    _fig_sym.add_hline(y=10, line=dict(color='#F44336', dash='dash', width=1.5),
+                                                       annotation_text='Risco (>10%)', annotation_font=dict(color='#F44336', size=9))
+                                    _fig_sym.add_hline(y=-10, line=dict(color='#F44336', dash='dash', width=1.5))
+                                    _fig_sym.add_hline(y=0, line=dict(color='rgba(255,255,255,0.4)', width=1, dash='dot'))
+                                    _fig_sym.update_layout(
+                                        paper_bgcolor='#0e1117', plot_bgcolor='#0e1117', font=dict(color='white'),
+                                        xaxis=dict(title='Tempo (min)', gridcolor='#333'),
+                                        yaxis=dict(title='Índice de Assimetria (%)', gridcolor='#333'),
+                                        height=320, margin=dict(t=15, b=10), showlegend=False,
+                                    )
+                                    st.plotly_chart(_fig_sym, use_container_width=True)
+                                    _n_risco = sum(1 for v in _sym_y if abs(v) > 10)
+                                    st.metric("Eventos com assimetria > 10%", f"{_n_risco} / {len(_sym_y)}")
+                                else:
+                                    st.info("Eventos running_symmetry encontrados mas sem campo de assimetria (asymmetry_index).")
+                            else:
+                                st.info(
+                                    "⚠️ Nenhum evento `running_symmetry` carregado. "
+                                    "Ative este tipo de evento na sidebar e verifique se o dispositivo "
+                                    "suporta análise de simetria de corrida."
+                                )
+
+                        # ── Item 5: IMA Aceleração Direcional ────────────────
+                        with st.expander("⚡ IMA Aceleração Direcional — Diagrama Polar (Item 5)", expanded=False):
+                            st.caption(
+                                "Diagrama polar das acelerações explosivas IMA por direção: "
+                                "frente (0°), esquerda (90°), trás (180°), direita (270°). "
+                                "Assimetria direcional indica dominância locomotora."
+                            )
+                            _ima_evts = []
+                            if _esf_modo_todos:
+                                for _pk in dados_eventos_por_periodo.keys():
+                                    _ima_evts += dados_eventos_por_periodo.get(_pk, {}).get(
+                                        atleta_escolhido, {}).get('ima_acceleration', [])
+                            else:
+                                _ima_evts = dados_eventos_por_periodo.get(
+                                    periodo_escolhido, {}).get(atleta_escolhido, {}).get('ima_acceleration', [])
+
+                            if _ima_evts:
+                                _dir_map = {
+                                    'forward': 0, 'front': 0, 'fwd': 0,
+                                    'left': 90,
+                                    'backward': 180, 'back': 180, 'bwd': 180,
+                                    'right': 270,
+                                }
+                                _dir_counts: dict = {}
+                                _dir_mag:    dict = {}
+                                for _ev in _ima_evts:
+                                    _d = str(_ev.get('direction', '')).lower().strip()
+                                    _m = float(_ev.get('magnitude') or _ev.get('impact') or 1.0)
+                                    if _d:
+                                        _dir_counts[_d] = _dir_counts.get(_d, 0) + 1
+                                        _dir_mag[_d]    = _dir_mag.get(_d, 0) + _m
+                                if _dir_counts:
+                                    _dirs = list(_dir_counts.keys())
+                                    _cnts = [_dir_counts[d] for d in _dirs]
+                                    _theta = [_dir_map.get(d, 0) for d in _dirs]
+                                    _fig_polar = go.Figure(go.Barpolar(
+                                        r=_cnts, theta=_theta,
+                                        width=[40] * len(_dirs),
+                                        marker=dict(
+                                            color=['#FF9800', '#2196F3', '#F44336', '#4CAF50', '#9C27B0', '#00BCD4'][:len(_cnts)],
+                                            line=dict(color='white', width=0.5),
+                                        ),
+                                        text=_dirs,
+                                        hovertemplate='%{text}<br>Eventos: %{r}<extra></extra>',
+                                        name='IMA Acc',
+                                    ))
+                                    _fig_polar.update_layout(
+                                        polar=dict(
+                                            bgcolor='#0e1117',
+                                            radialaxis=dict(
+                                                visible=True,
+                                                gridcolor='rgba(255,255,255,0.1)',
+                                                tickfont=dict(color='rgba(200,200,200,0.7)', size=9),
+                                            ),
+                                            angularaxis=dict(
+                                                tickmode='array',
+                                                tickvals=[0, 90, 180, 270],
+                                                ticktext=['Frente', 'Esquerda', 'Trás', 'Direita'],
+                                                gridcolor='rgba(255,255,255,0.1)',
+                                                tickfont=dict(color='white', size=10),
+                                                direction='clockwise',
+                                            ),
+                                        ),
+                                        paper_bgcolor='#0e1117', font=dict(color='white'),
+                                        height=380, margin=dict(t=20, b=10),
+                                        showlegend=False,
+                                    )
+                                    st.plotly_chart(_fig_polar, use_container_width=True)
+                                    _col_ima1, _col_ima2 = st.columns(2)
+                                    _col_ima1.metric("Total IMA Acc eventos", len(_ima_evts))
+                                    _col_ima2.metric("Direção dominante", max(_dir_counts, key=_dir_counts.get) if _dir_counts else '—')
+                                else:
+                                    st.info("Eventos IMA Acceleration encontrados mas sem campo de direção.")
+                            else:
+                                st.info(
+                                    "⚠️ Nenhum evento `ima_acceleration` carregado. "
+                                    "Ative este tipo de evento na sidebar ou verifique se o dispositivo "
+                                    "suporta IMA (Inertial Movement Analysis)."
+                                )
                 else:
                     st.info("Dados de sensor não disponíveis")
 
@@ -7136,6 +7534,148 @@ Escolha um ou mais atletas para análise simultânea.
 
                     else:
                         st.info("Selecione pelo menos 1 atleta para ver o perfil Acc × Vel.")
+
+                    # ════════════════════════════════════════════════════════
+                    # SEÇÃO 6 — TRIMP + ZONAS DE FC (Item 13)
+                    # ════════════════════════════════════════════════════════
+                    st.markdown("---")
+                    st.markdown("### ❤️ TRIMP & Zonas de Frequência Cardíaca")
+                    st.caption(
+                        "**TRIMP** (Training Impulse — Edwards): carga interna calculada pelo tempo em cada zona de "
+                        "FC (50–60 / 60–70 / 70–80 / 80–90 / 90–100% HRmax) com multiplicadores 1–2–3–4–5. "
+                        "Referência: FC máx = 220 − idade (padrão 180 bpm se não configurada)."
+                    )
+
+                    _trimp_col1, _trimp_col2 = st.columns([1, 2])
+                    with _trimp_col1:
+                        _trimp_hrmax = st.number_input("FC Máx (bpm):", min_value=150, max_value=220,
+                                                        value=180, step=1, key="trimp_hrmax")
+
+                    if _av_atletas_disp:
+                        _trimp_atl = st.selectbox("Atleta para TRIMP:", _av_atletas_disp, key="trimp_atleta")
+
+                        # Coletar dados de sensor
+                        if _av_per == _AV_TODOS:
+                            _trimp_pts: list = []
+                            for _pv in dados_sensor_por_atleta_por_periodo.values():
+                                _trimp_pts += _pv.get(_trimp_atl, [])
+                        else:
+                            _trimp_pts = dados_sensor_por_atleta_por_periodo.get(_av_per, {}).get(_trimp_atl, [])
+
+                        _hr_data = [float(p['hr']) for p in _trimp_pts if p.get('hr') and float(p.get('hr', 0)) > 30]
+
+                        if _hr_data:
+                            _hrmax_v = _trimp_hrmax
+                            # Zonas Edwards: 50-60 / 60-70 / 70-80 / 80-90 / 90-100% HRmax
+                            _zona_bounds = [
+                                (0.50, 0.60, 1, 'Z1 50-60%', '#4CAF50'),
+                                (0.60, 0.70, 2, 'Z2 60-70%', '#8BC34A'),
+                                (0.70, 0.80, 3, 'Z3 70-80%', '#FFEB3B'),
+                                (0.80, 0.90, 4, 'Z4 80-90%', '#FF9800'),
+                                (0.90, 1.00, 5, 'Z5 90-100%', '#F44336'),
+                            ]
+                            _zona_counts = {z[3]: 0 for z in _zona_bounds}
+                            _zona_colors = {z[3]: z[4] for z in _zona_bounds}
+                            _trimp_total = 0.0
+                            _dt_s = 0.1  # 10 Hz → 0.1 s por ponto
+                            for _hr_v in _hr_data:
+                                _pct = _hr_v / _hrmax_v
+                                for _lo, _hi, _mult, _lbl, _col in _zona_bounds:
+                                    if _lo <= _pct < _hi or (_hi == 1.00 and _pct >= _lo):
+                                        _zona_counts[_lbl] += 1
+                                        _trimp_total += _dt_s / 60 * _mult  # min × multiplier
+                                        break
+
+                            # KPIs rápidos
+                            _k1, _k2, _k3, _k4 = st.columns(4)
+                            _k1.metric("TRIMP Total", f"{_trimp_total:.1f}")
+                            _k2.metric("FC Média (bpm)", f"{np.mean(_hr_data):.0f}")
+                            _k3.metric("FC Máx Atingida (bpm)", f"{max(_hr_data):.0f}")
+                            _k4.metric("% FCmax atingida", f"{max(_hr_data)/_hrmax_v*100:.1f}%")
+
+                            _trimp_c1, _trimp_c2 = st.columns(2)
+
+                            # Gráfico de pizza — distribuição de zonas
+                            with _trimp_c1:
+                                _tz_lbls = [z[3] for z in _zona_bounds]
+                                _tz_vals = [_zona_counts[l] * _dt_s / 60 for l in _tz_lbls]  # minutos
+                                _tz_cols = [z[4] for z in _zona_bounds]
+                                _fig_tz = go.Figure(go.Pie(
+                                    labels=_tz_lbls, values=_tz_vals,
+                                    marker=dict(colors=_tz_cols),
+                                    textinfo='label+percent',
+                                    hovertemplate='%{label}<br>%{value:.1f} min<extra></extra>',
+                                    hole=0.38,
+                                ))
+                                _fig_tz.update_layout(
+                                    title=dict(text='Distribuição de Zonas de FC (min)',
+                                               font=dict(color='white', size=13)),
+                                    paper_bgcolor='#0e1117', font=dict(color='white'),
+                                    legend=dict(font=dict(color='white', size=9)),
+                                    height=320, margin=dict(t=45, b=10, l=10, r=10),
+                                )
+                                st.plotly_chart(_fig_tz, use_container_width=True)
+
+                            # Gráfico de barras empilhadas com TRIMP por zona
+                            with _trimp_c2:
+                                _tz_trimp = [_zona_counts[l] * _dt_s / 60 * _mult
+                                             for l, (_, _, _mult, _, _) in zip(_tz_lbls, _zona_bounds)]
+                                _fig_trimp_bar = go.Figure()
+                                for _lbl, _tc, _col in zip(_tz_lbls, _tz_trimp, _tz_cols):
+                                    _fig_trimp_bar.add_trace(go.Bar(
+                                        x=[_trimp_atl], y=[_tc], name=_lbl,
+                                        marker_color=_col,
+                                        hovertemplate=f'{_lbl}: %{{y:.1f}} TRIMP<extra></extra>',
+                                    ))
+                                _fig_trimp_bar.update_layout(
+                                    title=dict(text=f'TRIMP por Zona — {_trimp_atl}',
+                                               font=dict(color='white', size=13)),
+                                    barmode='stack',
+                                    paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+                                    font=dict(color='white'),
+                                    xaxis=dict(gridcolor='#333'),
+                                    yaxis=dict(title='TRIMP (u.a.)', gridcolor='#333'),
+                                    legend=dict(font=dict(color='white', size=9)),
+                                    height=320, margin=dict(t=45, b=10, l=10, r=10),
+                                )
+                                st.plotly_chart(_fig_trimp_bar, use_container_width=True)
+
+                            # Curva de FC ao longo do tempo
+                            with st.expander("📈 Curva de FC ao longo do tempo"):
+                                _hr_ts = [float(p.get('ts', 0)) for p in _trimp_pts
+                                          if p.get('hr') and float(p.get('hr', 0)) > 30]
+                                if _hr_ts:
+                                    _t0_hr = _hr_ts[0]
+                                    _hr_ts_rel = [(t - _t0_hr) / 60 for t in _hr_ts]
+                                    _fig_hr_curve = go.Figure()
+                                    _fig_hr_curve.add_trace(go.Scatter(
+                                        x=_hr_ts_rel, y=_hr_data,
+                                        mode='lines', line=dict(color='#F44336', width=1.5),
+                                        name='FC (bpm)',
+                                        hovertemplate='%{x:.1f} min — %{y:.0f} bpm<extra></extra>',
+                                    ))
+                                    # Linhas de zona
+                                    for _lo, _hi, _mult, _lbl, _col in _zona_bounds:
+                                        _fig_hr_curve.add_hline(
+                                            y=_lo * _hrmax_v,
+                                            line=dict(color=_col, width=1, dash='dot'),
+                                            annotation_text=_lbl,
+                                            annotation_font=dict(color=_col, size=9),
+                                        )
+                                    _fig_hr_curve.update_layout(
+                                        paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+                                        font=dict(color='white'),
+                                        xaxis=dict(title='Tempo (min)', gridcolor='#333'),
+                                        yaxis=dict(title='FC (bpm)', gridcolor='#333',
+                                                   range=[30, _hrmax_v * 1.05]),
+                                        height=300, margin=dict(t=15, b=10),
+                                        showlegend=False,
+                                    )
+                                    st.plotly_chart(_fig_hr_curve, use_container_width=True)
+                        else:
+                            st.info("ℹ️ Nenhum dado de FC disponível para este atleta/período.")
+                    else:
+                        st.info("Busque os dados de atletas na sessão antes de usar esta análise.")
                 else:
                     st.info("Busque os dados de atletas na sessão antes de usar esta análise.")
 
@@ -7395,7 +7935,66 @@ Escolha um ou mais atletas para análise simultânea.
                                 _f = _bar_pos('RHIE Blocos', 'Média de RHIE Blocos por Posição')
                                 if _f: st.plotly_chart(_f, use_container_width=True)
 
-                            # Tabela resumo por posição
+                            # ── Item 16: Radar de Perfil por Posição ─────────────
+                            st.markdown("---")
+                            st.markdown("### 🕸️ Radar de Perfil Físico por Posição")
+                            st.caption(
+                                "Normalização min-max do grupo: 100% = maior valor do grupo. "
+                                "Permite comparar perfis multidimensionais entre posições."
+                            )
+                            _radar_metrics = [c for c in [
+                                'Distância (m)', 'M/min', 'Dist. > 19 km/h (m)',
+                                'Sprints (>24 km/h)', 'Acelerações (>3 m/s²)',
+                                'Desacelerações (<-3 m/s²)', 'PlayerLoad', 'RHIE Blocos',
+                            ] if c in _df_pos_grp.columns]
+
+                            if len(_radar_metrics) >= 4 and len(_df_pos_grp) >= 2:
+                                # Normalização min-max por métrica (0-100%)
+                                _radar_norm = _df_pos_grp[_radar_metrics].copy()
+                                for _rc in _radar_metrics:
+                                    _rmin = _radar_norm[_rc].min()
+                                    _rmax = _radar_norm[_rc].max()
+                                    _radar_norm[_rc] = ((_radar_norm[_rc] - _rmin) / max(_rmax - _rmin, 1e-9) * 100).round(1)
+
+                                _POS_RADAR_PALETTE = ['#2196F3','#4CAF50','#FF9800','#E91E63','#9C27B0','#00BCD4','#F44336']
+                                _fig_radar = go.Figure()
+                                for _ri, (_rpos, _rrow) in enumerate(_radar_norm.iterrows()):
+                                    _pos_name = _df_pos_grp['Posição'].iloc[_ri]
+                                    _vals = list(_rrow[_radar_metrics]) + [_rrow[_radar_metrics[0]]]
+                                    _lbls = _radar_metrics + [_radar_metrics[0]]
+                                    _col_r = _POS_RADAR_PALETTE[_ri % len(_POS_RADAR_PALETTE)]
+                                    _fig_radar.add_trace(go.Scatterpolar(
+                                        r=_vals, theta=_lbls, fill='toself',
+                                        name=_pos_name,
+                                        line=dict(color=_col_r, width=2),
+                                        fillcolor=(lambda c: f"rgba({int(c[1:3],16)},{int(c[3:5],16)},{int(c[5:7],16)},0.12)")(_col_r),
+                                        opacity=0.85,
+                                        hovertemplate='%{theta}: %{r:.1f}%<extra>' + _pos_name + '</extra>',
+                                    ))
+                                _fig_radar.update_layout(
+                                    polar=dict(
+                                        bgcolor='#0e1117',
+                                        radialaxis=dict(
+                                            visible=True, range=[0, 100],
+                                            gridcolor='rgba(255,255,255,0.15)',
+                                            tickfont=dict(color='rgba(200,200,200,0.7)', size=9),
+                                            ticksuffix='%',
+                                        ),
+                                        angularaxis=dict(
+                                            gridcolor='rgba(255,255,255,0.15)',
+                                            tickfont=dict(color='white', size=10),
+                                        ),
+                                    ),
+                                    paper_bgcolor='#0e1117',
+                                    font=dict(color='white'),
+                                    legend=dict(font=dict(color='white', size=10)),
+                                    height=460, margin=dict(t=20, b=20, l=20, r=20),
+                                )
+                                st.plotly_chart(_fig_radar, use_container_width=True)
+                            else:
+                                st.info("Necessário ≥ 2 posições e ≥ 4 métricas para gerar o radar.")
+
+                            # ── Tabela resumo por posição ─────────────────────────
                             st.markdown("---")
                             st.markdown("### 📋 Resumo por Posição")
                             _TD_POS_COLS = [c for c in [
@@ -7408,6 +8007,38 @@ Escolha um ou mais atletas para análise simultânea.
                                 _df_pos_grp[_TD_POS_COLS].round(1),
                                 use_container_width=True, hide_index=True
                             )
+
+                            # ── Item 16: Consulta /stats por posição (longitudinal) ──
+                            st.markdown("---")
+                            with st.expander("📊 Perfil Longitudinal por Posição via /stats (multi-sessão)", expanded=False):
+                                st.caption(
+                                    "Consulta o endpoint POST /stats da Catapult para agregar métricas "
+                                    "por posição em múltiplas sessões. Requer dados históricos na plataforma."
+                                )
+                                _stats_api = st.session_state.get('api')
+                                if _stats_api and st.button("🔄 Consultar /stats por posição", key="btn_stats_pos"):
+                                    with st.spinner("Consultando /stats..."):
+                                        _stats_payload = {
+                                            "group_by": ["position"],
+                                            "parameters": [
+                                                "total_distance", "hsr_distance", "sprint_distance",
+                                                "player_load", "max_velocity",
+                                            ],
+                                            "source": "cached_stats",
+                                        }
+                                        _stats_resp = _stats_api.get_stats(_stats_payload)
+                                    if _stats_resp:
+                                        try:
+                                            _sd = _stats_resp if isinstance(_stats_resp, list) else _stats_resp.get('data', [])
+                                            if _sd:
+                                                _df_stats = pd.DataFrame(_sd)
+                                                st.dataframe(_df_stats, use_container_width=True, hide_index=True)
+                                            else:
+                                                st.info("Nenhum dado retornado pelo /stats.")
+                                        except Exception as _e:
+                                            st.error(f"Erro ao processar /stats: {_e}")
+                                    else:
+                                        st.warning("⚠️ Endpoint /stats não respondeu. Verifique permissões da API ou se há dados históricos suficientes.")
                     else:
                         st.info("Nenhum dado disponível para este período.")
                 else:
@@ -8905,6 +9536,77 @@ Escolha um ou mais atletas para análise simultânea.
                             st.plotly_chart(_fig_corr, use_container_width=True)
                     else:
                         st.info("São necessárias pelo menos 2 métricas numéricas para a exploração livre.")
+
+                    # ── Item 15: Limiares Individuais ─────────────────────────
+                    st.markdown("---")
+                    with st.expander("⚡ Limiares Individuais por Atleta (Item 15)", expanded=False):
+                        st.caption(
+                            "Limiares de velocidade e aceleração específicos de cada atleta, "
+                            "conforme cadastro na plataforma Catapult. Quando disponíveis, "
+                            "estes valores substituem os padrões genéricos na análise."
+                        )
+                        _atletas_thr = list(st.session_state.get('atletas_filtrados', pd.DataFrame()).itertuples(index=False)) if 'atletas_filtrados' in st.session_state else []
+                        _thr_rows = []
+                        for _ar in _atletas_thr:
+                            _aid = getattr(_ar, 'id', None)
+                            _anom = getattr(_ar, 'nome', '?')
+                            if _aid is not None:
+                                _thr_d = st.session_state.get(f"thresholds_{_aid}", {})
+                                if _thr_d:
+                                    _row = {'Atleta': _anom}
+                                    _row.update(_thr_d)
+                                    _thr_rows.append(_row)
+                        if _thr_rows:
+                            _df_thr = pd.DataFrame(_thr_rows)
+                            st.dataframe(_df_thr, use_container_width=True, hide_index=True)
+
+                            # Visualização: scatter de vel máx vs. limiar de sprint
+                            _possible_sprint_keys = ['sprint_threshold', 'sprint', 'high_speed_threshold',
+                                                      'hsr_threshold', 'velocity_zone_5', 'zone_5']
+                            _sprint_key = next((k for k in _possible_sprint_keys if k in _df_thr.columns), None)
+                            if _sprint_key:
+                                _fig_thr = go.Figure()
+                                _vmx_map = {}
+                                for _rp in resultados_por_periodo.values():
+                                    for _rr in _rp:
+                                        _vmx_map[_rr.get('Atleta','')] = _rr.get('Velocidade Máx (km/h)', 0)
+                                _df_thr['Vmax Atingida (km/h)'] = _df_thr['Atleta'].map(_vmx_map)
+                                _df_thr_plot = _df_thr.dropna(subset=[_sprint_key, 'Vmax Atingida (km/h)'])
+                                if not _df_thr_plot.empty:
+                                    _fig_thr.add_trace(go.Scatter(
+                                        x=_df_thr_plot[_sprint_key],
+                                        y=_df_thr_plot['Vmax Atingida (km/h)'],
+                                        mode='markers+text',
+                                        text=_df_thr_plot['Atleta'],
+                                        textposition='top center',
+                                        marker=dict(size=12, color='#FF9800'),
+                                        hovertemplate='%{text}<br>Limiar Sprint: %{x:.1f} km/h<br>Vmax: %{y:.1f} km/h<extra></extra>',
+                                    ))
+                                    # Diagonal = atingiu limiar
+                                    _all_v = pd.concat([_df_thr_plot[_sprint_key], _df_thr_plot['Vmax Atingida (km/h)']]).dropna()
+                                    _vr = [_all_v.min() * 0.9, _all_v.max() * 1.1]
+                                    _fig_thr.add_trace(go.Scatter(
+                                        x=_vr, y=_vr, mode='lines',
+                                        line=dict(color='rgba(255,255,255,0.3)', dash='dot'),
+                                        name='Vmax = Limiar', showlegend=True,
+                                    ))
+                                    _fig_thr.update_layout(
+                                        title=dict(text='Vmax Atingida vs. Limiar de Sprint Individual',
+                                                   font=dict(color='white', size=13)),
+                                        paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+                                        font=dict(color='white'),
+                                        xaxis=dict(title=f'Limiar de Sprint ({_sprint_key}) km/h', gridcolor='#333'),
+                                        yaxis=dict(title='Vmax Atingida (km/h)', gridcolor='#333'),
+                                        height=360, margin=dict(t=45, b=10, l=10, r=10),
+                                        legend=dict(font=dict(color='white')),
+                                    )
+                                    st.plotly_chart(_fig_thr, use_container_width=True)
+                        else:
+                            st.info(
+                                "Nenhum limiar individual carregado. "
+                                "Verifique se os atletas têm limiares cadastrados na plataforma Catapult "
+                                "ou se o endpoint /athletes/{id}/thresholds está habilitado na sua licença."
+                            )
                 else:
                     st.info("Carregue dados para usar o modo de exploração livre.")
 
