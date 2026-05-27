@@ -11216,6 +11216,31 @@ Escolha um ou mais atletas para análise simultânea.
                         for a in dados_posicao_por_periodo.get(_pn, {}).keys()
                     ))
 
+                    def _wcalc_wcs(_sv, _n, _is_vm):
+                        if len(_sv) < max(_n, 2):
+                            return 0.0
+                        if _is_vm:
+                            from collections import deque as _DqW
+                            _dqW = _DqW(); _bvW = -1.0
+                            for _iW in range(len(_sv)):
+                                while _dqW and _sv[_dqW[-1]] <= _sv[_iW]:
+                                    _dqW.pop()
+                                _dqW.append(_iW)
+                                if _dqW[0] <= _iW - _n:
+                                    _dqW.popleft()
+                                if _iW >= _n - 1:
+                                    _cW = _sv[_dqW[0]]
+                                    if _cW > _bvW:
+                                        _bvW = _cW
+                            return _bvW
+                        else:
+                            _cs = sum(_sv[:_n]); _bv = _cs
+                            for _i in range(1, len(_sv) - _n + 1):
+                                _cs += _sv[_i + _n - 1] - _sv[_i - 1]
+                                if _cs > _bv:
+                                    _bv = _cs
+                            return _bv
+
                     for _wa in _wcs2_athletes:
                         _wx, _wy, _wv, _wac, _wts, _wper = [], [], [], [], [], []
                         for _pn in _wcs2_periodos:
@@ -11269,6 +11294,14 @@ Escolha um ou mais atletas para análise simultânea.
                         else:
                             _sv = [v / (3.6 * _Hz) for v in _wv]
 
+                        # Multi-janela (1, 3, 5 min) para comparativo na tabela
+                        _is_vm2 = (_m == "Velocidade Máx (km/h)")
+                        _mw_vals = {}
+                        for _mwname, _mwmin in [('1 min', 1), ('3 min', 3), ('5 min', 5)]:
+                            _mwn = int(_mwmin * 60 * _wcs2_hz)
+                            if _mwn != _wcs2_n and len(_sv) >= max(_mwn, 2):
+                                _mw_vals[_mwname] = round(_wcalc_wcs(_sv, _mwn, _is_vm2), 1)
+
                         # Janela rolante
                         if _m == "Velocidade Máx (km/h)":
                             from collections import deque as _Dq
@@ -11318,14 +11351,17 @@ Escolha um ou mais atletas para análise simultânea.
                             if _posicao2 != '—':
                                 break
 
-                        _wcs2_rows.append({
+                        _row_d = {
+                            '_atl_orig':   _wa,
                             'Atleta':      _wa,
                             'Posição':     _posicao2,
                             'Período':     _wper[_best_si2] if _best_si2 < len(_wper) else '—',
                             _wcs2_metric:  round(_best_val2, 1),
                             'Início':      _ini_str,
                             'Fim':         _fim_str,
-                        })
+                        }
+                        _row_d.update(_mw_vals)
+                        _wcs2_rows.append(_row_d)
                         _wcs2_segs[_wa] = {
                             'xn':  _wx[_best_si2:_best_ei2],
                             'yn':  _wy[_best_si2:_best_ei2],
@@ -11333,6 +11369,9 @@ Escolha um ou mais atletas para análise simultânea.
                         }
 
                     _wcs2_rows.sort(key=lambda r: r.get(_wcs2_metric, 0), reverse=True)
+                    _rank_icons = ['🥇', '🥈', '🥉']
+                    for _ri2, _wr2 in enumerate(_wcs2_rows):
+                        _wr2['#'] = _rank_icons[_ri2] if _ri2 < 3 else f'#{_ri2 + 1}'
 
                     if not _wcs2_rows:
                         st.warning(
@@ -11348,22 +11387,44 @@ Escolha um ou mais atletas para análise simultânea.
 
                         # KPIs resumo
                         _wk1, _wk2, _wk3, _wk4 = st.columns(4)
-                        _wk1.metric("🏆 Maior WCS",   f"{_wcs2_top:.1f}", _wcs2_rows[0]['Atleta'])
-                        _wk2.metric("📊 Média Grupo", f"{_wcs2_avg:.1f}")
-                        _wk3.metric("👥 Atletas",      str(len(_wcs2_rows)))
-                        _wk4.metric("⏱️ Janela",      f"{_wcs2_min} min")
+                        _wk1.metric(
+                            "🏆 Atleta Destaque",
+                            _wcs2_rows[0]['Atleta'],
+                            f"{_wcs2_top:.1f} — {_wcs2_rows[0].get('Período', '—')}",
+                        )
+                        _wk2.metric(
+                            "📊 Média Grupo",
+                            f"{_wcs2_avg:.1f}",
+                            f"Δ {_wcs2_top - _wcs2_avg:.1f} vs líder",
+                        )
+                        _wk3.metric("👥 Atletas", str(len(_wcs2_rows)))
+                        _wk4.metric(
+                            "⏱️ Janela",
+                            f"{_wcs2_min} min",
+                            f"{_wcs2_rows[0].get('Início','—')} → {_wcs2_rows[0].get('Fim','—')}",
+                        )
 
                         st.markdown("---")
 
                         # Tabela
-                        _wcs2_col_order = [
-                            'Atleta', 'Posição', 'Período',
-                            _wcs2_metric, '% Máx Grupo',
-                            'Início', 'Fim',
-                        ]
-                        _wcs2_col_order = [c for c in _wcs2_col_order if c in pd.DataFrame(_wcs2_rows).columns]
-                        _df_wcs2 = pd.DataFrame(_wcs2_rows)[_wcs2_col_order]
+                        _df_all_tmp = pd.DataFrame(_wcs2_rows)
+                        _mw_avail   = [c for c in ['1 min', '3 min', '5 min']
+                                       if c in _df_all_tmp.columns
+                                       and _df_all_tmp[c].notna().any()]
+                        _wcs2_col_order = (
+                            ['#', 'Atleta', 'Posição', 'Período',
+                             _wcs2_metric, '% Máx Grupo']
+                            + _mw_avail
+                            + ['Início', 'Fim']
+                        )
+                        _wcs2_col_order = [c for c in _wcs2_col_order if c in _df_all_tmp.columns]
+                        _df_wcs2 = _df_all_tmp[_wcs2_col_order]
 
+                        _col_cfg_wcs = {
+                            '% Máx Grupo': st.column_config.ProgressColumn(
+                                '% Máx', min_value=0, max_value=100, format='%.1f%%'
+                            ),
+                        }
                         _wcs2_evt = st.dataframe(
                             _df_wcs2,
                             use_container_width=True,
@@ -11371,14 +11432,20 @@ Escolha um ou mais atletas para análise simultânea.
                             on_select='rerun',
                             selection_mode='single-row',
                             key='wcs2_table_sel',
+                            column_config=_col_cfg_wcs,
                         )
-                        st.caption("💡 Clique em uma linha para visualizar o percurso animado no campo abaixo.")
+                        st.caption(
+                            "💡 Clique em uma linha para visualizar o percurso animado no campo abaixo. "
+                            "As colunas 1/3/5 min mostram o valor WCS para janelas fixas de comparação."
+                        )
 
                         # ── Animação no campo ao selecionar linha ──────────────────
                         _wcs2_sel = (_wcs2_evt.selection.rows
                                      if _wcs2_evt.selection else [])
                         if _wcs2_sel:
-                            _wsel_atl = _wcs2_rows[_wcs2_sel[0]]['Atleta']
+                            _wsel_atl = _wcs2_rows[_wcs2_sel[0]].get(
+                                '_atl_orig', _wcs2_rows[_wcs2_sel[0]]['Atleta']
+                            )
                             _wsel_row = _wcs2_rows[_wcs2_sel[0]]
                             _wseg     = _wcs2_segs.get(_wsel_atl, {})
                             _wcs2_xn  = _wseg.get('xn', [])
@@ -11565,6 +11632,207 @@ Escolha um ou mais atletas para análise simultânea.
                                 st.plotly_chart(_fig_wcs2, use_container_width=True)
                             else:
                                 st.info("Dados GPS insuficientes para animação deste atleta.")
+
+                        # ── Pior Momento Posicional Coletivo ───────────────────────
+                        st.markdown("---")
+                        with st.expander("🗺️ Pior Momento Posicional Coletivo", expanded=False):
+                            st.caption(
+                                "Identifica o **instante crítico** em que o grupo apresentou a maior "
+                                "exigência posicional coletiva no período selecionado — "
+                                "revelando padrões de organização ou desorganização tática. "
+                                "Selecione o período e o critério de 'pior momento'."
+                            )
+                            if not _wcs2_periodos:
+                                st.info("Nenhum período disponível.")
+                            else:
+                                _colc1, _colc2 = st.columns(2)
+                                with _colc1:
+                                    _col_per_sel = st.selectbox(
+                                        "📅 Período",
+                                        _wcs2_periodos,
+                                        key="wcol_per_sel",
+                                        help="Período para a análise coletiva",
+                                    )
+                                with _colc2:
+                                    _col_metric_opts = [
+                                        "🔴 Maior Dispersão  (time mais espalhado)",
+                                        "🔵 Maior Compactidade  (time mais compacto)",
+                                        "📏 Maior Amplitude  (largura máxima)",
+                                        "📐 Maior Profundidade  (comprimento máximo)",
+                                        "⚡ Maior Espaço entre Linhas  (gap def-ata)",
+                                    ]
+                                    _col_metric = st.selectbox(
+                                        "📊 Métrica Coletiva",
+                                        _col_metric_opts,
+                                        key="wcol_metric_sel",
+                                        help="Critério do 'pior momento' coletivo",
+                                    )
+
+                                # Montar dados do período selecionado
+                                _col_period_data = dados_posicao_por_periodo.get(_col_per_sel, {})
+                                _col_athl_map = {}
+                                for _ca, _cad in _col_period_data.items():
+                                    _cxs = list(_cad.get('xs', []))
+                                    _cys = list(_cad.get('ys', []))
+                                    _cvs = list(_cad.get('vel', []))
+                                    _cts = list(_cad.get('ts_pos', []))
+                                    _nn2 = min(len(_cxs), len(_cys))
+                                    if _nn2 > 1:
+                                        _col_athl_map[_ca] = {
+                                            'xs':  _cxs[:_nn2],
+                                            'ys':  _cys[:_nn2],
+                                            'vel': _cvs[:_nn2] if len(_cvs) >= _nn2 else [0.0] * _nn2,
+                                            'ts':  _cts[:_nn2] if len(_cts) >= _nn2 else [0.0] * _nn2,
+                                            'pos': str(_cad.get('posicao', '—')),
+                                        }
+
+                                if len(_col_athl_map) < 2:
+                                    st.info("Poucos atletas com GPS neste período para análise coletiva.")
+                                else:
+                                    _col_athletes = list(_col_athl_map.keys())
+                                    _col_n        = min(len(_col_athl_map[a]['xs']) for a in _col_athletes)
+
+                                    # Pontuação por frame
+                                    _col_scores = []
+                                    for _ci in range(_col_n):
+                                        _cxi = [_col_athl_map[a]['xs'][_ci] for a in _col_athletes]
+                                        _cyi = [_col_athl_map[a]['ys'][_ci] for a in _col_athletes]
+                                        _nm2 = len(_cxi)
+                                        _xm2 = sum(_cxi) / _nm2
+                                        _ym2 = sum(_cyi) / _nm2
+                                        _cm  = _col_metric
+                                        if "Dispersão" in _cm:
+                                            _sc = sum(
+                                                ((x - _xm2) ** 2 + (y - _ym2) ** 2) ** 0.5
+                                                for x, y in zip(_cxi, _cyi)
+                                            ) / _nm2
+                                        elif "Compactidade" in _cm:
+                                            _sc = -(
+                                                sum(
+                                                    ((x - _xm2) ** 2 + (y - _ym2) ** 2) ** 0.5
+                                                    for x, y in zip(_cxi, _cyi)
+                                                ) / _nm2
+                                            )
+                                        elif "Amplitude" in _cm:
+                                            _sc = max(_cxi) - min(_cxi)
+                                        elif "Profundidade" in _cm:
+                                            _sc = max(_cyi) - min(_cyi)
+                                        elif "Espaço" in _cm:
+                                            _sy2 = sorted(_cyi)
+                                            _h2  = _nm2 // 2
+                                            _sc  = (
+                                                sum(_sy2[_h2:]) / len(_sy2[_h2:]) - sum(_sy2[:_h2]) / len(_sy2[:_h2])
+                                            ) if _h2 else 0.0
+                                        else:
+                                            _sc = 0.0
+                                        _col_scores.append(_sc)
+
+                                    _col_bi  = max(range(len(_col_scores)), key=lambda i: _col_scores[i])
+                                    _col_bv  = abs(_col_scores[_col_bi])
+
+                                    # Timestamp
+                                    _col_ts0 = _col_athl_map[_col_athletes[0]]['ts'][_col_bi]
+                                    try:
+                                        from datetime import datetime as _dtcol
+                                        _col_tstr = (
+                                            _dtcol.fromtimestamp(float(_col_ts0)).strftime('%H:%M:%S')
+                                            if float(_col_ts0) > 1e6
+                                            else f"{int(_col_bi / 10 // 60):02d}:{int(_col_bi / 10 % 60):02d}"
+                                        )
+                                    except Exception:
+                                        _col_tstr = f"{int(_col_bi / 10 // 60):02d}:{int(_col_bi / 10 % 60):02d}"
+
+                                    _ck1, _ck2, _ck3 = st.columns(3)
+                                    _ck1.metric("⏱️ Instante", _col_tstr)
+                                    _ck2.metric("📊 Valor", f"{_col_bv:.1f} m")
+                                    _ck3.metric("👥 Atletas", str(len(_col_athl_map)))
+
+                                    # Criar campo
+                                    _col_cfg3 = None
+                                    for _hkc3 in list(st.session_state.keys()):
+                                        if (
+                                            _hkc3.startswith("campo_cfg__")
+                                            and isinstance(st.session_state[_hkc3], dict)
+                                            and 'fl' in st.session_state[_hkc3]
+                                        ):
+                                            _col_cfg3 = st.session_state[_hkc3]
+                                            break
+                                    _col_fl3 = float(_col_cfg3.get('fl', 105)) if _col_cfg3 else 105.0
+                                    _col_fw3 = float(_col_cfg3.get('fw', 68))  if _col_cfg3 else 68.0
+
+                                    _fig_col = desenhar_campo_futebol_bonito(
+                                        field_length=_col_fl3,
+                                        field_width=_col_fw3,
+                                        title=(
+                                            f"{_col_metric.split('  ')[0].strip()} | "
+                                            f"{_col_per_sel} | ⏱️ {_col_tstr} | "
+                                            f"Valor: {_col_bv:.1f} m"
+                                        ),
+                                    )
+
+                                    _col_palette = [
+                                        '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
+                                        '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#76D7C4',
+                                        '#F1948A', '#85C1E9', '#82E0AA', '#F8C471', '#AED6F1',
+                                    ]
+                                    _cx_all3, _cy_all3 = [], []
+                                    for _ci3, _ca3 in enumerate(_col_athletes):
+                                        _cd3  = _col_athl_map[_ca3]
+                                        _cx3  = _cd3['xs'][_col_bi]
+                                        _cy3  = _cd3['ys'][_col_bi]
+                                        _cv3  = _cd3['vel'][_col_bi] if _col_bi < len(_cd3['vel']) else 0.0
+                                        _ccl3 = _col_palette[_ci3 % len(_col_palette)]
+                                        _cx_all3.append(_cx3)
+                                        _cy_all3.append(_cy3)
+                                        _lbl3 = (_ca3.split()[-1][:10] if _ca3.split() else _ca3[:10])
+                                        _fig_col.add_trace(go.Scatter(
+                                            x=[_cx3], y=[_cy3],
+                                            mode='markers+text',
+                                            marker=dict(
+                                                size=22, color=_ccl3, symbol='circle',
+                                                line=dict(color='white', width=2),
+                                            ),
+                                            text=[_lbl3],
+                                            textposition='top center',
+                                            textfont=dict(color='white', size=8),
+                                            name=_ca3,
+                                            customdata=[[_cd3.get('pos', '—'), round(_cv3, 1)]],
+                                            hovertemplate=(
+                                                '<b>%{meta}</b><br>'
+                                                'Posição: %{customdata[0]}<br>'
+                                                'Velocidade: %{customdata[1]} km/h'
+                                                '<extra></extra>'
+                                            ),
+                                            meta=_ca3,
+                                            showlegend=True,
+                                        ))
+
+                                    # Centróide do grupo
+                                    if _cx_all3:
+                                        _cxm3 = sum(_cx_all3) / len(_cx_all3)
+                                        _cym3 = sum(_cy_all3) / len(_cy_all3)
+                                        _fig_col.add_trace(go.Scatter(
+                                            x=[_cxm3], y=[_cym3],
+                                            mode='markers',
+                                            marker=dict(
+                                                size=16, color='white', symbol='x',
+                                                line=dict(color='#333', width=2),
+                                            ),
+                                            name='Centróide',
+                                            hoverinfo='name',
+                                            showlegend=True,
+                                        ))
+
+                                    _fig_col.update_layout(
+                                        height=580,
+                                        legend=dict(
+                                            orientation='h',
+                                            yanchor='bottom', y=-0.30,
+                                            xanchor='center', x=0.5,
+                                            font=dict(color='white', size=8),
+                                        ),
+                                    )
+                                    st.plotly_chart(_fig_col, use_container_width=True)
 
             # ==================== ABA 10: MONITORAMENTO AO VIVO ====================
             with abas[10]:
