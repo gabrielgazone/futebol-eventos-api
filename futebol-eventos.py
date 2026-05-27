@@ -5230,7 +5230,7 @@ Escolha um ou mais atletas para análise simultânea.
 
             # ── Criar sub-tabs dentro de cada aba principal ────────────────────
             with _main_tabs[1]:
-                _sub_campo = st.tabs(["🗺️ Campo de Futebol", "🎬 História do Jogo"])
+                _sub_campo = st.tabs(["🗺️ Campo de Futebol", "🎬 História do Jogo", "⚡ WCS"])
             with _main_tabs[2]:
                 _sub_carga = st.tabs(["⏱️ Esforços", "📊 Janelas Temporais", "💪 Neuromuscular", "🏎️ Acc-Vel", "❤️ FC"])
             with _main_tabs[3]:
@@ -11157,6 +11157,414 @@ Escolha um ou mais atletas para análise simultânea.
                                     _tr3.metric("Ratio O/D", f"{_n_toff/_n_tdef:.2f}" if _n_tdef else "—")
 
                                     st.markdown("---")
+
+            # ══════════════════════════════════════════════════════════════
+            # WCS: WORST-CASE SCENARIO (sub-tab Campo & GPS)
+            # ══════════════════════════════════════════════════════════════
+            with _sub_campo[2]:
+                st.subheader("⚡ Worst-Case Scenario")
+                st.caption(
+                    "Identifica a **janela temporal de maior exigência física** de cada atleta "
+                    "buscando o pior cenário em todos os períodos da atividade. "
+                    "Base para prescrição de cargas de treino acima do jogo. "
+                    "_(Delaney et al., 2018; Martín-García et al., 2018)_"
+                )
+
+                if _ok_ld == 0 or not dados_posicao_por_periodo:
+                    st.info("Carregue os dados para usar a análise de Worst-Case Scenario.")
+                else:
+                    # ── Controles ──────────────────────────────────────────────────
+                    _wcs2_c1, _wcs2_c2 = st.columns([1, 2])
+                    with _wcs2_c1:
+                        _wcs2_min = st.slider(
+                            "⏱️ Janela temporal (min)", 1, 15, 5,
+                            key="wcs2_janela",
+                            help="Duração da janela rolante para identificar o pior cenário"
+                        )
+                    with _wcs2_c2:
+                        _wcs2_metric_opts = [
+                            "Distância (m)",
+                            "Dist. >14 km/h (m)",
+                            "Dist. >19 km/h (m)  — Alta Intensidade",
+                            "Dist. >24 km/h (m)  — Sprint",
+                            "Velocidade Máx (km/h)",
+                            "PlayerLoad",
+                            "Acelerações >2 m/s² (n)",
+                            "Acelerações >3 m/s² (n)",
+                            "Desacelerações <-2 m/s² (n)",
+                            "Desacelerações <-3 m/s² (n)",
+                        ]
+                        _wcs2_metric = st.selectbox(
+                            "📊 Variável", _wcs2_metric_opts,
+                            key="wcs2_metric_sel",
+                            help="Métrica para identificar a janela de maior exigência"
+                        )
+
+                    _wcs2_hz = 10.0
+                    _wcs2_n  = int(_wcs2_min * 60 * _wcs2_hz)
+
+                    # ── Cálculo do WCS por atleta ───────────────────────────────────
+                    _wcs2_rows = []
+                    _wcs2_segs = {}  # atleta → {xn, yn, vel} para animação
+
+                    _wcs2_periodos = [
+                        k for k in dados_posicao_por_periodo
+                        if k != _CHAVE_COMBINADO
+                    ]
+                    _wcs2_athletes = sorted(set(
+                        a for _pn in _wcs2_periodos
+                        for a in dados_posicao_por_periodo.get(_pn, {}).keys()
+                    ))
+
+                    for _wa in _wcs2_athletes:
+                        _wx, _wy, _wv, _wac, _wts, _wper = [], [], [], [], [], []
+                        for _pn in _wcs2_periodos:
+                            _da  = dados_posicao_por_periodo.get(_pn, {}).get(_wa, {})
+                            _xs  = _da.get('xs', [])
+                            _ys  = _da.get('ys', [])
+                            _vl  = _da.get('vel', [])         # km/h
+                            _ac  = _da.get('acc', [0.0] * len(_xs))
+                            _ts  = _da.get('ts_pos', [0.0] * len(_xs))
+                            _nn  = min(len(_xs), len(_ys), len(_vl))
+                            if _nn > 0:
+                                _wx  += list(_xs[:_nn])
+                                _wy  += list(_ys[:_nn])
+                                _wv  += list(_vl[:_nn])
+                                _wac += list(_ac[:_nn])
+                                _wts += list(_ts[:_nn])
+                                _wper += [_pn] * _nn
+
+                        if len(_wx) < max(_wcs2_n, 2):
+                            continue
+
+                        # Valor por amostra para a métrica selecionada
+                        _Hz = _wcs2_hz
+                        _m  = _wcs2_metric
+                        if _m == "Distância (m)":
+                            _sv = [v / (3.6 * _Hz) for v in _wv]
+                        elif _m == "Dist. >14 km/h (m)":
+                            _sv = [v / (3.6 * _Hz) if v > 14 else 0.0 for v in _wv]
+                        elif "19" in _m:
+                            _sv = [v / (3.6 * _Hz) if v > 19 else 0.0 for v in _wv]
+                        elif "24" in _m:
+                            _sv = [v / (3.6 * _Hz) if v > 24 else 0.0 for v in _wv]
+                        elif _m == "Velocidade Máx (km/h)":
+                            _sv = list(_wv)   # rolling max — tratado abaixo
+                        elif _m == "PlayerLoad":
+                            _pl_raw = []
+                            for _ppn in _wcs2_periodos:
+                                _pl_raw += dados_sensor_por_atleta_por_periodo.get(_ppn, {}).get(_wa, [])
+                            if len(_pl_raw) >= len(_wx):
+                                _sv = [float(p.get('pl') or 0) for p in _pl_raw[:len(_wx)]]
+                            else:
+                                _sv = [float(p.get('pl') or 0) for p in _pl_raw] + [0.0] * (len(_wx) - len(_pl_raw))
+                        elif ">2" in _m and "Acel" in _m:
+                            _sv = [1.0 if a > 2 else 0.0 for a in _wac]
+                        elif ">3" in _m and "Acel" in _m:
+                            _sv = [1.0 if a > 3 else 0.0 for a in _wac]
+                        elif "<-2" in _m:
+                            _sv = [1.0 if a < -2 else 0.0 for a in _wac]
+                        elif "<-3" in _m:
+                            _sv = [1.0 if a < -3 else 0.0 for a in _wac]
+                        else:
+                            _sv = [v / (3.6 * _Hz) for v in _wv]
+
+                        # Janela rolante
+                        if _m == "Velocidade Máx (km/h)":
+                            from collections import deque as _Dq
+                            _dq3 = _Dq()
+                            _bv3, _bsi3, _bei3 = -1.0, 0, _wcs2_n
+                            for _i3 in range(len(_sv)):
+                                while _dq3 and _sv[_dq3[-1]] <= _sv[_i3]:
+                                    _dq3.pop()
+                                _dq3.append(_i3)
+                                if _dq3[0] <= _i3 - _wcs2_n:
+                                    _dq3.popleft()
+                                if _i3 >= _wcs2_n - 1:
+                                    _c3 = _sv[_dq3[0]]
+                                    if _c3 > _bv3:
+                                        _bv3  = _c3
+                                        _bei3 = _i3 + 1
+                                        _bsi3 = _bei3 - _wcs2_n
+                            _best_val2, _best_si2, _best_ei2 = _bv3, _bsi3, _bei3
+                        else:
+                            _csum = sum(_sv[:_wcs2_n])
+                            _best_val2, _best_si2, _best_ei2 = _csum, 0, _wcs2_n
+                            for _i3 in range(1, len(_sv) - _wcs2_n + 1):
+                                _csum += _sv[_i3 + _wcs2_n - 1] - _sv[_i3 - 1]
+                                if _csum > _best_val2:
+                                    _best_val2 = _csum
+                                    _best_si2  = _i3
+                                    _best_ei2  = _i3 + _wcs2_n
+
+                        # Timestamps
+                        _ts0 = _wts[_best_si2] if _best_si2 < len(_wts) else 0
+                        _ts1 = _wts[min(_best_ei2 - 1, len(_wts) - 1)] if _wts else 0
+                        try:
+                            from datetime import datetime as _dtc
+                            _ini_str = _dtc.fromtimestamp(float(_ts0)).strftime('%H:%M:%S') if float(_ts0) > 1e6 else f"{int(_best_si2/_Hz//60):02d}:{int(_best_si2/_Hz%60):02d}"
+                            _fim_str = _dtc.fromtimestamp(float(_ts1)).strftime('%H:%M:%S') if float(_ts1) > 1e6 else f"{int(_best_ei2/_Hz//60):02d}:{int(_best_ei2/_Hz%60):02d}"
+                        except Exception:
+                            _ini_str = f"{int(_best_si2/_Hz//60):02d}:{int(_best_si2/_Hz%60):02d}"
+                            _fim_str = f"{int(_best_ei2/_Hz//60):02d}:{int(_best_ei2/_Hz%60):02d}"
+
+                        # Posição do atleta
+                        _posicao2 = '—'
+                        for _rpn2, _rpl2 in resultados_por_periodo.items():
+                            for _rrow2 in _rpl2:
+                                if str(_rrow2.get('Atleta', '')) == _wa:
+                                    _posicao2 = str(_rrow2.get('Posição', '—'))
+                                    break
+                            if _posicao2 != '—':
+                                break
+
+                        _wcs2_rows.append({
+                            'Atleta':      _wa,
+                            'Posição':     _posicao2,
+                            'Período':     _wper[_best_si2] if _best_si2 < len(_wper) else '—',
+                            _wcs2_metric:  round(_best_val2, 1),
+                            'Início':      _ini_str,
+                            'Fim':         _fim_str,
+                        })
+                        _wcs2_segs[_wa] = {
+                            'xn':  _wx[_best_si2:_best_ei2],
+                            'yn':  _wy[_best_si2:_best_ei2],
+                            'vel': _wv[_best_si2:_best_ei2],
+                        }
+
+                    _wcs2_rows.sort(key=lambda r: r.get(_wcs2_metric, 0), reverse=True)
+
+                    if not _wcs2_rows:
+                        st.warning(
+                            "Dados insuficientes para calcular WCS com essa janela temporal. "
+                            "Reduza a janela ou carregue mais períodos."
+                        )
+                    else:
+                        # % do Máximo do grupo
+                        _wcs2_top = _wcs2_rows[0].get(_wcs2_metric, 0) or 1.0
+                        _wcs2_avg = sum(r.get(_wcs2_metric, 0) for r in _wcs2_rows) / len(_wcs2_rows)
+                        for _wr in _wcs2_rows:
+                            _wr['% Máx Grupo'] = round(_wr.get(_wcs2_metric, 0) / _wcs2_top * 100, 1)
+
+                        # KPIs resumo
+                        _wk1, _wk2, _wk3, _wk4 = st.columns(4)
+                        _wk1.metric("🏆 Maior WCS",   f"{_wcs2_top:.1f}", _wcs2_rows[0]['Atleta'])
+                        _wk2.metric("📊 Média Grupo", f"{_wcs2_avg:.1f}")
+                        _wk3.metric("👥 Atletas",      str(len(_wcs2_rows)))
+                        _wk4.metric("⏱️ Janela",      f"{_wcs2_min} min")
+
+                        st.markdown("---")
+
+                        # Tabela
+                        _wcs2_col_order = [
+                            'Atleta', 'Posição', 'Período',
+                            _wcs2_metric, '% Máx Grupo',
+                            'Início', 'Fim',
+                        ]
+                        _wcs2_col_order = [c for c in _wcs2_col_order if c in pd.DataFrame(_wcs2_rows).columns]
+                        _df_wcs2 = pd.DataFrame(_wcs2_rows)[_wcs2_col_order]
+
+                        _wcs2_evt = st.dataframe(
+                            _df_wcs2,
+                            use_container_width=True,
+                            hide_index=True,
+                            on_select='rerun',
+                            selection_mode='single-row',
+                            key='wcs2_table_sel',
+                        )
+                        st.caption("💡 Clique em uma linha para visualizar o percurso animado no campo abaixo.")
+
+                        # ── Animação no campo ao selecionar linha ──────────────────
+                        _wcs2_sel = (_wcs2_evt.selection.rows
+                                     if _wcs2_evt.selection else [])
+                        if _wcs2_sel:
+                            _wsel_atl = _wcs2_rows[_wcs2_sel[0]]['Atleta']
+                            _wsel_row = _wcs2_rows[_wcs2_sel[0]]
+                            _wseg     = _wcs2_segs.get(_wsel_atl, {})
+                            _wcs2_xn  = _wseg.get('xn', [])
+                            _wcs2_yn  = _wseg.get('yn', [])
+                            _wcs2_vel = _wseg.get('vel', [])
+
+                            if len(_wcs2_xn) >= 2:
+                                st.markdown(f"### 🏃 {_wsel_atl} — WCS {_wcs2_min} min")
+                                _wval_str = f"{_wsel_row.get(_wcs2_metric, 0):.1f}"
+                                _wm1, _wm2, _wm3 = st.columns(3)
+                                _wm1.metric(_wcs2_metric, _wval_str)
+                                _wm2.metric("⏰ Início",  _wsel_row.get('Início', '—'))
+                                _wm3.metric("🏁 Fim",     _wsel_row.get('Fim',    '—'))
+
+                                # Campo config
+                                _wcs2_cfg = None
+                                for _hk2 in list(st.session_state.keys()):
+                                    if (_hk2.startswith("campo_cfg__")
+                                            and isinstance(st.session_state[_hk2], dict)
+                                            and 'fl' in st.session_state[_hk2]):
+                                        _wcs2_cfg = st.session_state[_hk2]
+                                        break
+                                _wcs2_fl = float(_wcs2_cfg.get('fl', 105)) if _wcs2_cfg else 105.0
+                                _wcs2_fw = float(_wcs2_cfg.get('fw', 68))  if _wcs2_cfg else 68.0
+
+                                def _vc_wcs2(v):
+                                    if v < 7:  return '#2196F3'
+                                    if v < 14: return '#4CAF50'
+                                    if v < 19: return '#FFEB3B'
+                                    if v < 24: return '#FF9800'
+                                    return '#F44336'
+
+                                _fig_wcs2 = desenhar_campo_futebol_bonito(
+                                    field_length=_wcs2_fl,
+                                    field_width=_wcs2_fw,
+                                    title=(
+                                        f"WCS {_wcs2_min} min — {_wsel_atl}  |  "
+                                        f"{_wsel_row.get('Início','—')} → {_wsel_row.get('Fim','—')}"
+                                    )
+                                )
+                                _n_base_wcs2 = len(_fig_wcs2.data)
+
+                                # Downsampling
+                                _nf2   = len(_wcs2_xn)
+                                _step2 = max(1, _nf2 // 120)
+                                _fr2   = list(range(0, _nf2, _step2))
+                                if _fr2[-1] != _nf2 - 1:
+                                    _fr2.append(_nf2 - 1)
+
+                                # Traces estáticos: início / fim
+                                _fig_wcs2.add_trace(go.Scatter(
+                                    x=[_wcs2_xn[0]], y=[_wcs2_yn[0]],
+                                    mode='markers+text',
+                                    marker=dict(size=13, color='#4CAF50', symbol='circle',
+                                                line=dict(color='white', width=2)),
+                                    text=['▶'], textposition='top center',
+                                    textfont=dict(color='#4CAF50', size=11),
+                                    name='Início', showlegend=False, hoverinfo='skip'
+                                ))
+                                _fig_wcs2.add_trace(go.Scatter(
+                                    x=[_wcs2_xn[-1]], y=[_wcs2_yn[-1]],
+                                    mode='markers+text',
+                                    marker=dict(size=13, color='#F44336', symbol='x',
+                                                line=dict(color='white', width=2)),
+                                    text=['■'], textposition='top center',
+                                    textfont=dict(color='#F44336', size=11),
+                                    name='Fim', showlegend=False, hoverinfo='skip'
+                                ))
+                                # Traço animado
+                                _fig_wcs2.add_trace(go.Scatter(
+                                    x=[_wcs2_xn[0]], y=[_wcs2_yn[0]], mode='lines',
+                                    line=dict(color=_vc_wcs2(_wcs2_vel[0] if _wcs2_vel else 0), width=4),
+                                    name='Percurso', showlegend=False
+                                ))
+                                # Dot animado
+                                _fig_wcs2.add_trace(go.Scatter(
+                                    x=[_wcs2_xn[0]], y=[_wcs2_yn[0]], mode='markers',
+                                    marker=dict(
+                                        size=18,
+                                        color=_vc_wcs2(_wcs2_vel[0] if _wcs2_vel else 0),
+                                        symbol='circle',
+                                        line=dict(color='white', width=3)
+                                    ),
+                                    name='Posição', showlegend=False
+                                ))
+
+                                _idx_t2 = _n_base_wcs2 + 2
+                                _idx_d2 = _n_base_wcs2 + 3
+
+                                # Frames
+                                _frames2 = []
+                                for _fk2 in _fr2:
+                                    _ds3  = (_fk2 / max(_nf2 - 1, 1)) * _wcs2_min * 60
+                                    _dm3  = int(_ds3 // 60)
+                                    _dsr3 = int(_ds3 % 60)
+                                    _v3   = float(_wcs2_vel[_fk2]) if _fk2 < len(_wcs2_vel) else 0.0
+                                    _c3   = _vc_wcs2(_v3)
+                                    _frames2.append(go.Frame(
+                                        data=[
+                                            go.Scatter(
+                                                x=_wcs2_xn[:_fk2 + 1],
+                                                y=_wcs2_yn[:_fk2 + 1],
+                                                mode='lines',
+                                                line=dict(color=_c3, width=4),
+                                            ),
+                                            go.Scatter(
+                                                x=[_wcs2_xn[_fk2]],
+                                                y=[_wcs2_yn[_fk2]],
+                                                mode='markers',
+                                                marker=dict(
+                                                    size=18, color=_c3,
+                                                    symbol='circle',
+                                                    line=dict(color='white', width=3)
+                                                ),
+                                            ),
+                                        ],
+                                        traces=[_idx_t2, _idx_d2],
+                                        name=str(_fk2),
+                                        layout=go.Layout(title=dict(
+                                            text=(
+                                                f'WCS {_wcs2_min} min — {_wsel_atl} | '
+                                                f'⏱️ {_dm3}:{_dsr3:02d} / {_wcs2_min}:00'
+                                                f'   |   💨 {_v3:.1f} km/h'
+                                            ),
+                                            font=dict(color='white', size=12)
+                                        ))
+                                    ))
+
+                                _fig_wcs2.frames = _frames2
+
+                                _sliders_wcs2 = [{
+                                    'steps': [
+                                        {
+                                            'args': [[str(_fk2)],
+                                                     {'frame': {'duration': 0, 'redraw': True},
+                                                      'mode': 'immediate'}],
+                                            'label': '',
+                                            'method': 'animate',
+                                        }
+                                        for _fk2 in _fr2
+                                    ],
+                                    'transition': {'duration': 0},
+                                    'x': 0.05, 'len': 0.90,
+                                    'currentvalue': {'visible': False},
+                                    'bgcolor': '#1e3a5f',
+                                    'bordercolor': '#2196F3',
+                                    'tickcolor': 'white',
+                                    'font': {'color': 'white', 'size': 9},
+                                }]
+                                _fig_wcs2.update_layout(
+                                    height=560,
+                                    updatemenus=[{
+                                        'type': 'buttons',
+                                        'showactive': False,
+                                        'y': -0.08, 'x': 0.5,
+                                        'xanchor': 'center', 'yanchor': 'top',
+                                        'buttons': [
+                                            {
+                                                'label': '▶ Play',
+                                                'method': 'animate',
+                                                'args': [None, {
+                                                    'frame': {'duration': 60, 'redraw': True},
+                                                    'fromcurrent': True,
+                                                    'transition': {'duration': 0},
+                                                }],
+                                            },
+                                            {
+                                                'label': '⏸ Pause',
+                                                'method': 'animate',
+                                                'args': [[None], {
+                                                    'frame': {'duration': 0, 'redraw': False},
+                                                    'mode': 'immediate',
+                                                    'transition': {'duration': 0},
+                                                }],
+                                            },
+                                        ],
+                                        'font': {'color': 'white'},
+                                        'bgcolor': '#1e3a5f',
+                                        'bordercolor': '#2196F3',
+                                    }],
+                                    sliders=_sliders_wcs2,
+                                    margin=dict(b=80),
+                                )
+                                st.plotly_chart(_fig_wcs2, use_container_width=True)
+                            else:
+                                st.info("Dados GPS insuficientes para animação deste atleta.")
 
             # ==================== ABA 10: MONITORAMENTO AO VIVO ====================
             with abas[10]:
