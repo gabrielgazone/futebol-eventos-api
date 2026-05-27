@@ -7429,15 +7429,8 @@ Escolha um ou mais atletas para análise simultânea.
                                                         title=(f"WCS — {_pdw_show} "
                                                                f"(início: {_rr_show['Início (min)']} min)")
                                                     )
-                                                    # Rastro completo do período (fundo, bem apagado)
-                                                    _sbg_p = max(1, len(_pdw_xn) // 3000)
-                                                    _fig_pdw_c.add_trace(go.Scatter(
-                                                        x=_pdw_xn[::_sbg_p], y=_pdw_yn[::_sbg_p],
-                                                        mode='markers',
-                                                        marker=dict(size=1.5, color='rgba(255,255,255,0.06)'),
-                                                        showlegend=False, hoverinfo='skip',
-                                                        name='_bg',
-                                                    ))
+                                                    # Rastro de fundo removido — apenas o WCS selecionado é exibido
+                                                    _sbg_p = 1  # mantido para compatibilidade com frames
 
                                                     # ── Construir animação WCS ────────────────────
                                                     _xpk  = list(_pdw_xn[_si_p:_ei_p])
@@ -7516,11 +7509,7 @@ Escolha um ou mais atletas para análise simultânea.
                                                         _dur_s2 = int(_dur_s % 60)
                                                         _frames_wcs.append(go.Frame(
                                                             data=[
-                                                                # bg trace — sem mudança
-                                                                go.Scatter(
-                                                                    x=_pdw_xn[::_sbg_p],
-                                                                    y=_pdw_yn[::_sbg_p],
-                                                                ),
+                                                                # (bg trace removido)
                                                                 # trail: todos os pontos até _fi
                                                                 go.Scatter(
                                                                     x=_xpk[:_fi + 1],
