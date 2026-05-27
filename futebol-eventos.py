@@ -4908,9 +4908,9 @@ Escolha um ou mais atletas para análise simultânea.
 
                     # ── GPS Quality (pq, hdop, ref) e Odômetro (o) ────────────
                     # Item 8: qualidade do sinal GPS; Item 12: distância pelo odômetro nativo
-                    _pq_vals   = [float(p['pq'])   for p in sensor_points if p.get('pq')   is not None and float(p.get('pq', 0)) > 0]
+                    _pq_vals   = [float(p['pq'])   for p in sensor_points if p.get('pq')   is not None and float(p.get('pq') or 0) > 0]
                     _hdop_vals = [float(p['hdop'])  for p in sensor_points if p.get('hdop') is not None]
-                    _ref_vals  = [float(p['ref'])   for p in sensor_points if p.get('ref')  is not None and float(p.get('ref', 0)) > 0]
+                    _ref_vals  = [float(p['ref'])   for p in sensor_points if p.get('ref')  is not None and float(p.get('ref') or 0) > 0]
                     _o_vals    = [float(p['o'])     for p in sensor_points if p.get('o')    is not None]
                     if atleta_nome in dados_posicao:
                         dados_posicao[atleta_nome]['pq_mean']   = round(float(np.mean(_pq_vals)),   1) if _pq_vals   else None
@@ -8847,7 +8847,7 @@ Escolha um ou mais atletas para análise simultânea.
                         _mp_vals_esf = [
                             float(p['mp'])
                             for p in sensor_points
-                            if p.get('mp') and float(p.get('mp', 0)) > 0
+                            if p.get('mp') and float(p.get('mp') or 0) > 0
                         ]
                         if _mp_vals_esf:
                             st.markdown("### ⚡ Potência Metabólica ao Longo do Tempo")
@@ -8855,7 +8855,7 @@ Escolha um ou mais atletas para análise simultânea.
                             _mp_ts = [
                                 (float(p.get('ts') or 0) - _ts0_mp)
                                 for p in sensor_points
-                                if p.get('mp') and float(p.get('mp', 0)) > 0
+                                if p.get('mp') and float(p.get('mp') or 0) > 0
                             ]
                             _fig_mp = go.Figure()
                             _fig_mp.add_trace(go.Scatter(
@@ -9182,7 +9182,7 @@ Escolha um ou mais atletas para análise simultânea.
                         _nm_mp_pts = _nm_sp
                         _nm_mp_vals = [
                             float(p['mp']) for p in _nm_mp_pts
-                            if p.get('mp') and float(p.get('mp', 0)) > 0
+                            if p.get('mp') and float(p.get('mp') or 0) > 0
                         ]
                         if _nm_mp_vals:
                             _nm_mp_mean = float(np.mean(_nm_mp_vals))
@@ -9474,9 +9474,9 @@ Escolha um ou mais atletas para análise simultânea.
                         else:
                             _qa_pts = dados_sensor_por_atleta_por_periodo.get(_av_per, {}).get(_qa_atl, [])
 
-                        _qa_vs = np.array([float(p.get('v', 0)) * 3.6 for p in _qa_pts])
-                        _qa_as = np.array([float(p.get('a', 0)) for p in _qa_pts])
-                        _qa_ts = np.array([float(p.get('ts', 0)) for p in _qa_pts])
+                        _qa_vs = np.array([float(p.get('v') or 0) * 3.6 for p in _qa_pts])
+                        _qa_as = np.array([float(p.get('a') or 0) for p in _qa_pts])
+                        _qa_ts = np.array([float(p.get('ts') or 0) for p in _qa_pts])
 
                         if len(_qa_as) > 10:
                             # Detectar eventos de aceleração: a > 2 m/s² por ≥ 3 amostras (0.3 s a 10 Hz)
@@ -9597,9 +9597,9 @@ Escolha um ou mais atletas para análise simultânea.
                         else:
                             _pld_pts = dados_sensor_por_atleta_por_periodo.get(_av_per, {}).get(_pld_atl, [])
 
-                        _pld_ap  = sum(float(p.get('pla', 0))  for p in _pld_pts)
-                        _pld_ml  = sum(float(p.get('plml', 0)) for p in _pld_pts)
-                        _pld_vt  = sum(float(p.get('plv', 0))  for p in _pld_pts)
+                        _pld_ap  = sum(float(p.get('pla')  or 0) for p in _pld_pts)
+                        _pld_ml  = sum(float(p.get('plml') or 0) for p in _pld_pts)
+                        _pld_vt  = sum(float(p.get('plv')  or 0) for p in _pld_pts)
                         _pld_tot = _pld_ap + _pld_ml + _pld_vt
 
                         # fallback: estimar AP/ML/V a partir de aceleração se sensor não tiver eixos
@@ -9734,7 +9734,7 @@ Escolha um ou mais atletas para análise simultânea.
                         else:
                             _fc_pts = dados_sensor_por_atleta_por_periodo.get(_fc_per, {}).get(_fc_atl, [])
 
-                        _hr_vals = [float(p['hr']) for p in _fc_pts if p.get('hr') and float(p.get('hr', 0)) > 30]
+                        _hr_vals = [float(p['hr']) for p in _fc_pts if p.get('hr') and float(p.get('hr') or 0) > 30]
 
                         if _hr_vals:
                             # ── Zonas Edwards ──────────────────────────────────────
@@ -9818,8 +9818,8 @@ Escolha um ou mais atletas para análise simultânea.
 
                             # ── Curva de FC ao longo do tempo ────────────────────
                             with st.expander("📈 Curva de FC ao longo do tempo", expanded=True):
-                                _fc_ts = [float(p.get('ts', 0)) for p in _fc_pts
-                                          if p.get('hr') and float(p.get('hr', 0)) > 30]
+                                _fc_ts = [float(p.get('ts') or 0) for p in _fc_pts
+                                          if p.get('hr') and float(p.get('hr') or 0) > 30]
                                 if _fc_ts:
                                     _fc_t0 = _fc_ts[0]
                                     _fc_ts_rel = [(t - _fc_t0) / 60 for t in _fc_ts]
@@ -9860,7 +9860,7 @@ Escolha um ou mais atletas para análise simultânea.
                                         _fc_cp_pts += _fpv.get(_fc_cp_atl, [])
                                 else:
                                     _fc_cp_pts = dados_sensor_por_atleta_por_periodo.get(_fc_per, {}).get(_fc_cp_atl, [])
-                                _fc_cp_hr = [float(p['hr']) for p in _fc_cp_pts if p.get('hr') and float(p.get('hr', 0)) > 30]
+                                _fc_cp_hr = [float(p['hr']) for p in _fc_cp_pts if p.get('hr') and float(p.get('hr') or 0) > 30]
                                 if _fc_cp_hr:
                                     _fc_cp_trimp = 0.0
                                     _fc_cp_z = {z[3]: 0 for z in _fc_zona_bounds}
@@ -9935,9 +9935,9 @@ Escolha um ou mais atletas para análise simultânea.
                                 _fa_pts = dados_sensor_por_atleta_por_periodo.get(_fat_per, {}).get(_fa, [])
                                 if not _fa_pts:
                                     continue
-                                _fa_ts = np.array([float(p.get('ts', 0)) for p in _fa_pts])
-                                _fa_vs = np.array([float(p.get('v', 0)) * 3.6 for p in _fa_pts])
-                                _fa_pl = np.array([float(p.get('pl', 0)) for p in _fa_pts])
+                                _fa_ts = np.array([float(p.get('ts') or 0) for p in _fa_pts])
+                                _fa_vs = np.array([float(p.get('v')  or 0) * 3.6 for p in _fa_pts])
+                                _fa_pl = np.array([float(p.get('pl') or 0) for p in _fa_pts])
                                 if len(_fa_ts) < 2:
                                     continue
                                 _fa_t0 = _fa_ts[0]
