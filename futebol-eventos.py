@@ -9347,8 +9347,8 @@ Escolha um ou mais atletas para análise simultânea.
                             _est_note = True
                             _ap_sum = _ml_sum = _vt_sum = 0.0
                             for _pp in _pld_pts:
-                                _av_vel = abs(float(_pp.get('v', 0)))
-                                _av_acc = abs(float(_pp.get('a', 0)))
+                                _av_vel = abs(float(_pp.get('v') or 0))
+                                _av_acc = abs(float(_pp.get('a') or 0))
                                 # heurística: se velocidade alta → contribuição AP; se baixo → ML
                                 _ap_sum += _av_vel * 0.1
                                 _ml_sum += max(0, _av_acc - _av_vel * 0.05) * 0.1
