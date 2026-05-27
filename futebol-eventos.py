@@ -411,8 +411,21 @@ def _api_fetch(base_url: str, token: str, path: str,
                          headers=headers,
                          params=dict(params),
                          timeout=60)
-        return r.json() if r.status_code == 200 else None
-    except Exception:
+        if r.status_code == 200:
+            return r.json()
+        # Salva o status de erro para exibir ao usuário
+        try:
+            import streamlit as _st_fetch
+            _st_fetch.session_state['_api_last_err'] = r.status_code
+        except Exception:
+            pass
+        return None
+    except Exception as _exc:
+        try:
+            import streamlit as _st_fetch
+            _st_fetch.session_state['_api_last_err'] = str(_exc)
+        except Exception:
+            pass
         return None
 
 
@@ -4974,6 +4987,30 @@ Escolha um ou mais atletas para análise simultânea.
             unsafe_allow_html=True
         )
 
+        # ── Alerta de falha de carregamento ────────────────────────────────
+        if _ok_ld == 0 and _n_atl_ld > 0:
+            _api_err = st.session_state.pop('_api_last_err', None)
+            if _api_err == 401:
+                st.error(
+                    "⚠️ **Token expirado ou inválido (HTTP 401).** "
+                    "Gere um novo token em **Settings → API** no OpenField e cole na sidebar."
+                )
+            elif _api_err == 403:
+                st.error(
+                    "⚠️ **Acesso negado (HTTP 403).** "
+                    "Seu token não tem permissão para acessar esses dados."
+                )
+            elif _api_err:
+                st.error(
+                    f"⚠️ **Erro na API Catapult** ({_api_err}). "
+                    "Verifique o token e a conexão com a internet."
+                )
+            else:
+                st.warning(
+                    "⚠️ **Nenhum dado retornado.** Possíveis causas: "
+                    "token expirado, atividade sem dados de sensor, ou atletas sem GPS ativo."
+                )
+
         # ── Gerar "Períodos Combinados" quando há mais de 1 período ──────────
         _CHAVE_COMBINADO = '📊 Períodos Combinados'
         _periodos_reais = [k for k in resultados_por_periodo if k != _CHAVE_COMBINADO]
@@ -5113,222 +5150,6 @@ Escolha um ou mais atletas para análise simultânea.
                 else:
                     st.caption("Carregue dados GPS para ver insights automáticos.")
                 st.caption("_Análise automática baseada nos dados carregados._")
-
-            # ── ⚽ Eventos do Jogo — importação via sidebar ────────────────
-            st.markdown("---")
-            with st.expander("⚽ Eventos do Jogo", expanded=False):
-                st.caption(
-                    "Importe gols, cartões, substituições e outros eventos de fontes externas "
-                    "para sobrepor ao GPS e à linha do tempo."
-                )
-                _ev_fonte = st.radio(
-                    "Fonte:", ["📊 StatsBomb Livre", "📂 CSV / Excel", "📝 JSON Manual", "🔑 Wyscout API"],
-                    key="ev_fonte", horizontal=False,
-                )
-
-                # ── StatsBomb Open Data (gratuito) ─────────────────────────
-                if _ev_fonte == "📊 StatsBomb Livre":
-                    st.caption("Base de dados aberta da StatsBomb (partidas reais de diversas ligas).")
-                    if st.button("🔄 Listar Competições", key="ev_sb_list"):
-                        try:
-                            import urllib.request as _ulr
-                            _sb_url = "https://raw.githubusercontent.com/statsbomb/open-data/master/data/competitions.json"
-                            with _ulr.urlopen(_sb_url, timeout=12) as _sb_r:
-                                st.session_state['_sb_competitions'] = json.loads(_sb_r.read())
-                        except Exception as _e:
-                            st.error(f"Erro ao buscar competições: {_e}")
-
-                    if st.session_state.get('_sb_competitions'):
-                        _sb_comps = st.session_state['_sb_competitions']
-                        _sb_opts = sorted({
-                            f"{c['competition_name']} — {c['season_name']}"
-                            for c in _sb_comps
-                        })
-                        _sb_sel = st.selectbox("Competição / Temporada:", _sb_opts, key="ev_sb_comp_sel")
-                        if _sb_sel and st.button("🔄 Listar Partidas", key="ev_sb_load_matches"):
-                            try:
-                                import urllib.request as _ulr2
-                                _sb_obj = next(
-                                    c for c in _sb_comps
-                                    if f"{c['competition_name']} — {c['season_name']}" == _sb_sel
-                                )
-                                _sb_murl = (
-                                    f"https://raw.githubusercontent.com/statsbomb/open-data/master/"
-                                    f"data/matches/{_sb_obj['competition_id']}/{_sb_obj['season_id']}.json"
-                                )
-                                with _ulr2.urlopen(_sb_murl, timeout=12) as _sb_mr:
-                                    st.session_state['_sb_matches'] = json.loads(_sb_mr.read())
-                                    st.session_state['_sb_comp_obj'] = _sb_obj
-                            except Exception as _e2:
-                                st.error(f"Erro: {_e2}")
-
-                    if st.session_state.get('_sb_matches'):
-                        _sb_ms = st.session_state['_sb_matches']
-                        _sb_match_opts = [
-                            f"{m.get('match_date','?')}  {m['home_team']['home_team_name']} × {m['away_team']['away_team_name']}"
-                            for m in _sb_ms
-                        ]
-                        _sb_match_sel = st.selectbox("Partida:", _sb_match_opts, key="ev_sb_match_sel")
-                        if st.button("⬇️ Carregar Eventos", key="ev_sb_load_ev"):
-                            try:
-                                import urllib.request as _ulr3
-                                _sb_match_obj = _sb_ms[_sb_match_opts.index(_sb_match_sel)]
-                                _sb_eurl = (
-                                    f"https://raw.githubusercontent.com/statsbomb/open-data/master/"
-                                    f"data/events/{_sb_match_obj['match_id']}.json"
-                                )
-                                with _ulr3.urlopen(_sb_eurl, timeout=20) as _sb_er:
-                                    _sb_evraw = json.loads(_sb_er.read())
-                                _SB_TIPOS = {'Goal','Card','Substitution','Shot','Foul Committed','Offside','Save','Corner','Free Kick'}
-                                _ev_list_sb = []
-                                for _ev in _sb_evraw:
-                                    _tipo_sb = (_ev.get('type') or {}).get('name', '')
-                                    if not _SB_TIPOS or _tipo_sb in _SB_TIPOS:
-                                        _loc_sb = _ev.get('location') or [None, None]
-                                        _ev_list_sb.append({
-                                            'minuto':    round(_ev.get('minute', 0) + _ev.get('second', 0) / 60, 2),
-                                            'tipo':      _tipo_sb,
-                                            'time':      (_ev.get('team') or {}).get('name', ''),
-                                            'jogador':   (_ev.get('player') or {}).get('name', ''),
-                                            'x':         _loc_sb[0] if len(_loc_sb) > 0 else None,
-                                            'y':         _loc_sb[1] if len(_loc_sb) > 1 else None,
-                                            'descricao': _tipo_sb,
-                                            'fonte':     'statsbomb',
-                                        })
-                                st.session_state['match_events'] = _ev_list_sb
-                                st.success(f"✅ {len(_ev_list_sb)} eventos carregados!")
-                            except Exception as _e3:
-                                st.error(f"Erro: {_e3}")
-
-                # ── CSV / Excel ────────────────────────────────────────────
-                elif _ev_fonte == "📂 CSV / Excel":
-                    st.markdown(
-                        "**Colunas esperadas:** `minuto`, `tipo`, `time`, `jogador`, `x` *(opcional)*, `y` *(opcional)*"
-                    )
-                    _ev_file_up = st.file_uploader(
-                        "Selecione o arquivo:", type=['csv', 'xlsx', 'xls'], key="ev_file_up"
-                    )
-                    if _ev_file_up:
-                        try:
-                            _ev_df_up = (
-                                pd.read_csv(_ev_file_up)
-                                if _ev_file_up.name.endswith('.csv')
-                                else pd.read_excel(_ev_file_up)
-                            )
-                            _ev_df_up.columns = [str(c).lower().strip() for c in _ev_df_up.columns]
-                            _ev_list_csv = []
-                            for _, _row_ev in _ev_df_up.iterrows():
-                                _ev_list_csv.append({
-                                    'minuto':  float(_row_ev.get('minuto', _row_ev.get('minute', 0))),
-                                    'tipo':    str(_row_ev.get('tipo',   _row_ev.get('type',   'Evento'))),
-                                    'time':    str(_row_ev.get('time',   _row_ev.get('team',   ''))),
-                                    'jogador': str(_row_ev.get('jogador',_row_ev.get('player', ''))),
-                                    'x':       float(_row_ev['x']) if 'x' in _row_ev and pd.notna(_row_ev['x']) else None,
-                                    'y':       float(_row_ev['y']) if 'y' in _row_ev and pd.notna(_row_ev['y']) else None,
-                                    'descricao': str(_row_ev.get('descricao', _row_ev.get('description', ''))),
-                                    'fonte':   'csv',
-                                })
-                            st.session_state['match_events'] = _ev_list_csv
-                            st.success(f"✅ {len(_ev_list_csv)} eventos importados!")
-                        except Exception as _e_csv:
-                            st.error(f"Erro ao ler arquivo: {_e_csv}")
-
-                # ── JSON Manual ────────────────────────────────────────────
-                elif _ev_fonte == "📝 JSON Manual":
-                    st.caption("Cole um array JSON — suporta formatos StatsBomb, Wyscout ou personalizado.")
-                    _ev_json_raw = st.text_area(
-                        "JSON:", height=130, key="ev_json_raw",
-                        placeholder='[{"minuto": 23, "tipo": "Gol", "time": "Casa", "jogador": "Fulano"}]',
-                    )
-                    if st.button("✅ Processar", key="ev_json_ok") and _ev_json_raw.strip():
-                        try:
-                            _parsed_ev = json.loads(_ev_json_raw)
-                            if not isinstance(_parsed_ev, list):
-                                _parsed_ev = [_parsed_ev]
-                            _ev_list_json = []
-                            for _ev_j in _parsed_ev:
-                                _min_j = _ev_j.get('minute', _ev_j.get('minuto', _ev_j.get('timeMin', 0)))
-                                _sec_j = _ev_j.get('second', _ev_j.get('segundos', _ev_j.get('timeSecond', 0)))
-                                _tipo_j = _ev_j.get('tipo') or (
-                                    _ev_j.get('type', {}).get('name', '') if isinstance(_ev_j.get('type'), dict)
-                                    else str(_ev_j.get('type', 'Evento'))
-                                )
-                                _team_j = _ev_j.get('time') or (
-                                    _ev_j.get('team', {}).get('name', '') if isinstance(_ev_j.get('team'), dict)
-                                    else str(_ev_j.get('team', ''))
-                                )
-                                _player_j = _ev_j.get('jogador') or (
-                                    _ev_j.get('player', {}).get('name', '') if isinstance(_ev_j.get('player'), dict)
-                                    else str(_ev_j.get('player', ''))
-                                )
-                                _loc_j = _ev_j.get('location') or [None, None]
-                                _ev_list_json.append({
-                                    'minuto':    round(float(_min_j) + float(_sec_j) / 60, 2),
-                                    'tipo':      str(_tipo_j),
-                                    'time':      str(_team_j),
-                                    'jogador':   str(_player_j),
-                                    'x':         float(_loc_j[0]) if _loc_j and _loc_j[0] is not None else None,
-                                    'y':         float(_loc_j[1]) if _loc_j and len(_loc_j) > 1 and _loc_j[1] is not None else None,
-                                    'descricao': str(_ev_j.get('descricao', _ev_j.get('description', _tipo_j))),
-                                    'fonte':     'json',
-                                })
-                            st.session_state['match_events'] = _ev_list_json
-                            st.success(f"✅ {len(_ev_list_json)} eventos processados!")
-                        except Exception as _e_json:
-                            st.error(f"JSON inválido: {_e_json}")
-
-                # ── Wyscout API v3 ─────────────────────────────────────────
-                elif _ev_fonte == "🔑 Wyscout API":
-                    st.caption("Requer credenciais Wyscout API v3.")
-                    _wy_key = st.text_input("API Key:", type="password", key="ev_wy_key")
-                    _wy_mid = st.text_input("Match ID:", key="ev_wy_mid", placeholder="Ex: 2852835")
-                    if st.button("⬇️ Carregar via Wyscout", key="ev_wy_go") and _wy_key and _wy_mid:
-                        try:
-                            _wy_r = requests.get(
-                                f"https://apirest.wyscout.com/v3/matches/{_wy_mid}/events",
-                                headers={'Authorization': f'Bearer {_wy_key}'}, timeout=15,
-                            )
-                            if _wy_r.status_code == 200:
-                                _wy_data = _wy_r.json()
-                                _wy_evs = _wy_data.get('events', _wy_data if isinstance(_wy_data, list) else [])
-                                _WY_TIPOS = {'goal','card','substitution','shot','foul','offside'}
-                                _ev_list_wy = []
-                                for _ev_wy in _wy_evs:
-                                    _tipo_wy = ((_ev_wy.get('type') or {}).get('primary', '') or '').lower()
-                                    if not _WY_TIPOS or _tipo_wy in _WY_TIPOS:
-                                        _loc_wy = _ev_wy.get('location') or {}
-                                        _ev_list_wy.append({
-                                            'minuto':    float(_ev_wy.get('minute', 0)),
-                                            'tipo':      (_ev_wy.get('type') or {}).get('primary', 'Evento').title(),
-                                            'time':      (_ev_wy.get('team') or {}).get('name', ''),
-                                            'jogador':   (_ev_wy.get('player') or {}).get('name', ''),
-                                            'x':         _loc_wy.get('x'),
-                                            'y':         _loc_wy.get('y'),
-                                            'descricao': ((_ev_wy.get('type') or {}).get('secondary') or [''])[0],
-                                            'fonte':     'wyscout',
-                                        })
-                                st.session_state['match_events'] = _ev_list_wy
-                                st.success(f"✅ {len(_ev_list_wy)} eventos Wyscout!")
-                            else:
-                                st.error(f"Wyscout HTTP {_wy_r.status_code}: {_wy_r.text[:200]}")
-                        except Exception as _e_wy:
-                            st.error(f"Erro Wyscout: {_e_wy}")
-
-                # ── Resumo dos eventos carregados ──────────────────────────
-                _match_evs = st.session_state.get('match_events', [])
-                if _match_evs:
-                    _ev_tipos_cnt: dict = {}
-                    for _mev in _match_evs:
-                        _ev_tipos_cnt[_mev['tipo']] = _ev_tipos_cnt.get(_mev['tipo'], 0) + 1
-                    st.markdown(f"**✅ {len(_match_evs)} eventos carregados:**")
-                    for _et, _en in sorted(_ev_tipos_cnt.items(), key=lambda x: -x[1]):
-                        _ic = _ev_icone(_et)
-                        st.caption(f"  {_ic} {_et}: **{_en}**")
-                    if st.button("🗑️ Limpar eventos", key="ev_clear_btn"):
-                        st.session_state.pop('match_events', None)
-                        st.session_state.pop('_sb_competitions', None)
-                        st.session_state.pop('_sb_matches', None)
-                        st.rerun()
 
         # ── Onboarding guiado — primeiro uso ─────────────────────────────────────
         if 'onboarding_done' not in st.session_state:
@@ -8487,86 +8308,6 @@ Escolha um ou mais atletas para análise simultânea.
                 else:
                     st.info("Carregue dados de posição para usar a análise de forma tática.")
 
-            # ── Eventos do Jogo — overlay no Campo de Futebol ─────────────────────
-            with abas[1]:
-                _match_evs_campo = st.session_state.get('match_events', [])
-                if _match_evs_campo:
-                    st.markdown("---")
-                    with st.expander("⚽ Eventos do Jogo no Campo", expanded=True):
-                        _ev_com_pos_campo = [
-                            e for e in sorted(_match_evs_campo, key=lambda x: x.get('minuto', 0))
-                            if e.get('x') is not None and e.get('y') is not None
-                        ]
-                        if _ev_com_pos_campo:
-                            # Detecta escala automática
-                            _max_x_c = max(e['x'] for e in _ev_com_pos_campo if e.get('x'))
-                            _sc_x = 120.0 if _max_x_c > 105 else 105.0
-                            _sc_y = 80.0  if _sc_x == 120.0 else 68.0
-
-                            _fig_ev_c = go.Figure()
-                            # Linhas do campo
-                            for _ex0, _ey0, _ex1, _ey1 in [
-                                (0, 0, _sc_x, _sc_y),
-                                (_sc_x/2, 0, _sc_x/2, _sc_y),
-                                (0, _sc_y*0.211, _sc_x*0.159, _sc_y*0.789),
-                                (_sc_x*0.841, _sc_y*0.211, _sc_x, _sc_y*0.789),
-                            ]:
-                                _fig_ev_c.add_shape(type='rect' if _ex0 != _sc_x/2 else 'line',
-                                    x0=_ex0, y0=_ey0, x1=_ex1, y1=_ey1,
-                                    line=dict(color='rgba(255,255,255,0.5)', width=1.2),
-                                    fillcolor='rgba(0,0,0,0)')
-
-                            _ev_c_cores = {
-                                'Goal':'#FFD700','Gol':'#FFD700','Shot':'#2196F3',
-                                'Finalização':'#2196F3','Card':'#FF9800',
-                                'Yellow Card':'#FFEB3B','Red Card':'#F44336',
-                                'Foul Committed':'#9C27B0','Substitution':'#4CAF50',
-                                'Offside':'#FF5722','Save':'#00BCD4',
-                            }
-                            for _tp_c in set(e.get('tipo','') for e in _ev_com_pos_campo):
-                                _evs_c = [e for e in _ev_com_pos_campo if e.get('tipo') == _tp_c]
-                                _cor_c = _ev_c_cores.get(_tp_c, '#78909C')
-                                _ic_c  = _ev_icone(_tp_c)
-                                _fig_ev_c.add_trace(go.Scatter(
-                                    x=[e['x'] for e in _evs_c],
-                                    y=[e['y'] for e in _evs_c],
-                                    mode='markers+text',
-                                    marker=dict(size=13, color=_cor_c, opacity=0.9,
-                                                line=dict(color='white', width=1)),
-                                    text=[f"{_ic_c} {e['minuto']:.0f}'" for e in _evs_c],
-                                    textposition='top center',
-                                    textfont=dict(size=8, color='white'),
-                                    name=f"{_ic_c} {_tp_c}",
-                                    hovertemplate=(
-                                        f"<b>{_tp_c}</b><br>Minuto: %{{customdata}}'<br>"
-                                        f"Jogador: " + "<br>".join(
-                                            e.get('jogador','-') for e in _evs_c
-                                        )[:60] + "<extra></extra>"
-                                    ),
-                                    customdata=[f"{e['minuto']:.0f}" for e in _evs_c],
-                                ))
-
-                            _fig_ev_c.update_layout(
-                                paper_bgcolor='#0e1117', plot_bgcolor='#1a4a1a',
-                                xaxis=dict(range=[0,_sc_x],showgrid=False,zeroline=False,visible=False),
-                                yaxis=dict(range=[0,_sc_y],showgrid=False,zeroline=False,
-                                          visible=False,scaleanchor='x',scaleratio=1),
-                                height=380, margin=dict(t=20,b=10,l=10,r=10),
-                                legend=dict(font=dict(color='white',size=9)),
-                                font=dict(color='white'),
-                            )
-                            st.plotly_chart(_fig_ev_c, use_container_width=True)
-                            st.caption(
-                                f"⚽ {len(_ev_com_pos_campo)} eventos com posição no campo · "
-                                "acesse a aba **🎬 História do Jogo** para a linha do tempo completa."
-                            )
-                        else:
-                            st.info(
-                                "Os eventos carregados não possuem coordenadas de campo. "
-                                "StatsBomb [0–120, 0–80] e Wyscout [0–100, 0–100] incluem coordenadas. "
-                                "Acesse **🎬 História do Jogo** para ver a linha do tempo."
-                            )
-
             # ==================== ABA 3: ESFORÇOS AO LONGO DO TEMPO ====================
             with abas[2]:
                 st.subheader("⏱️ Esforços ao Longo do Tempo")
@@ -11445,238 +11186,6 @@ Escolha um ou mais atletas para análise simultânea.
                                     _tr3.metric("Ratio O/D", f"{_n_toff/_n_tdef:.2f}" if _n_tdef else "—")
 
                                     st.markdown("---")
-
-            # ══════════════════════════════════════════════════════════════════
-            # EVENTOS DO JOGO — integração StatsBomb / Wyscout / CSV / JSON
-            # ══════════════════════════════════════════════════════════════════
-            _match_evs_disp = st.session_state.get('match_events', [])
-            if _match_evs_disp:
-                st.markdown("---")
-                st.markdown("## ⚽ Eventos do Jogo")
-                st.caption(
-                    f"**{len(_match_evs_disp)} eventos** importados · fonte: "
-                    f"*{_match_evs_disp[0].get('fonte','?')}*"
-                )
-
-                _ev_tab1, _ev_tab2, _ev_tab3 = st.tabs([
-                    "🕐 Linha do Tempo", "🗺️ Mapa de Eventos", "📊 Estatísticas"
-                ])
-
-                # ── 1. Timeline ───────────────────────────────────────────────
-                with _ev_tab1:
-                    _ev_sorted = sorted(_match_evs_disp, key=lambda e: e.get('minuto', 0))
-
-                    # Filtro de tipo
-                    _ev_tipos_all = sorted({e['tipo'] for e in _ev_sorted if e.get('tipo')})
-                    _ev_tipos_fil = st.multiselect(
-                        "Filtrar tipos:", _ev_tipos_all, default=_ev_tipos_all,
-                        key="ev_tipos_filtro",
-                    )
-                    _ev_fil = [e for e in _ev_sorted if e.get('tipo') in _ev_tipos_fil]
-
-                    if _ev_fil:
-                        # Gráfico de timeline com eventos no tempo
-                        _fig_ev_tl = go.Figure()
-                        _ev_tipo_cores = {
-                            'Goal': '#FFD700', 'Gol': '#FFD700',
-                            'Card': '#FF9800', 'Yellow Card': '#FFEB3B', 'Red Card': '#F44336',
-                            'Shot': '#2196F3', 'Finalização': '#2196F3',
-                            'Substitution': '#4CAF50', 'Substituição': '#4CAF50',
-                            'Foul Committed': '#9C27B0', 'Falta': '#9C27B0',
-                            'Offside': '#FF5722', 'Save': '#00BCD4',
-                        }
-                        _ev_y_map = {}
-                        for _ev_item in _ev_fil:
-                            _tp = _ev_item.get('tipo', 'Outro')
-                            if _tp not in _ev_y_map:
-                                _ev_y_map[_tp] = len(_ev_y_map)
-
-                        for _tp_ev in set(e.get('tipo', '') for e in _ev_fil):
-                            _evs_tp = [e for e in _ev_fil if e.get('tipo') == _tp_ev]
-                            _cor_ev = _ev_tipo_cores.get(_tp_ev, '#78909C')
-                            _ic_ev  = _ev_icone(_tp_ev)
-                            _fig_ev_tl.add_trace(go.Scatter(
-                                x=[e['minuto'] for e in _evs_tp],
-                                y=[_ev_y_map.get(_tp_ev, 0)] * len(_evs_tp),
-                                mode='markers+text',
-                                marker=dict(size=16, color=_cor_ev, symbol='circle',
-                                            line=dict(color='white', width=1)),
-                                text=[f"{_ic_ev} {e.get('jogador','')[:15]}" for e in _evs_tp],
-                                textposition='top center',
-                                textfont=dict(size=9, color='white'),
-                                name=f"{_ic_ev} {_tp_ev}",
-                                hovertemplate=(
-                                    f"<b>{_tp_ev}</b><br>"
-                                    "Minuto: %{x:.0f}'<br>"
-                                    "Jogador: " + "<br>".join(
-                                        e.get('jogador', '-') or '-' for e in _evs_tp
-                                    )[:50]
-                                    + "<extra></extra>"
-                                ),
-                            ))
-
-                        _fig_ev_tl.update_layout(
-                            paper_bgcolor='#0e1117', plot_bgcolor='#151820',
-                            font=dict(color='white'),
-                            xaxis=dict(title="Minuto", gridcolor='#2d3748', color='white',
-                                      ticksuffix="'"),
-                            yaxis=dict(tickvals=list(_ev_y_map.values()),
-                                      ticktext=list(_ev_y_map.keys()),
-                                      gridcolor='#2d3748', color='white'),
-                            title="Linha do Tempo de Eventos",
-                            height=max(280, len(_ev_y_map) * 60 + 100),
-                            margin=dict(t=50, b=30, l=120, r=20),
-                            legend=dict(font=dict(color='white')),
-                        )
-                        st.plotly_chart(_fig_ev_tl, use_container_width=True)
-
-                        # Tabela de eventos
-                        _df_ev_show = pd.DataFrame([{
-                            'Minuto': f"{e['minuto']:.0f}'",
-                            'Tipo':   f"{_ev_icone(e['tipo'])} {e['tipo']}",
-                            'Equipe': e.get('time', ''),
-                            'Jogador': e.get('jogador', ''),
-                            'Desc.':  e.get('descricao', ''),
-                        } for e in _ev_fil])
-                        st.dataframe(_df_ev_show, use_container_width=True, hide_index=True)
-
-                # ── 2. Mapa de Eventos no campo ────────────────────────────────
-                with _ev_tab2:
-                    _ev_com_pos = [e for e in _ev_sorted if e.get('x') is not None and e.get('y') is not None]
-                    if not _ev_com_pos:
-                        st.info("Nenhum evento com coordenadas de campo disponível neste conjunto de dados.")
-                        st.caption(
-                            "Eventos do StatsBomb usam coordenadas [0–120, 0–80]. "
-                            "Eventos do Wyscout usam [0–100, 0–100]."
-                        )
-                    else:
-                        # Detecta escala (StatsBomb: 0-120 | Wyscout: 0-100)
-                        _max_x_ev = max(e['x'] for e in _ev_com_pos if e['x'])
-                        _ev_scale = 120.0 if _max_x_ev > 105 else 105.0
-                        _ev_scale_y = 80.0 if _ev_scale == 120.0 else 68.0
-
-                        _fig_ev_map = go.Figure()
-                        # Campo simplificado
-                        for _ex, _ey, _ew, _eh in [
-                            (0, 0, _ev_scale, _ev_scale_y),         # campo
-                            (0, _ev_scale_y * 0.211, _ev_scale * 0.159, _ev_scale_y * 0.578),  # área esq
-                            (_ev_scale * 0.841, _ev_scale_y * 0.211, _ev_scale, _ev_scale_y * 0.578),  # área dir
-                        ]:
-                            _fig_ev_map.add_shape(type='rect',
-                                x0=_ex, y0=_ey, x1=_ew, y1=_eh,
-                                line=dict(color='white', width=1.5),
-                                fillcolor='rgba(0,0,0,0)')
-                        # Linha do meio
-                        _fig_ev_map.add_shape(type='line',
-                            x0=_ev_scale/2, y0=0, x1=_ev_scale/2, y1=_ev_scale_y,
-                            line=dict(color='white', width=1.5))
-
-                        _ev_tipo_cores2 = {
-                            'Goal': '#FFD700', 'Gol': '#FFD700',
-                            'Card': '#FF9800', 'Yellow Card': '#FFEB3B', 'Red Card': '#F44336',
-                            'Shot': '#2196F3', 'Finalização': '#2196F3', 'Chute': '#2196F3',
-                            'Substitution': '#4CAF50',
-                            'Foul Committed': '#9C27B0', 'Falta': '#9C27B0',
-                            'Offside': '#FF5722', 'Save': '#00BCD4',
-                        }
-                        for _tp_ev2 in set(e.get('tipo','') for e in _ev_com_pos):
-                            _evs2 = [e for e in _ev_com_pos if e.get('tipo') == _tp_ev2]
-                            _cor2 = _ev_tipo_cores2.get(_tp_ev2, '#78909C')
-                            _ic2  = _ev_icone(_tp_ev2)
-                            _fig_ev_map.add_trace(go.Scatter(
-                                x=[e['x'] for e in _evs2],
-                                y=[e['y'] for e in _evs2],
-                                mode='markers+text',
-                                marker=dict(size=14, color=_cor2, opacity=0.85,
-                                            line=dict(color='white', width=1)),
-                                text=[f"{_ic2} {e.get('jogador','')[:12]}" for e in _evs2],
-                                textposition='top center',
-                                textfont=dict(size=8, color='white'),
-                                name=f"{_ic2} {_tp_ev2}",
-                                hovertemplate=(
-                                    f"<b>{_tp_ev2}</b><br>Minuto: %{{customdata}}'<br>Jogador: "
-                                    "<br>".join(e.get('jogador','-') for e in _evs2)[:60]
-                                    + "<extra></extra>"
-                                ),
-                                customdata=[f"{e['minuto']:.0f}" for e in _evs2],
-                            ))
-
-                        _fig_ev_map.update_layout(
-                            paper_bgcolor='#0e1117',
-                            plot_bgcolor='#1a3a1a',
-                            xaxis=dict(range=[0, _ev_scale], showgrid=False, zeroline=False,
-                                      visible=False),
-                            yaxis=dict(range=[0, _ev_scale_y], showgrid=False, zeroline=False,
-                                      visible=False, scaleanchor='x', scaleratio=1),
-                            height=460,
-                            margin=dict(t=40, b=10, l=10, r=10),
-                            title="Mapa de Eventos no Campo",
-                            font=dict(color='white'),
-                            legend=dict(font=dict(color='white')),
-                        )
-                        st.plotly_chart(_fig_ev_map, use_container_width=True)
-                        st.caption(
-                            f"🗺️ {len(_ev_com_pos)} eventos com posição no campo "
-                            f"({len(_ev_sorted)-len(_ev_com_pos)} sem coordenadas omitidos)."
-                        )
-
-                # ── 3. Estatísticas ────────────────────────────────────────────
-                with _ev_tab3:
-                    _ev_df_stat = pd.DataFrame(_ev_sorted)
-                    if not _ev_df_stat.empty:
-                        _c1_ev, _c2_ev = st.columns(2)
-                        with _c1_ev:
-                            _ev_tipo_cnt = _ev_df_stat['tipo'].value_counts().reset_index()
-                            _ev_tipo_cnt.columns = ['Tipo', 'Qtd']
-                            _fig_ev_tipos = px.bar(
-                                _ev_tipo_cnt, x='Tipo', y='Qtd',
-                                title="Eventos por Tipo",
-                                color='Tipo',
-                                color_discrete_sequence=px.colors.qualitative.Vivid,
-                            )
-                            _fig_ev_tipos.update_layout(
-                                paper_bgcolor='#0e1117', plot_bgcolor='#151820',
-                                font=dict(color='white'), showlegend=False,
-                                height=300, margin=dict(t=40,b=30),
-                                xaxis=dict(color='white'), yaxis=dict(color='white'),
-                            )
-                            st.plotly_chart(_fig_ev_tipos, use_container_width=True)
-                        with _c2_ev:
-                            if 'time' in _ev_df_stat.columns:
-                                _ev_time_cnt = _ev_df_stat.groupby(['time','tipo']).size().reset_index(name='Qtd')
-                                _fig_ev_time = px.bar(
-                                    _ev_time_cnt, x='time', y='Qtd', color='tipo',
-                                    title="Eventos por Equipe", barmode='stack',
-                                    color_discrete_sequence=px.colors.qualitative.Vivid,
-                                )
-                                _fig_ev_time.update_layout(
-                                    paper_bgcolor='#0e1117', plot_bgcolor='#151820',
-                                    font=dict(color='white'),
-                                    height=300, margin=dict(t=40,b=30),
-                                    xaxis=dict(color='white'), yaxis=dict(color='white'),
-                                    legend=dict(font=dict(color='white', size=9)),
-                                )
-                                st.plotly_chart(_fig_ev_time, use_container_width=True)
-
-                        # Distribuição temporal (eventos por faixa de 15 min)
-                        _ev_df_stat['faixa'] = (_ev_df_stat['minuto'] // 15 * 15).astype(int).astype(str) + "–" + ((_ev_df_stat['minuto'] // 15 * 15 + 15).astype(int).astype(str)) + "'"
-                        _ev_faixa = _ev_df_stat.groupby('faixa').size().reset_index(name='Qtd')
-                        _fig_faixa = px.bar(_ev_faixa, x='faixa', y='Qtd', title="Eventos por Faixa de 15 min",
-                                           color_discrete_sequence=['#2196F3'])
-                        _fig_faixa.update_layout(
-                            paper_bgcolor='#0e1117', plot_bgcolor='#151820',
-                            font=dict(color='white'), height=250,
-                            margin=dict(t=40,b=30),
-                            xaxis=dict(color='white', title=''), yaxis=dict(color='white'),
-                        )
-                        st.plotly_chart(_fig_faixa, use_container_width=True)
-            else:
-                st.markdown("---")
-                st.info(
-                    "⚽ **Sem eventos do jogo carregados.**  \n"
-                    "Use o painel **⚽ Eventos do Jogo** na sidebar para importar dados de "
-                    "gols, cartões e eventos via StatsBomb, CSV, JSON ou Wyscout."
-                )
 
             # ==================== ABA 10: MONITORAMENTO AO VIVO ====================
             with abas[10]:
