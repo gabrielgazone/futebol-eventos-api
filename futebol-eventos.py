@@ -539,7 +539,7 @@ class CatapultAPI:
         return _api_fetch(self.base_url, self._token, "parameters")
     
     _SENSOR_PARAMS = (
-        ("parameters", "ts,lat,long,v,rv,a,hr,pl,pla,plml,plv,xy,pq,hdop,ref,o,mp"),
+        ("parameters", "ts,lat,long,v,rv,a,hr,pl,xy,pq,hdop,ref,o,mp"),
         ("nulls",      "1"),
     )
 
