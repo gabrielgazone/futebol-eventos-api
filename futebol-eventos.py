@@ -909,7 +909,7 @@ def plotar_trajetoria_campo(x_coords, y_coords, velocidades, athlete_name):
         mode='markers',
         name='Velocidade',
         marker=dict(size=3, color=velocidades, colorscale='Viridis',
-                   showscale=True, colorbar=dict(title=dict(text="Velocidade (km/h)"), x=1.05, len=0.5)),
+                   showscale=True, colorbar=dict(title="Velocidade (km/h)", x=1.05, len=0.5)),
         hovertemplate='X: %{x:.1f}m<br>Y: %{y:.1f}m<br>Vel: %{marker.color:.1f} km/h<extra></extra>'
     ))
     
@@ -954,7 +954,7 @@ def plotar_heatmap_campo(x_coords, y_coords, velocidades, athlete_name):
         colorscale='Hot',
         opacity=0.6,
         name='Intensidade (Velocidade)',
-        colorbar=dict(title=dict(text="Velocidade (km/h)"), x=1.05, len=0.5),
+        colorbar=dict(title="Velocidade (km/h)", x=1.05, len=0.5),
         hovertemplate='X: %{x:.0f}m<br>Y: %{y:.0f}m<br>Vel: %{z:.1f} km/h<extra></extra>'
     ))
     
@@ -979,7 +979,7 @@ def plotar_heatmap_presenca_campo(x_coords, y_coords, athlete_name):
         colorscale='YlOrRd',
         opacity=0.65,
         name='Presença',
-        colorbar=dict(title=dict(text="Frequência"), x=1.05, len=0.5),
+        colorbar=dict(title="Frequência", x=1.05, len=0.5),
         hovertemplate='X: %{x:.0f}m<br>Y: %{y:.0f}m<br>Frequência: %{z:.0f}<extra></extra>'
     ))
 
@@ -1117,7 +1117,7 @@ def enriquecer_eventos_com_posicao(eventos_dict, ts_gps, lats_gps, lons_gps, vel
         enriched = []
         for ev in events:
             ev2 = dict(ev)
-            t = float(ev.get('start_time') or 0)
+            t = float(ev.get('start_time', 0))
             idx = int(np.argmin(np.abs(ts_arr - t)))
             ev2['_lat'] = lats_gps[idx]
             ev2['_lon'] = lons_gps[idx]
@@ -1198,7 +1198,7 @@ def criar_timeline_eventos(sensor_points, eventos_dict, atleta_nome, tipos_sel):
             continue
         cfg_ev = FUTEBOL_EVENTS_CONFIG[event_type]
         for ev in events:
-            t_ev  = float(ev.get('start_time') or 0) - ts0
+            t_ev  = float(ev.get('start_time', 0)) - ts0
             v_ev  = ev.get('_vel', 0)
             label = cfg_ev['label']
             partes = [f"<b>{label}</b>", f"t={t_ev:.0f}s", f"vel={v_ev:.1f} km/h"]
@@ -1259,7 +1259,7 @@ def analisar_fadiga_eventos(sensor_points, eventos_dict, tipos_sel, janela_s=10)
         events = eventos_dict.get(event_type, [])
         cfg_ev = FUTEBOL_EVENTS_CONFIG[event_type]
         for ev in events:
-            t = float(ev.get('start_time') or 0)
+            t = float(ev.get('start_time', 0))
             mask_before = (ts_arr >= t - janela_s) & (ts_arr < t)
             mask_after  = (ts_arr >  t) & (ts_arr <= t + janela_s)
             vel_antes   = float(vel_arr[mask_before].mean()) if mask_before.any() else None
@@ -5298,7 +5298,7 @@ Escolha um ou mais atletas para análise simultânea.
                                     if not _WY_TIPOS or _tipo_wy in _WY_TIPOS:
                                         _loc_wy = _ev_wy.get('location') or {}
                                         _ev_list_wy.append({
-                                            'minuto':    float(_ev_wy.get('minute') or 0),
+                                            'minuto':    float(_ev_wy.get('minute', 0)),
                                             'tipo':      (_ev_wy.get('type') or {}).get('primary', 'Evento').title(),
                                             'time':      (_ev_wy.get('team') or {}).get('name', ''),
                                             'jogador':   (_ev_wy.get('player') or {}).get('name', ''),
@@ -6144,8 +6144,8 @@ Escolha um ou mais atletas para análise simultânea.
                                 and campo_key not in st.session_state):
                             _vs = _venues_db[_venue_name]
                             st.session_state[campo_key] = {
-                                'lat':          float(_vs.get('lat') or 0),
-                                'lon':          float(_vs.get('lon') or 0),
+                                'lat':          float(_vs.get('lat', 0)),
+                                'lon':          float(_vs.get('lon', 0)),
                                 'rot':          int(_vs.get('rot',   0)),
                                 'fl':           int(_vs.get('fl',  105)),
                                 'fw':           int(_vs.get('fw',   68)),
@@ -7810,7 +7810,7 @@ Escolha um ou mais atletas para análise simultânea.
                                         _hsr_band_opts = []
                                         _hsr_band_map  = {}  # label → min_kmh
                                         for _z in _hsr_zones_acc:
-                                            _z_min_kmh = round(float(_z.get('min_ms') or 0) * 3.6, 1)
+                                            _z_min_kmh = round(float(_z.get('min_ms', 0)) * 3.6, 1)
                                             _z_max_ms  = float(_z.get('max_ms', 9999))
                                             _z_max_str = (
                                                 '∞'
@@ -8239,12 +8239,12 @@ Escolha um ou mais atletas para análise simultânea.
                                 st.markdown("#### Anotações existentes")
                                 # Timeline visual
                                 _ann_ts0 = min(
-                                    (float(a.get('start_time') or 0) for a in _ann_list if a.get('start_time')),
+                                    (float(a.get('start_time', 0)) for a in _ann_list if a.get('start_time')),
                                     default=0
                                 )
                                 _fig_ann = go.Figure()
                                 for _ia, _ann in enumerate(_ann_list):
-                                    _t0 = float(_ann.get('start_time') or 0) - _ann_ts0
+                                    _t0 = float(_ann.get('start_time', 0)) - _ann_ts0
                                     _t1 = float(_ann.get('end_time', _ann.get('start_time', 0))) - _ann_ts0
                                     _ann_name = _ann.get('name', f'Anotação {_ia+1}')
                                     _fig_ann.add_shape(
@@ -9498,7 +9498,7 @@ Escolha um ou mais atletas para análise simultânea.
                                         _qa_eventos.append({
                                             'inicio_min': (_seg_t[0] - _qa_ts[0]) / 60,
                                             'pico_a': float(np.max(_seg_a)),
-                                            'impulso': float(np.trapezoid(_seg_a, dx=0.1)),
+                                            'impulso': float(np.trapz(_seg_a, dx=0.1)),
                                             'tdr': float((np.max(_seg_a) - _seg_a[0]) / max(0.1, (_seg_t[np.argmax(_seg_a)] - _seg_t[0]))),
                                             'vel_entrada': float(_seg_v[0]),
                                             'duracao_s': float(len(_seg_a) * 0.1),
@@ -9518,23 +9518,18 @@ Escolha um ou mais atletas para análise simultânea.
                                     # Scatter: tempo x pico_a colorido por impulso
                                     _fig_qa_sc = go.Figure()
                                     _fig_qa_sc.add_trace(go.Scatter(
-                                        x=_df_qa['inicio_min'].tolist(),
-                                        y=_df_qa['pico_a'].tolist(),
+                                        x=_df_qa['inicio_min'], y=_df_qa['pico_a'],
                                         mode='markers',
                                         marker=dict(
-                                            size=_df_qa['impulso'].clip(3, 20).tolist(),
-                                            color=_df_qa['impulso'].tolist(),
+                                            size=_df_qa['impulso'].clip(3, 20),
+                                            color=_df_qa['impulso'],
                                             colorscale='RdYlGn_r',
                                             showscale=True,
-                                            colorbar=dict(
-                                                title=dict(
-                                                    text='Impulso (m/s)',
-                                                    font=dict(color='white'),
-                                                ),
-                                                tickfont=dict(color='white'),
-                                            ),
+                                            colorbar=dict(title='Impulso (m/s)',
+                                                          titlefont=dict(color='white'),
+                                                          tickfont=dict(color='white')),
                                         ),
-                                        customdata=_df_qa[['impulso','vel_entrada','duracao_s']].values.tolist(),
+                                        customdata=_df_qa[['impulso','vel_entrada','duracao_s']].values,
                                         hovertemplate=(
                                             'Min: %{x:.1f}<br>'
                                             'Pico Acc: %{y:.2f} m/s²<br>'
@@ -9612,8 +9607,8 @@ Escolha um ou mais atletas para análise simultânea.
                             _est_note = True
                             _ap_sum = _ml_sum = _vt_sum = 0.0
                             for _pp in _pld_pts:
-                                _av_vel = abs(float(_pp.get('v') or 0))
-                                _av_acc = abs(float(_pp.get('a') or 0))
+                                _av_vel = abs(float(_pp.get('v', 0)))
+                                _av_acc = abs(float(_pp.get('a', 0)))
                                 # heurística: se velocidade alta → contribuição AP; se baixo → ML
                                 _ap_sum += _av_vel * 0.1
                                 _ml_sum += max(0, _av_acc - _av_vel * 0.05) * 0.1
@@ -9661,13 +9656,13 @@ Escolha um ou mais atletas para análise simultânea.
                                             _pa_pts += _ppv.get(_pa, [])
                                     else:
                                         _pa_pts = dados_sensor_por_atleta_por_periodo.get(_av_per, {}).get(_pa, [])
-                                    _a = sum(float(p.get('pla') or 0)  for p in _pa_pts)
-                                    _m = sum(float(p.get('plml') or 0) for p in _pa_pts)
-                                    _v = sum(float(p.get('plv') or 0)  for p in _pa_pts)
+                                    _a = sum(float(p.get('pla',0))  for p in _pa_pts)
+                                    _m = sum(float(p.get('plml',0)) for p in _pa_pts)
+                                    _v = sum(float(p.get('plv',0))  for p in _pa_pts)
                                     _t = _a+_m+_v
                                     if _t < 0.01 and _pa_pts:
-                                        _a = sum(abs(float(p.get('v') or 0))*0.1 for p in _pa_pts)
-                                        _m = sum(max(0,abs(float(p.get('a') or 0))-abs(float(p.get('v') or 0))*0.05)*0.1 for p in _pa_pts)
+                                        _a = sum(abs(float(p.get('v',0)))*0.1 for p in _pa_pts)
+                                        _m = sum(max(0,abs(float(p.get('a',0)))-abs(float(p.get('v',0)))*0.05)*0.1 for p in _pa_pts)
                                         _v = _a*0.15; _t = _a+_m+_v
                                     if _t > 0:
                                         _pld_rows.append({'Atleta':_pa,'AP':round(_a/_t*100,1),'ML':round(_m/_t*100,1),'VT':round(_v/_t*100,1)})
@@ -9960,7 +9955,7 @@ Escolha um ou mais atletas para análise simultânea.
                                     if _mask.sum() > 1:
                                         _dist_win = float(np.sum(np.abs(np.diff(_fa_vs[_mask])) * 0.1 / 3.6 * 3.6))
                                         # distância real via integral v×dt
-                                        _d_real = float(np.trapezoid(_fa_vs[_mask] / 3.6, _fa_ts[_mask]))
+                                        _d_real = float(np.trapz(_fa_vs[_mask] / 3.6, _fa_ts[_mask]))
                                         _pl_sum = float(np.sum(_fa_pl[_mask]))
                                         _win_mmin.append(_d_real / _fat_janela_min)
                                         _win_plmin.append(_pl_sum / _fat_janela_min)
