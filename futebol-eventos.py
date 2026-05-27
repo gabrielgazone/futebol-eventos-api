@@ -1130,7 +1130,7 @@ def enriquecer_eventos_com_posicao(eventos_dict, ts_gps, lats_gps, lons_gps, vel
         enriched = []
         for ev in events:
             ev2 = dict(ev)
-            t = float(ev.get('start_time', 0))
+            t = float(ev.get('start_time') or 0)
             idx = int(np.argmin(np.abs(ts_arr - t)))
             ev2['_lat'] = lats_gps[idx]
             ev2['_lon'] = lons_gps[idx]
@@ -1211,7 +1211,7 @@ def criar_timeline_eventos(sensor_points, eventos_dict, atleta_nome, tipos_sel):
             continue
         cfg_ev = FUTEBOL_EVENTS_CONFIG[event_type]
         for ev in events:
-            t_ev  = float(ev.get('start_time', 0)) - ts0
+            t_ev  = float(ev.get('start_time') or 0) - ts0
             v_ev  = ev.get('_vel', 0)
             label = cfg_ev['label']
             partes = [f"<b>{label}</b>", f"t={t_ev:.0f}s", f"vel={v_ev:.1f} km/h"]
@@ -1272,7 +1272,7 @@ def analisar_fadiga_eventos(sensor_points, eventos_dict, tipos_sel, janela_s=10)
         events = eventos_dict.get(event_type, [])
         cfg_ev = FUTEBOL_EVENTS_CONFIG[event_type]
         for ev in events:
-            t = float(ev.get('start_time', 0))
+            t = float(ev.get('start_time') or 0)
             mask_before = (ts_arr >= t - janela_s) & (ts_arr < t)
             mask_after  = (ts_arr >  t) & (ts_arr <= t + janela_s)
             vel_antes   = float(vel_arr[mask_before].mean()) if mask_before.any() else None
@@ -5965,8 +5965,8 @@ Escolha um ou mais atletas para análise simultânea.
                                 and campo_key not in st.session_state):
                             _vs = _venues_db[_venue_name]
                             st.session_state[campo_key] = {
-                                'lat':          float(_vs.get('lat', 0)),
-                                'lon':          float(_vs.get('lon', 0)),
+                                'lat':          float(_vs.get('lat') or 0),
+                                'lon':          float(_vs.get('lon') or 0),
                                 'rot':          int(_vs.get('rot',   0)),
                                 'fl':           int(_vs.get('fl',  105)),
                                 'fw':           int(_vs.get('fw',   68)),
@@ -7631,7 +7631,7 @@ Escolha um ou mais atletas para análise simultânea.
                                         _hsr_band_opts = []
                                         _hsr_band_map  = {}  # label → min_kmh
                                         for _z in _hsr_zones_acc:
-                                            _z_min_kmh = round(float(_z.get('min_ms', 0)) * 3.6, 1)
+                                            _z_min_kmh = round(float(_z.get('min_ms') or 0) * 3.6, 1)
                                             _z_max_ms  = float(_z.get('max_ms', 9999))
                                             _z_max_str = (
                                                 '∞'
@@ -8060,12 +8060,12 @@ Escolha um ou mais atletas para análise simultânea.
                                 st.markdown("#### Anotações existentes")
                                 # Timeline visual
                                 _ann_ts0 = min(
-                                    (float(a.get('start_time', 0)) for a in _ann_list if a.get('start_time')),
+                                    (float(a.get('start_time') or 0) for a in _ann_list if a.get('start_time')),
                                     default=0
                                 )
                                 _fig_ann = go.Figure()
                                 for _ia, _ann in enumerate(_ann_list):
-                                    _t0 = float(_ann.get('start_time', 0)) - _ann_ts0
+                                    _t0 = float(_ann.get('start_time') or 0) - _ann_ts0
                                     _t1 = float(_ann.get('end_time', _ann.get('start_time', 0))) - _ann_ts0
                                     _ann_name = _ann.get('name', f'Anotação {_ia+1}')
                                     _fig_ann.add_shape(
@@ -9396,13 +9396,13 @@ Escolha um ou mais atletas para análise simultânea.
                                             _pa_pts += _ppv.get(_pa, [])
                                     else:
                                         _pa_pts = dados_sensor_por_atleta_por_periodo.get(_av_per, {}).get(_pa, [])
-                                    _a = sum(float(p.get('pla',0))  for p in _pa_pts)
-                                    _m = sum(float(p.get('plml',0)) for p in _pa_pts)
-                                    _v = sum(float(p.get('plv',0))  for p in _pa_pts)
+                                    _a = sum(float(p.get('pla') or 0)  for p in _pa_pts)
+                                    _m = sum(float(p.get('plml') or 0) for p in _pa_pts)
+                                    _v = sum(float(p.get('plv') or 0)  for p in _pa_pts)
                                     _t = _a+_m+_v
                                     if _t < 0.01 and _pa_pts:
-                                        _a = sum(abs(float(p.get('v',0)))*0.1 for p in _pa_pts)
-                                        _m = sum(max(0,abs(float(p.get('a',0)))-abs(float(p.get('v',0)))*0.05)*0.1 for p in _pa_pts)
+                                        _a = sum(abs(float(p.get('v') or 0))*0.1 for p in _pa_pts)
+                                        _m = sum(max(0,abs(float(p.get('a') or 0))-abs(float(p.get('v') or 0))*0.05)*0.1 for p in _pa_pts)
                                         _v = _a*0.15; _t = _a+_m+_v
                                     if _t > 0:
                                         _pld_rows.append({'Atleta':_pa,'AP':round(_a/_t*100,1),'ML':round(_m/_t*100,1),'VT':round(_v/_t*100,1)})
