@@ -4624,7 +4624,7 @@ Escolha um ou mais atletas para análise simultânea.
                     {
                         'Zona': z['name'],
                         'Mín (km/h)': round(z['min_ms'] * 3.6, 1),
-                        'Máx (km/h)': round(z['max_ms'] * 3.6, 1) if z['max_ms'] < 9000 else '∞',
+                        'Máx (km/h)': '∞' if z['max_ms'] >= 9000 else f"{round(z['max_ms'] * 3.6, 1):.1f}",
                     }
                     for z in _cur_zones
                 ])
