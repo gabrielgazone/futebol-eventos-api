@@ -405,6 +405,10 @@ class CatapultAPI:
     def get_athletes(self):
         return _api_fetch(self.base_url, self._token, "athletes")
 
+    def get_athlete(self, athlete_id):
+        """Perfil completo de um atleta (GET /athletes/{id})."""
+        return _api_fetch(self.base_url, self._token, f"athletes/{athlete_id}")
+
     def get_teams(self):
         return _api_fetch(self.base_url, self._token, "teams")
 
@@ -4276,8 +4280,13 @@ Escolha um ou mais atletas para análise simultânea.
                                     df_atletas_temp = df_atletas_temp[df_atletas_temp['posicao'].isin(st.session_state.posicoes_selecionadas)]
 
                             st.session_state.atletas_filtrados = df_atletas_temp
+                            # Auto-seleciona TODOS os atletas encontrados — o usuário
+                            # já escolheu os períodos, não precisa selecionar novamente.
+                            _todos_nomes = df_atletas_temp['nome'].tolist()
+                            st.session_state['atletas_sel'] = _todos_nomes
+                            st.session_state['atletas_selecionados'] = _todos_nomes
                             _n_per_buscados = len(_periodos_para_busca) if _periodos_para_busca else 1
-                            st.success(f"✅ {len(df_atletas_temp)} atletas encontrados em {_n_per_buscados} período(s)")
+                            st.success(f"✅ {len(df_atletas_temp)} atletas encontrados e selecionados em {_n_per_buscados} período(s)")
                 
                 if 'atletas_filtrados' in st.session_state and not st.session_state.atletas_filtrados.empty:
                     st.subheader("🏃 Selecionar Atletas")
@@ -4313,10 +4322,16 @@ Escolha um ou mais atletas para análise simultânea.
 
                     atletas_disponiveis_sidebar = _df_atl_disp['nome'].tolist()
 
+                    # Default: usa atletas já pré-selecionados (pelo botão Buscar)
+                    # filtrando apenas os que ainda aparecem na lista atual.
+                    _sel_prev = st.session_state.get('atletas_sel', [])
+                    _sel_valido = [a for a in _sel_prev if a in atletas_disponiveis_sidebar]
+                    if not _sel_valido:
+                        _sel_valido = atletas_disponiveis_sidebar  # tudo selecionado por padrão
                     atletas_sel = st.multiselect(
                         "Atletas selecionados:",
                         options=atletas_disponiveis_sidebar,
-                        default=st.session_state.get('atletas_sel', atletas_disponiveis_sidebar[:min(5, len(atletas_disponiveis_sidebar))]),
+                        default=_sel_valido,
                         key="atletas_selecionados"
                     )
                     st.session_state.atletas_sel = atletas_sel
@@ -4389,49 +4404,106 @@ Escolha um ou mais atletas para análise simultânea.
             st.markdown("---")
             with st.expander("📊 Máximo Histórico", expanded=False):
                 st.caption(
-                    "Informe o Vmax histórico de cada atleta (em km/h) para que "
-                    "'% do Máximo' compare contra o histórico individual e não a "
-                    "sessão atual."
+                    "Vmax histórico buscado automaticamente do cadastro Catapult "
+                    "(limiares → perfil → zonas). Usado em '% do Máximo' nas abas "
+                    "de esforços. Você pode sobrescrever manualmente por atleta."
                 )
                 _hist_api = st.session_state.get('api')
-                if _hist_api and st.button("🔄 Buscar via /stats", key="btn_fetch_hist_vmax"):
-                    try:
-                        _stats_resp = _hist_api.get_stats({
-                            "group_by": ["athlete"],
-                            "parameters": ["max_velocity"],
-                            "source": "cached_stats",
-                        })
-                        if _stats_resp:
-                            _sv_list = _stats_resp if isinstance(_stats_resp, list) else _stats_resp.get('data', [])
-                            _hvm = st.session_state.get('hist_vmax', {})
-                            for _sv in (_sv_list or []):
-                                _sv_name = str(_sv.get('athlete') or _sv.get('athlete_name', ''))
-                                _sv_val  = _sv.get('parameters', _sv).get('max_velocity', 0) or 0
-                                if _sv_name and float(_sv_val) > 0:
-                                    _hvm[_sv_name] = float(_sv_val)   # m/s
-                            st.session_state['hist_vmax'] = _hvm
-                            st.success(f"Histórico atualizado para {len(_hvm)} atleta(s).")
-                    except Exception as _hve:
-                        st.error(f"Erro: {_hve}")
 
+                # ── Botão para re-buscar o perfil (limpa cache de perfil/thresholds) ──
+                if _hist_api and st.button("🔄 Re-buscar do perfil Catapult", key="btn_refetch_hist_vmax"):
+                    # Limpa apenas as fontes automáticas (preserva 'manual')
+                    _src_g = st.session_state.get('hist_vmax_source', {})
+                    _hvm_g = st.session_state.get('hist_vmax', {})
+                    for _an_r in list(_hvm_g.keys()):
+                        if _src_g.get(_an_r) != 'manual':
+                            _hvm_g.pop(_an_r, None)
+                            _src_g.pop(_an_r, None)
+                    # Limpa cache de perfis e thresholds para forçar nova busca
+                    for _k in list(st.session_state.keys()):
+                        if _k.startswith('profile_') or _k.startswith('thresholds_'):
+                            del st.session_state[_k]
+                    st.session_state['hist_vmax'] = _hvm_g
+                    st.session_state['hist_vmax_source'] = _src_g
+                    st.rerun()
+
+                # ── Botão fallback: /stats ─────────────────────────────────────
+                with st.expander("🔍 Buscar via /stats (fallback)", expanded=False):
+                    st.caption("Use se os campos abaixo aparecerem como 'não detectado'.")
+                    if _hist_api and st.button("Executar busca /stats", key="btn_fetch_hist_vmax"):
+                        try:
+                            _stats_resp = _hist_api.get_stats({
+                                "group_by": ["athlete"],
+                                "parameters": ["max_velocity"],
+                                "source": "cached_stats",
+                            })
+                            if _stats_resp:
+                                _sv_list = _stats_resp if isinstance(_stats_resp, list) else _stats_resp.get('data', [])
+                                _hvm = st.session_state.get('hist_vmax', {})
+                                _src_g2 = st.session_state.get('hist_vmax_source', {})
+                                _n_upd = 0
+                                for _sv in (_sv_list or []):
+                                    _sv_name = str(_sv.get('athlete') or _sv.get('athlete_name', ''))
+                                    _sv_val  = (_sv.get('parameters') or _sv).get('max_velocity', 0) or 0
+                                    if _sv_name and float(_sv_val) > 0 and _src_g2.get(_sv_name) != 'manual':
+                                        _hvm[_sv_name] = float(_sv_val)
+                                        _src_g2[_sv_name] = 'stats'
+                                        _n_upd += 1
+                                st.session_state['hist_vmax'] = _hvm
+                                st.session_state['hist_vmax_source'] = _src_g2
+                                st.success(f"✅ Atualizado para {_n_upd} atleta(s) via /stats.")
+                        except Exception as _hve:
+                            st.error(f"Erro: {_hve}")
+
+                # ── Tabela de valores detectados ───────────────────────────────
                 _atletas_sidebar = (
                     st.session_state.atletas_sel
                     if st.session_state.get('atletas_sel') else []
                 )
-                _hvm_dict = st.session_state.get('hist_vmax', {})
+                _hvm_dict  = st.session_state.get('hist_vmax', {})
+                _src_dict  = st.session_state.get('hist_vmax_source', {})
+
+                _src_labels = {
+                    'thresholds': '📋 Limiares',
+                    'profile':    '👤 Perfil',
+                    'zones':      '🏷️ Zonas',
+                    'stats':      '📊 /stats',
+                    'manual':     '✏️ Manual',
+                    '':           '❓ Não detectado',
+                }
+
                 for _an in _atletas_sidebar:
-                    _cur_ms = _hvm_dict.get(_an, 0.0)
-                    _cur_kmh = round(_cur_ms * 3.6, 1) if _cur_ms else 0.0
-                    _inp = st.number_input(
-                        f"{_an} — Vmax hist. (km/h):",
-                        min_value=0.0, max_value=50.0,
-                        value=_cur_kmh,
-                        step=0.1,
-                        key=f"hist_vmax_{_an}",
-                    )
-                    if _inp > 0:
-                        _hvm_dict[_an] = _inp / 3.6   # armazena em m/s
-                st.session_state['hist_vmax'] = _hvm_dict
+                    _cur_ms  = _hvm_dict.get(_an, 0.0)
+                    _cur_kmh = round(_cur_ms * 3.6, 2) if _cur_ms else 0.0
+                    _src_tag = _src_labels.get(_src_dict.get(_an, ''), '❓ Não detectado')
+                    _col_v, _col_s = st.columns([3, 2])
+                    with _col_v:
+                        if _cur_kmh > 0:
+                            st.markdown(f"**{_an}**  \n`{_cur_kmh} km/h`")
+                        else:
+                            st.markdown(f"**{_an}**  \n`— não detectado`")
+                    with _col_s:
+                        st.caption(_src_tag)
+
+                    # Override manual com toggle
+                    if st.toggle("✏️ Editar", key=f"_tgl_hvm_{_an}", value=False):
+                        _inp = st.number_input(
+                            "Vmax (km/h):",
+                            min_value=0.0, max_value=50.0,
+                            value=_cur_kmh,
+                            step=0.1,
+                            key=f"hist_vmax_{_an}",
+                        )
+                        if _inp > 0:
+                            _hvm_dict[_an] = _inp / 3.6
+                            _src_dict[_an] = 'manual'
+                        elif _inp == 0 and _src_dict.get(_an) == 'manual':
+                            # Apagar override manual
+                            _hvm_dict.pop(_an, None)
+                            _src_dict.pop(_an, None)
+
+                st.session_state['hist_vmax']        = _hvm_dict
+                st.session_state['hist_vmax_source'] = _src_dict
 
         # ── Bandas de Velocidade (CORRECTION 2) ──────────────────────────
         if not st.session_state.get('df_activities', pd.DataFrame()).empty and token:
@@ -4578,6 +4650,67 @@ Escolha um ou mais atletas para análise simultânea.
                         st.session_state[_thr_key] = _thr_data
                     except Exception:
                         st.session_state[_thr_key] = {}
+
+                # ── Auto-popular Vmax histórico a partir do cadastro ──────────
+                # Prioridade: (1) limiares do atleta, (2) perfil do atleta,
+                # (3) zona de velocidade mais alta. Só sobrescreve se ainda
+                # não tiver um valor (ou se o valor for 0 / manual não definido).
+                _hvm_global = st.session_state.get('hist_vmax', {})
+                _src_global = st.session_state.get('hist_vmax_source', {})
+                _src_atual  = _src_global.get(atleta_nome, '')
+                # Não sobrescreve sobreposições manuais do usuário
+                if _src_atual != 'manual':
+                    _vmax_encontrado = 0.0
+                    _vmax_fonte      = ''
+                    # — Fonte 1: limiares cadastrados (thresholds endpoint) ——
+                    _thr_data_now = st.session_state.get(_thr_key, {})
+                    _vmax_keys_thr = [
+                        'max_velocity', 'velocity_max', 'peak_speed',
+                        'max_speed', 'v_max', 'maximum_velocity',
+                        'MaxVelocity', 'MaxSpeed', 'velocidade_maxima',
+                        'vmax',
+                    ]
+                    for _vk in _vmax_keys_thr:
+                        _vv = _thr_data_now.get(_vk, 0)
+                        if _vv and float(_vv) > _vmax_encontrado:
+                            _vmax_encontrado = float(_vv)
+                            _vmax_fonte = 'thresholds'
+                    # — Fonte 2: perfil do atleta (GET /athletes/{id}) ————
+                    if _vmax_encontrado == 0:
+                        try:
+                            _prof_key = f"profile_{athlete_id}"
+                            if _prof_key not in st.session_state:
+                                _prof_raw = api.get_athlete(athlete_id)
+                                st.session_state[_prof_key] = _prof_raw or {}
+                            _prof = st.session_state.get(_prof_key, {})
+                            _vmax_prof_keys = [
+                                'max_speed', 'max_velocity', 'velocity',
+                                'maximum_speed', 'peak_speed', 'v_max',
+                            ]
+                            for _pk in _vmax_prof_keys:
+                                _pv = _prof.get(_pk, 0)
+                                if _pv and float(_pv) > _vmax_encontrado:
+                                    _vmax_encontrado = float(_pv)
+                                    _vmax_fonte = 'profile'
+                        except Exception:
+                            pass
+                    # — Fonte 3: topo da zona de velocidade mais alta ——————
+                    if _vmax_encontrado == 0:
+                        try:
+                            _zones_atl = get_zones_for_athlete(atleta_nome)
+                            if _zones_atl:
+                                _top_ms = max(z.get('max_ms', 0) for z in _zones_atl)
+                                if _top_ms and float(_top_ms) > 0:
+                                    _vmax_encontrado = float(_top_ms)
+                                    _vmax_fonte = 'zones'
+                        except Exception:
+                            pass
+                    # — Persiste se encontrou algo ────────────────────────
+                    if _vmax_encontrado > 0:
+                        _hvm_global[atleta_nome] = _vmax_encontrado
+                        _src_global[atleta_nome] = _vmax_fonte
+                st.session_state['hist_vmax']        = _hvm_global
+                st.session_state['hist_vmax_source'] = _src_global
 
                 if period_id:
                     response         = api.get_period_sensor_data(period_id, athlete_id)
@@ -4974,7 +5107,6 @@ Escolha um ou mais atletas para análise simultânea.
                 "🏠 Resumo",
                 "🗺️ Campo & GPS",
                 "📈 Carga Física",
-                "🔬 Avançado",
                 "📊 Estatísticas",
                 "📡 Ao Vivo",
             ])
@@ -4983,10 +5115,8 @@ Escolha um ou mais atletas para análise simultânea.
             with _main_tabs[1]:
                 _sub_campo = st.tabs(["🗺️ Campo de Futebol", "🎬 História do Jogo"])
             with _main_tabs[2]:
-                _sub_carga = st.tabs(["⏱️ Esforços", "📊 Janelas Temporais", "💪 Neuromuscular", "🏎️ Acc-Vel"])
+                _sub_carga = st.tabs(["⏱️ Esforços", "📊 Janelas Temporais", "💪 Neuromuscular", "🏎️ Acc-Vel", "❤️ FC"])
             with _main_tabs[3]:
-                _sub_avancado = st.tabs(["🔍 Exploração Livre", "💬 Pergunte ao App", "📅 Evolução & ACWR"])
-            with _main_tabs[4]:
                 _sub_stats = st.tabs(["📈 Gráficos Comparativos", "📋 Tabela Descritiva", "📊 Por Posição"])
 
             # Mapeamento: abas[N] aponta para o container correto na nova estrutura
@@ -4997,13 +5127,11 @@ Escolha um ou mais atletas para análise simultânea.
                 _sub_carga[1],    # 3: Janelas Temporais       → Carga Física
                 _sub_carga[2],    # 4: Neuromuscular           → Carga Física
                 _sub_carga[3],    # 5: Acc-Vel                 → Carga Física
-                _sub_stats[1],    # 6: Tabela Descritiva       → Estatísticas
-                _sub_stats[2],    # 7: Por Posição             → Estatísticas
-                _sub_campo[1],    # 8: História do Jogo        → Campo & GPS
-                _sub_avancado[0], # 9: Exploração Livre        → Avançado
-                _sub_avancado[1], # 10: Pergunte ao App        → Avançado
-                _main_tabs[5],    # 11: Ao Vivo                → Ao Vivo (tab principal)
-                _sub_avancado[2], # 12: Evolução & ACWR        → Avançado
+                _sub_carga[4],    # 6: FC (TRIMP + Zonas)      → Carga Física
+                _sub_stats[1],    # 7: Tabela Descritiva       → Estatísticas
+                _sub_stats[2],    # 8: Por Posição             → Estatísticas
+                _sub_campo[1],    # 9: História do Jogo        → Campo & GPS
+                _main_tabs[4],    # 10: Ao Vivo               → Ao Vivo (tab principal)
             ]
 
             # ==================== ABA RESUMO: OVERVIEW DASHBOARD ====================
@@ -5011,6 +5139,7 @@ Escolha um ou mais atletas para análise simultânea.
                 st.markdown("## 📊 Resumo da Sessão")
 
                 if resultados_por_periodo:
+                    # ── Coleta todas as linhas de todos os períodos (exceto combinado) ──
                     _ov_rows = []
                     for _p, _rs in resultados_por_periodo.items():
                         if _p == _CHAVE_COMBINADO:
@@ -5021,28 +5150,77 @@ Escolha um ou mais atletas para análise simultânea.
                             _ov_rows.append(_row)
 
                     if _ov_rows:
-                        _df_ov = pd.DataFrame(_ov_rows)
+                        _df_ov_raw = pd.DataFrame(_ov_rows)
 
+                        # ── Agrega por atleta — combina todos os períodos ────────────
+                        # Métricas que se SOMAM entre períodos
+                        _cols_sum = [c for c in [
+                            'Distância (m)', 'Dist. > 19 km/h (m)', 'Dist. > 24 km/h (m)',
+                            'Sprints (>24 km/h)', 'Acelerações (>3 m/s²)',
+                            'Desacelerações (>-3 m/s²)', 'RHIE Blocos', 'PlayerLoad',
+                            'TRIMP',
+                        ] if c in _df_ov_raw.columns]
+                        # Métricas que se tomam o MÁXIMO entre períodos
+                        _cols_max = [c for c in [
+                            'Velocidade Máx (km/h)', 'Velocidade Bruta Máx (km/h)',
+                            'Aceleração Máx (m/s²)', 'Potência Met. Máx (W/kg)',
+                        ] if c in _df_ov_raw.columns]
+                        # Métricas que se tomam a MÉDIA entre períodos
+                        _cols_mean = [c for c in [
+                            'FC Média (bpm)', 'Velocidade Média (km/h)',
+                        ] if c in _df_ov_raw.columns]
+                        # Campos textuais: mantém o valor do primeiro período
+                        _cols_first = [c for c in ['Posição', 'Equipe'] if c in _df_ov_raw.columns]
+
+                        _agg_dict = {}
+                        for _c in _cols_sum:  _agg_dict[_c] = 'sum'
+                        for _c in _cols_max:  _agg_dict[_c] = 'max'
+                        for _c in _cols_mean: _agg_dict[_c] = 'mean'
+                        for _c in _cols_first: _agg_dict[_c] = 'first'
+
+                        if _agg_dict and 'Atleta' in _df_ov_raw.columns:
+                            _df_ov = (_df_ov_raw.groupby('Atleta', as_index=False)
+                                      .agg(_agg_dict))
+                            # Arredonda métricas numéricas
+                            for _c in _cols_sum + _cols_max + _cols_mean:
+                                if _c in _df_ov.columns:
+                                    _df_ov[_c] = _df_ov[_c].round(1)
+                        else:
+                            _df_ov = _df_ov_raw.copy()
+
+                        _n_periodos_ov = _df_ov_raw['Período'].nunique()
+
+                        # ── KPI cards ────────────────────────────────────────────────
                         _ov_c1, _ov_c2, _ov_c3, _ov_c4, _ov_c5 = st.columns(5)
                         _ov_c1.metric("👥 Atletas", len(_df_ov['Atleta'].unique()) if 'Atleta' in _df_ov.columns else 0)
-                        _ov_c2.metric("📏 Dist. Média", f"{_df_ov['Distância (m)'].mean():.0f} m" if 'Distância (m)' in _df_ov.columns else "—")
+                        _ov_c2.metric("📏 Dist. Média", f"{_df_ov['Distância (m)'].mean():.0f} m" if 'Distância (m)' in _df_ov.columns else "—",
+                                      help=f"Soma de todos os {_n_periodos_ov} período(s) por atleta, depois média do grupo")
                         _ov_c3.metric("💨 Vmax do Dia", f"{_df_ov['Velocidade Máx (km/h)'].max():.1f} km/h" if 'Velocidade Máx (km/h)' in _df_ov.columns else "—")
-                        _ov_c4.metric("⚡ PL Médio", f"{_df_ov['PlayerLoad'].mean():.0f}" if 'PlayerLoad' in _df_ov.columns else "—", help="Catapult PlayerLoad™: raiz quadrada da soma das acelerações ao quadrado nos 3 eixos (inercial)")
+                        _ov_c4.metric("⚡ PL Total Médio", f"{_df_ov['PlayerLoad'].mean():.0f}" if 'PlayerLoad' in _df_ov.columns else "—",
+                                      help="Catapult PlayerLoad™ somado em todos os períodos, depois média do grupo")
                         _hsr_col = 'Dist. > 19 km/h (m)'
-                        _ov_c5.metric("🏃 HSR Médio", f"{_df_ov[_hsr_col].mean():.0f} m" if _hsr_col in _df_ov.columns else "—", help="High Speed Running: distância percorrida acima de 19 km/h (ou limiar personalizado do atleta)")
+                        _ov_c5.metric("🏃 HSR Médio", f"{_df_ov[_hsr_col].mean():.0f} m" if _hsr_col in _df_ov.columns else "—",
+                                      help=f"HSR somado em {_n_periodos_ov} período(s) por atleta, depois média do grupo")
+
+                        if _n_periodos_ov > 1:
+                            st.caption(f"📋 Valores combinados de **{_n_periodos_ov} períodos** — somas, máximos e médias ponderadas por atleta.")
 
                         st.markdown("---")
 
+                        # ── Gráfico de barras — distância combinada ────────────────
                         if 'Atleta' in _df_ov.columns and 'Distância (m)' in _df_ov.columns:
                             _fig_ov = go.Figure()
                             _fig_ov.add_trace(go.Bar(
                                 x=_df_ov['Atleta'], y=_df_ov['Distância (m)'],
                                 marker_color=[st.session_state.get('athlete_colors', {}).get(a, '#2196F3') for a in _df_ov['Atleta']],
                                 text=_df_ov['Distância (m)'].round(0), textposition='outside',
-                                hovertemplate='%{x}<br>Distância: %{y:.0f} m<extra></extra>',
+                                hovertemplate='%{x}<br>Distância total: %{y:.0f} m<extra></extra>',
                             ))
                             _fig_ov.update_layout(
-                                title=dict(text='Distância Total por Atleta', font=dict(color='white', size=14)),
+                                title=dict(
+                                    text=f'Distância Total por Atleta ({_n_periodos_ov} período(s) combinado(s))',
+                                    font=dict(color='white', size=14)
+                                ),
                                 plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
                                 font=dict(color='white'), xaxis=dict(gridcolor='#333', tickangle=-30),
                                 yaxis=dict(gridcolor='#333'), height=320, margin=dict(t=45,b=80,l=10,r=10),
@@ -5050,8 +5228,12 @@ Escolha um ou mais atletas para análise simultânea.
                             )
                             st.plotly_chart(_fig_ov, use_container_width=True)
 
-                        _ov_display_cols = [c for c in ['Atleta','Posição','Distância (m)','Velocidade Máx (km/h)',
-                                            'Sprints (>24 km/h)','PlayerLoad','RHIE Blocos'] if c in _df_ov.columns]
+                        # ── Tabela combinada ────────────────────────────────────────
+                        _ov_display_cols = [c for c in [
+                            'Atleta', 'Posição', 'Distância (m)', 'Velocidade Máx (km/h)',
+                            'Sprints (>24 km/h)', 'PlayerLoad', 'RHIE Blocos',
+                            'Dist. > 19 km/h (m)', 'FC Média (bpm)',
+                        ] if c in _df_ov.columns]
                         if _ov_display_cols:
                             _ov_sort_col = 'Distância (m)' if 'Distância (m)' in _ov_display_cols else _ov_display_cols[0]
                             st.dataframe(
@@ -5072,19 +5254,62 @@ Escolha um ou mais atletas para análise simultânea.
             # ==================== ABA 1: GRÁFICOS COMPARATIVOS ====================
             with abas[0]:
                 st.subheader("📈 Gráficos Comparativos")
+
+                # ── Filtro por Posição (conectado aos dados da atividade) ────────
+                _gc_pos_dict: dict = {}   # posição → [atleta1, atleta2, ...]
+                for _gc_per_data in resultados_por_periodo.values():
+                    for _gc_r in _gc_per_data:
+                        _gc_atl_n = _gc_r.get('Atleta', '')
+                        _gc_pos_n = (_gc_r.get('Posição', '') or '').strip()
+                        if _gc_atl_n:
+                            _gc_pos_dict.setdefault(_gc_pos_n, [])
+                            if _gc_atl_n not in _gc_pos_dict[_gc_pos_n]:
+                                _gc_pos_dict[_gc_pos_n].append(_gc_atl_n)
+
+                _gc_posicoes_disp = sorted([p for p in _gc_pos_dict if p])
+
+                _gc_filter_col1, _gc_filter_col2 = st.columns([2, 3])
+                with _gc_filter_col1:
+                    if _gc_posicoes_disp:
+                        _gc_pos_sel = st.selectbox(
+                            "🎯 Filtrar por posição:",
+                            ["— Todas as posições —"] + _gc_posicoes_disp,
+                            key="gc_pos_filter",
+                            help="Selecione uma posição para ver apenas os atletas daquela função tática.",
+                        )
+                    else:
+                        _gc_pos_sel = "— Todas as posições —"
+                        st.selectbox("🎯 Filtrar por posição:", ["— Sem dados de posição —"],
+                                     key="gc_pos_filter_empty", disabled=True)
+
+                if _gc_pos_sel != "— Todas as posições —" and _gc_pos_sel in _gc_pos_dict:
+                    _gc_atletas_pos_filtro: set | None = set(_gc_pos_dict[_gc_pos_sel])
+                    with _gc_filter_col2:
+                        st.caption(
+                            f"🎯 **{_gc_pos_sel}** — "
+                            f"{len(_gc_atletas_pos_filtro)} atleta(s): "
+                            f"{', '.join(sorted(_gc_atletas_pos_filtro))}"
+                        )
+                else:
+                    _gc_atletas_pos_filtro = None   # sem filtro → todos os atletas
+
+                st.markdown("---")
                 st.markdown("### Modo de Comparação")
-                
+
                 modo_comparacao = st.radio(
                     "Escolha o tipo de comparação:",
                     ["Comparar Atletas no Mesmo Período", "Comparar Mesmo Atleta em Diferentes Períodos"],
                     horizontal=True
                 )
-                
+
                 if modo_comparacao == "Comparar Atletas no Mesmo Período":
                     periodo_comp = st.selectbox("Selecione o período:", list(resultados_por_periodo.keys()), key="periodo_comp")
-                    
+
                     if periodo_comp in resultados_por_periodo and resultados_por_periodo[periodo_comp]:
                         df_comp = pd.DataFrame(resultados_por_periodo[periodo_comp])
+                        # Aplica filtro por posição
+                        if _gc_atletas_pos_filtro is not None:
+                            df_comp = df_comp[df_comp['Atleta'].isin(_gc_atletas_pos_filtro)]
                         atletas_disponiveis = df_comp['Atleta'].tolist()
                         atletas_selecionados_comp = st.multiselect(
                             "Selecione os atletas para comparar:",
@@ -5133,11 +5358,18 @@ Escolha um ou mais atletas para análise simultânea.
                     primeiro_periodo = list(resultados_por_periodo.keys())[0]
                     if resultados_por_periodo[primeiro_periodo]:
                         df_primeiro = pd.DataFrame(resultados_por_periodo[primeiro_periodo])
-                        atleta_comp = st.selectbox("Selecione o atleta:", df_primeiro['Atleta'].tolist(), key="atleta_comp")
-                        
+                        # Aplica filtro por posição
+                        if _gc_atletas_pos_filtro is not None:
+                            df_primeiro = df_primeiro[df_primeiro['Atleta'].isin(_gc_atletas_pos_filtro)]
+                        _atls_para_comp = df_primeiro['Atleta'].tolist() if not df_primeiro.empty else []
+                        atleta_comp = st.selectbox("Selecione o atleta:", _atls_para_comp, key="atleta_comp") if _atls_para_comp else None
+
+                        if atleta_comp is None:
+                            st.info("Nenhum atleta disponível com os filtros de posição aplicados.")
+
                         dados_atleta = {}
                         for periodo, resultados in resultados_por_periodo.items():
-                            if resultados:
+                            if resultados and atleta_comp:
                                 df_periodo = pd.DataFrame(resultados)
                                 atleta_data = df_periodo[df_periodo['Atleta'] == atleta_comp]
                                 if not atleta_data.empty:
@@ -5191,9 +5423,34 @@ Escolha um ou mais atletas para análise simultânea.
                             _sp_atl = st.selectbox(f"Atleta {_lbl}:", _sp_ats, key=f"split_atl_{_lbl}") if _sp_ats else None
                             if _sp_atl:
                                 _sp_d = dados_posicao_por_periodo.get(_sp_per, {}).get(_sp_atl, {})
-                                _sp_xs = _sp_d.get('xs', [])
-                                _sp_ys = _sp_d.get('ys', [])
-                                _sp_vs = _sp_d.get('vel', _sp_d.get('vels_gps', []))
+                                _sp_xs = list(_sp_d.get('xs', []))
+                                _sp_ys = list(_sp_d.get('ys', []))
+                                _sp_vs = list(_sp_d.get('vel', _sp_d.get('vels_gps', [])))
+
+                                # ── Fallback GPS: converte lat/lon se não há x/y ────
+                                _sp_gps_used = False
+                                if not _sp_xs:
+                                    _sp_lats = _sp_d.get('lats', [])
+                                    _sp_lons = _sp_d.get('lons', [])
+                                    if _sp_lats and _sp_lons:
+                                        # Busca qualquer cfg de campo salvo em session_state
+                                        _sp_cfg = None
+                                        for _ssk, _ssv in st.session_state.items():
+                                            if (isinstance(_ssk, str)
+                                                    and _ssk.startswith('campo_cfg__')
+                                                    and isinstance(_ssv, dict)
+                                                    and _ssv.get('fl')):
+                                                _sp_cfg = _ssv
+                                                break
+                                        if _sp_cfg:
+                                            try:
+                                                _sp_xs, _sp_ys = gps_para_campo_coords(
+                                                    _sp_lats, _sp_lons, _sp_cfg)
+                                                _sp_vs = list(_sp_d.get('vels_gps', [0.0]*len(_sp_xs)))
+                                                _sp_gps_used = True
+                                            except Exception:
+                                                pass
+
                                 if _sp_xs:
                                     # Direção de ataque para este lado do split view
                                     _sp_atk_opts = ["— Não definido", "➡️  Esq → Dir", "⬅️  Dir → Esq"]
@@ -5217,11 +5474,13 @@ Escolha um ou mais atletas para análise simultânea.
                                     else:
                                         st.session_state[_sp_atk_key] = None
                                     _sp_fig = desenhar_campo_futebol_bonito(
-                                        title=f"{_sp_atl} — {_sp_per}",
+                                        title=f"{_sp_atl} — {_sp_per}"
+                                              + (" (GPS)" if _sp_gps_used else ""),
                                         attack_direction=st.session_state[_sp_atk_key],
                                     )
                                     _sp_step = max(1, len(_sp_xs) // 5000)
-                                    _sp_vs_sub = [_sp_vs[i] for i in range(0, len(_sp_vs), _sp_step)] if _sp_vs else [0] * len(_sp_xs[::_sp_step])
+                                    _sp_vs_sub = ([_sp_vs[i] for i in range(0, len(_sp_vs), _sp_step)]
+                                                  if _sp_vs else [0] * len(_sp_xs[::_sp_step]))
                                     _sp_fig.add_trace(go.Scatter(
                                         x=_sp_xs[::_sp_step], y=_sp_ys[::_sp_step],
                                         mode='markers',
@@ -5236,7 +5495,15 @@ Escolha um ou mais atletas para análise simultânea.
                                     _sp_fig.update_layout(height=400, margin=dict(t=30,b=10,l=10,r=10))
                                     st.plotly_chart(_sp_fig, use_container_width=True)
                                 else:
-                                    st.info("Sem dados de posição (x/y) para este atleta/período.")
+                                    _sp_has_gps = bool(_sp_d.get('lats'))
+                                    if _sp_has_gps:
+                                        st.warning(
+                                            "📡 Dados GPS disponíveis mas campo não calibrado.\n\n"
+                                            "Vá até a aba **Campo & GPS** no modo normal, aplique o campo "
+                                            "no mapa e retorne ao Split View."
+                                        )
+                                    else:
+                                        st.info("Sem dados de posição (x/y ou GPS) para este atleta/período.")
                 elif dados_posicao_por_periodo:
                     _todos_periodos = list(dados_posicao_por_periodo.keys())
                     col1, col2 = st.columns(2)
@@ -6708,151 +6975,6 @@ Escolha um ou mais atletas para análise simultânea.
                                                 st.info("Selecione dois atletas diferentes para comparar.")
 
                                     # ══════════════════════════════════════════════
-                                    # ANÁLISE 4 — PERFIL FORÇA-VELOCIDADE
-                                    # ══════════════════════════════════════════════
-                                    st.markdown("---")
-                                    with st.expander("📊 Perfil Força-Velocidade Individual", expanded=False):
-                                        st.markdown(
-                                            "Estima a **capacidade de geração de força** em cada faixa de velocidade. "
-                                            "Para cada bin de velocidade, calcula o **pico de aceleração** (95º percentil). "
-                                            "A regressão linear revela o perfil F-V: "
-                                            "inclinação acentuada = atleta de **força**; "
-                                            "mais plana = atleta de **velocidade**."
-                                        )
-                                        _fv_vel = np.array(vel_raw_campo, dtype=float)
-                                        _fv_acc = np.array(acc_raw_campo, dtype=float)
-
-                                        if len(_fv_vel) > 200 and _fv_vel.max() > 5:
-                                            _bin_w   = 2.0
-                                            _v_top   = min(float(_fv_vel.max()), 36.0)
-                                            _bins    = np.arange(0, _v_top + _bin_w, _bin_w)
-                                            _fv_pv, _fv_pa, _fv_pn = [], [], []
-                                            for _bi in range(len(_bins) - 1):
-                                                _lo2, _hi2 = _bins[_bi], _bins[_bi + 1]
-                                                _mk = (_fv_vel >= _lo2) & (_fv_vel < _hi2) & (_fv_acc > 0)
-                                                if _mk.sum() >= 5:
-                                                    _fv_pv.append((_lo2 + _hi2) / 2)
-                                                    _fv_pa.append(float(np.percentile(_fv_acc[_mk], 95)))
-                                                    _fv_pn.append(int(_mk.sum()))
-
-                                            if len(_fv_pv) >= 3:
-                                                _fv_pv  = np.array(_fv_pv)
-                                                _fv_pa  = np.array(_fv_pa)
-                                                _fv_cf  = np.polyfit(_fv_pv, _fv_pa, 1)
-                                                _sl, _ic = float(_fv_cf[0]), float(_fv_cf[1])
-                                                _F0  = max(_ic, 0.0)
-                                                _V0  = ((-_ic / _sl) if _sl < -1e-6
-                                                        else float(_fv_pv[-1]) * 1.3)
-                                                _V0  = max(_V0, float(_fv_pv[-1]))
-                                                _Pmax = (_F0 * (_V0 / 3.6)) / 4.0
-
-                                                if _sl < -0.12:
-                                                    _pfil = "💪 Força-Dominante"
-                                                    _pdesc = "Alta acc. inicial, queda acentuada com a velocidade."
-                                                elif _sl > -0.06:
-                                                    _pfil = "⚡ Velocidade-Dominante"
-                                                    _pdesc = "Mantém aceleração nas altas velocidades."
-                                                else:
-                                                    _pfil = "⚖️ Equilibrado"
-                                                    _pdesc = "Balanço entre força inicial e velocidade de pico."
-
-                                                _v_line = np.linspace(0, _V0 * 1.05, 120)
-                                                _a_line = np.clip(np.polyval(_fv_cf, _v_line), 0, None)
-
-                                                _fig_fv = go.Figure()
-                                                _fig_fv.add_trace(go.Scatter(
-                                                    x=_fv_pv, y=_fv_pa,
-                                                    mode='markers+text',
-                                                    marker=dict(
-                                                        size=[max(9, min(22, n // 40)) for n in _fv_pn],
-                                                        color='#FF9800',
-                                                        line=dict(color='white', width=1.5)
-                                                    ),
-                                                    text=[f"{v:.0f}" for v in _fv_pv],
-                                                    textposition='top center',
-                                                    textfont=dict(color='rgba(255,255,255,0.75)', size=9),
-                                                    name='Pico acc (95p) / bin',
-                                                    hovertemplate=(
-                                                        'Vel: %{x:.1f} km/h<br>'
-                                                        'Acc 95p: %{y:.2f} m/s²<extra></extra>'
-                                                    )
-                                                ))
-                                                _fig_fv.add_trace(go.Scatter(
-                                                    x=_v_line, y=_a_line,
-                                                    mode='lines',
-                                                    line=dict(color='#00E5FF', width=2.5, dash='dash'),
-                                                    name='Regressão F-V',
-                                                    hoverinfo='skip'
-                                                ))
-                                                _fig_fv.add_annotation(
-                                                    x=0, y=_F0,
-                                                    text=f"<b>F₀ = {_F0:.2f} m/s²</b>",
-                                                    showarrow=True, arrowhead=2,
-                                                    arrowcolor='#4CAF50',
-                                                    font=dict(color='#4CAF50', size=11),
-                                                    ax=55, ay=-35
-                                                )
-                                                _fig_fv.add_annotation(
-                                                    x=_V0, y=0,
-                                                    text=f"<b>V₀ = {_V0:.1f} km/h</b>",
-                                                    showarrow=True, arrowhead=2,
-                                                    arrowcolor='#FF4081',
-                                                    font=dict(color='#FF4081', size=11),
-                                                    ax=-55, ay=-35
-                                                )
-                                                _fig_fv.update_layout(
-                                                    title=dict(
-                                                        text=(f"Perfil F-V — {atleta_mapa} "
-                                                              f"| {_pfil}"),
-                                                        font=dict(color='white', size=14)
-                                                    ),
-                                                    xaxis=dict(
-                                                        title='Velocidade (km/h)',
-                                                        range=[0, _V0 * 1.1],
-                                                        gridcolor='rgba(255,255,255,0.1)',
-                                                        color='white'
-                                                    ),
-                                                    yaxis=dict(
-                                                        title='Pico de Aceleração (m/s²)',
-                                                        range=[0, _F0 * 1.25],
-                                                        gridcolor='rgba(255,255,255,0.1)',
-                                                        color='white'
-                                                    ),
-                                                    paper_bgcolor='rgba(0,0,0,0)',
-                                                    plot_bgcolor='rgba(20,20,30,0.85)',
-                                                    legend=dict(font=dict(color='white')),
-                                                    height=390
-                                                )
-                                                st.plotly_chart(_fig_fv, use_container_width=True)
-
-                                                _fvc1, _fvc2, _fvc3, _fvc4 = st.columns(4)
-                                                with _fvc1:
-                                                    st.metric("F₀ — acc teórica em v=0",
-                                                              f"{_F0:.2f} m/s²",
-                                                              help="Aceleração máxima extrapolada para velocidade zero.")
-                                                with _fvc2:
-                                                    st.metric("V₀ — vel. máx teórica",
-                                                              f"{_V0:.1f} km/h",
-                                                              help="Velocidade onde a força propulsora cai a zero.")
-                                                with _fvc3:
-                                                    st.metric("Pmax (potência rel.)",
-                                                              f"{_Pmax:.2f} m²/s³",
-                                                              help="Potência máxima relativa: F₀ × V₀ / 4.")
-                                                with _fvc4:
-                                                    st.metric("Perfil", _pfil)
-                                                st.caption(
-                                                    f"{_pdesc}  |  "
-                                                    f"Slope F-V: {_sl:.3f} (m/s²)/(km/h)  |  "
-                                                    f"{len(_fv_pv)} bins usados"
-                                                )
-                                            else:
-                                                st.info("Dados insuficientes para o perfil F-V "
-                                                        "(mínimo: 3 bins de velocidade com aceleração positiva).")
-                                        else:
-                                            st.info("Dados de velocidade/aceleração insuficientes "
-                                                    "para este período.")
-
-                                    # ══════════════════════════════════════════════
                                     # ANÁLISE — PICO DE DEMANDA (PEAK DEMAND WINDOWS)
                                     # ══════════════════════════════════════════════
                                     st.markdown("---")
@@ -7378,11 +7500,7 @@ Escolha um ou mais atletas para análise simultânea.
                                                     "Dados de posição insuficientes "
                                                     "para os atletas selecionados.")
                                     else:
-                                        st.markdown("---")
-                                        st.info(
-                                            "ℹ️ Selecione **2 ou mais atletas** no topo desta "
-                                            "seção para ativar a análise de distância entre eles."
-                                        )
+                                        pass  # análise de distância requer 2+ atletas
 
                                 else:
                                     st.error("❌ Não foi possível calcular as coordenadas de campo.")
@@ -8585,100 +8703,126 @@ Escolha um ou mais atletas para análise simultânea.
                     else:
                         st.info("Selecione pelo menos 1 atleta para ver o perfil Acc × Vel.")
 
-                    # ════════════════════════════════════════════════════════
-                    # SEÇÃO 6 — TRIMP + ZONAS DE FC (Item 13)
-                    # ════════════════════════════════════════════════════════
-                    st.markdown("---")
-                    st.markdown("### ❤️ TRIMP & Zonas de Frequência Cardíaca")
-                    st.caption(
-                        "**TRIMP** (Training Impulse — Edwards): carga interna calculada pelo tempo em cada zona de "
-                        "FC (50–60 / 60–70 / 70–80 / 80–90 / 90–100% HRmax) com multiplicadores 1–2–3–4–5. "
-                        "Referência: FC máx = 220 − idade (padrão 180 bpm se não configurada)."
-                    )
-
-                    _trimp_col1, _trimp_col2 = st.columns([1, 2])
-                    with _trimp_col1:
-                        _trimp_hrmax = st.number_input("FC Máx (bpm):", min_value=150, max_value=220,
-                                                        value=180, step=1, key="trimp_hrmax")
-
                     if _av_atletas_disp:
-                        _trimp_atl = st.selectbox("Atleta para TRIMP:", _av_atletas_disp, key="trimp_atleta")
+                        pass  # análise de FC/TRIMP disponível na aba ❤️ FC
+                else:
+                    st.info("Busque os dados de atletas na sessão antes de usar esta análise.")
 
-                        # Coletar dados de sensor
-                        if _av_per == _AV_TODOS:
-                            _trimp_pts: list = []
-                            for _pv in dados_sensor_por_atleta_por_periodo.values():
-                                _trimp_pts += _pv.get(_trimp_atl, [])
+            # ══════════════════════════════════════════════════════════════
+            # ABA 6: FC — TRIMP & ZONAS DE FREQUÊNCIA CARDÍACA
+            # ══════════════════════════════════════════════════════════════
+            with abas[6]:
+                st.subheader("❤️ Frequência Cardíaca & TRIMP")
+                st.caption(
+                    "**TRIMP** (Training Impulse — Edwards): carga interna calculada pelo tempo em cada zona de "
+                    "FC (50–60 / 60–70 / 70–80 / 80–90 / 90–100% HRmax) com multiplicadores 1–2–3–4–5. "
+                    "Referência: FC máx = 220 − idade (padrão 180 bpm se não configurada)."
+                )
+
+                _fc_periodos = list(dados_sensor_por_atleta_por_periodo.keys())
+                if _fc_periodos and resultados_por_periodo:
+                    _FC_TODOS = "🔀 Todos os períodos (combinado)"
+                    _fc_opcoes_per = [_FC_TODOS] + _fc_periodos
+
+                    _fc_c1, _fc_c2, _fc_c3 = st.columns([2, 1, 1])
+                    with _fc_c1:
+                        _fc_per = st.selectbox("Período:", _fc_opcoes_per, key="fc_periodo")
+                    with _fc_c2:
+                        if _fc_per == _FC_TODOS:
+                            _fc_ats_set = set()
+                            for _fpv in dados_sensor_por_atleta_por_periodo.values():
+                                _fc_ats_set.update(_fpv.keys())
+                            _fc_atletas_disp = sorted(_fc_ats_set)
                         else:
-                            _trimp_pts = dados_sensor_por_atleta_por_periodo.get(_av_per, {}).get(_trimp_atl, [])
+                            _fc_atletas_disp = list(dados_sensor_por_atleta_por_periodo.get(_fc_per, {}).keys())
+                        _fc_atl = st.selectbox("Atleta:", _fc_atletas_disp, key="fc_atleta_sel") if _fc_atletas_disp else None
+                    with _fc_c3:
+                        _fc_hrmax = st.number_input(
+                            "FC Máx (bpm):", min_value=150, max_value=220,
+                            value=180, step=1, key="fc_hrmax",
+                            help="Padrão: 180 bpm. Ajuste para o valor individual do atleta."
+                        )
 
-                        _hr_data = [float(p['hr']) for p in _trimp_pts if p.get('hr') and float(p.get('hr', 0)) > 30]
+                    if _fc_atl:
+                        # Coletar pontos de sensor
+                        if _fc_per == _FC_TODOS:
+                            _fc_pts: list = []
+                            for _fpv in dados_sensor_por_atleta_por_periodo.values():
+                                _fc_pts += _fpv.get(_fc_atl, [])
+                        else:
+                            _fc_pts = dados_sensor_por_atleta_por_periodo.get(_fc_per, {}).get(_fc_atl, [])
 
-                        if _hr_data:
-                            _hrmax_v = _trimp_hrmax
-                            # Zonas Edwards: 50-60 / 60-70 / 70-80 / 80-90 / 90-100% HRmax
-                            _zona_bounds = [
-                                (0.50, 0.60, 1, 'Z1 50-60%', '#4CAF50'),
-                                (0.60, 0.70, 2, 'Z2 60-70%', '#8BC34A'),
-                                (0.70, 0.80, 3, 'Z3 70-80%', '#FFEB3B'),
-                                (0.80, 0.90, 4, 'Z4 80-90%', '#FF9800'),
-                                (0.90, 1.00, 5, 'Z5 90-100%', '#F44336'),
+                        _hr_vals = [float(p['hr']) for p in _fc_pts if p.get('hr') and float(p.get('hr', 0)) > 30]
+
+                        if _hr_vals:
+                            # ── Zonas Edwards ──────────────────────────────────────
+                            _fc_zona_bounds = [
+                                (0.50, 0.60, 1, 'Z1  50–60%', '#4CAF50'),
+                                (0.60, 0.70, 2, 'Z2  60–70%', '#8BC34A'),
+                                (0.70, 0.80, 3, 'Z3  70–80%', '#FFEB3B'),
+                                (0.80, 0.90, 4, 'Z4  80–90%', '#FF9800'),
+                                (0.90, 1.00, 5, 'Z5  90–100%', '#F44336'),
                             ]
-                            _zona_counts = {z[3]: 0 for z in _zona_bounds}
-                            _zona_colors = {z[3]: z[4] for z in _zona_bounds}
-                            _trimp_total = 0.0
-                            _dt_s = 0.1  # 10 Hz → 0.1 s por ponto
-                            for _hr_v in _hr_data:
-                                _pct = _hr_v / _hrmax_v
-                                for _lo, _hi, _mult, _lbl, _col in _zona_bounds:
-                                    if _lo <= _pct < _hi or (_hi == 1.00 and _pct >= _lo):
-                                        _zona_counts[_lbl] += 1
-                                        _trimp_total += _dt_s / 60 * _mult  # min × multiplier
+                            _fc_zona_counts = {z[3]: 0 for z in _fc_zona_bounds}
+                            _fc_trimp_total = 0.0
+                            _fc_dt_s = 0.1  # 10 Hz → 0.1 s por ponto
+                            for _hv in _hr_vals:
+                                _hpct = _hv / _fc_hrmax
+                                for _lo, _hi, _mult, _lbl, _col in _fc_zona_bounds:
+                                    if _lo <= _hpct < _hi or (_hi == 1.00 and _hpct >= _lo):
+                                        _fc_zona_counts[_lbl] += 1
+                                        _fc_trimp_total += _fc_dt_s / 60 * _mult
                                         break
 
-                            # KPIs rápidos
-                            _k1, _k2, _k3, _k4 = st.columns(4)
-                            _k1.metric("TRIMP Total", f"{_trimp_total:.1f}", help="Training Impulse (Edwards, 1993): carga interna = tempo em zona × multiplicador (Z1=1, Z2=2, Z3=3, Z4=4, Z5=5)")
-                            _k2.metric("FC Média (bpm)", f"{np.mean(_hr_data):.0f}")
-                            _k3.metric("FC Máx Atingida (bpm)", f"{max(_hr_data):.0f}")
-                            _k4.metric("% FCmax atingida", f"{max(_hr_data)/_hrmax_v*100:.1f}%")
+                            # ── KPIs ─────────────────────────────────────────────
+                            _fk1, _fk2, _fk3, _fk4, _fk5 = st.columns(5)
+                            _fk1.metric("TRIMP Total", f"{_fc_trimp_total:.1f}",
+                                        help="Training Impulse (Edwards, 1993)")
+                            _fk2.metric("FC Média (bpm)", f"{np.mean(_hr_vals):.0f}")
+                            _fk3.metric("FC Máx Atingida", f"{max(_hr_vals):.0f} bpm")
+                            _fk4.metric("% FCmax", f"{max(_hr_vals)/_fc_hrmax*100:.1f}%")
+                            _fc_tempo_acima_80 = sum(
+                                1 for hv in _hr_vals if hv / _fc_hrmax >= 0.80
+                            ) * _fc_dt_s / 60
+                            _fk5.metric("Tempo > 80% FCmax", f"{_fc_tempo_acima_80:.1f} min")
 
-                            _trimp_c1, _trimp_c2 = st.columns(2)
+                            st.markdown("---")
+                            _fc_chart_c1, _fc_chart_c2 = st.columns(2)
 
-                            # Gráfico de pizza — distribuição de zonas
-                            with _trimp_c1:
-                                _tz_lbls = [z[3] for z in _zona_bounds]
-                                _tz_vals = [_zona_counts[l] * _dt_s / 60 for l in _tz_lbls]  # minutos
-                                _tz_cols = [z[4] for z in _zona_bounds]
-                                _fig_tz = go.Figure(go.Pie(
-                                    labels=_tz_lbls, values=_tz_vals,
-                                    marker=dict(colors=_tz_cols),
+                            # ── Pizza — distribuição de zonas ─────────────────────
+                            with _fc_chart_c1:
+                                _fz_lbls = [z[3] for z in _fc_zona_bounds]
+                                _fz_vals = [_fc_zona_counts[l] * _fc_dt_s / 60 for l in _fz_lbls]
+                                _fz_cols = [z[4] for z in _fc_zona_bounds]
+                                _fig_fz = go.Figure(go.Pie(
+                                    labels=_fz_lbls, values=_fz_vals,
+                                    marker=dict(colors=_fz_cols),
                                     textinfo='label+percent',
                                     hovertemplate='%{label}<br>%{value:.1f} min<extra></extra>',
                                     hole=0.38,
                                 ))
-                                _fig_tz.update_layout(
-                                    title=dict(text='Distribuição de Zonas de FC (min)',
+                                _fig_fz.update_layout(
+                                    title=dict(text=f'Distribuição de Zonas de FC — {_fc_atl}',
                                                font=dict(color='white', size=13)),
                                     paper_bgcolor='#0e1117', font=dict(color='white'),
                                     legend=dict(font=dict(color='white', size=9)),
-                                    height=320, margin=dict(t=45, b=10, l=10, r=10),
+                                    height=340, margin=dict(t=50, b=10, l=10, r=10),
                                 )
-                                st.plotly_chart(_fig_tz, use_container_width=True)
+                                st.plotly_chart(_fig_fz, use_container_width=True)
 
-                            # Gráfico de barras empilhadas com TRIMP por zona
-                            with _trimp_c2:
-                                _tz_trimp = [_zona_counts[l] * _dt_s / 60 * _mult
-                                             for l, (_, _, _mult, _, _) in zip(_tz_lbls, _zona_bounds)]
-                                _fig_trimp_bar = go.Figure()
-                                for _lbl, _tc, _col in zip(_tz_lbls, _tz_trimp, _tz_cols):
-                                    _fig_trimp_bar.add_trace(go.Bar(
-                                        x=[_trimp_atl], y=[_tc], name=_lbl,
-                                        marker_color=_col,
-                                        hovertemplate=f'{_lbl}: %{{y:.1f}} TRIMP<extra></extra>',
+                            # ── Barras empilhadas TRIMP por zona ─────────────────
+                            with _fc_chart_c2:
+                                _fz_trimp = [_fc_zona_counts[l] * _fc_dt_s / 60 * _mult
+                                             for l, (_, _, _mult, _, _) in zip(_fz_lbls, _fc_zona_bounds)]
+                                _fig_trimp_fc = go.Figure()
+                                for _fl, _ft, _fc_col in zip(_fz_lbls, _fz_trimp, _fz_cols):
+                                    _fig_trimp_fc.add_trace(go.Bar(
+                                        x=[_fc_atl], y=[_ft], name=_fl,
+                                        marker_color=_fc_col,
+                                        hovertemplate=f'{_fl}: %{{y:.1f}} TRIMP<extra></extra>',
                                     ))
-                                _fig_trimp_bar.update_layout(
-                                    title=dict(text=f'TRIMP por Zona — {_trimp_atl}',
+                                _fig_trimp_fc.update_layout(
+                                    title=dict(text=f'TRIMP por Zona — {_fc_atl}',
                                                font=dict(color='white', size=13)),
                                     barmode='stack',
                                     paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
@@ -8686,53 +8830,101 @@ Escolha um ou mais atletas para análise simultânea.
                                     xaxis=dict(gridcolor='#333'),
                                     yaxis=dict(title='TRIMP (u.a.)', gridcolor='#333'),
                                     legend=dict(font=dict(color='white', size=9)),
-                                    height=320, margin=dict(t=45, b=10, l=10, r=10),
+                                    height=340, margin=dict(t=50, b=10, l=10, r=10),
                                 )
-                                st.plotly_chart(_fig_trimp_bar, use_container_width=True)
+                                st.plotly_chart(_fig_trimp_fc, use_container_width=True)
 
-                            # Curva de FC ao longo do tempo
-                            with st.expander("📈 Curva de FC ao longo do tempo"):
-                                _hr_ts = [float(p.get('ts', 0)) for p in _trimp_pts
+                            # ── Curva de FC ao longo do tempo ────────────────────
+                            with st.expander("📈 Curva de FC ao longo do tempo", expanded=True):
+                                _fc_ts = [float(p.get('ts', 0)) for p in _fc_pts
                                           if p.get('hr') and float(p.get('hr', 0)) > 30]
-                                if _hr_ts:
-                                    _t0_hr = _hr_ts[0]
-                                    _hr_ts_rel = [(t - _t0_hr) / 60 for t in _hr_ts]
-                                    _fig_hr_curve = go.Figure()
-                                    _fig_hr_curve.add_trace(go.Scatter(
-                                        x=_hr_ts_rel, y=_hr_data,
+                                if _fc_ts:
+                                    _fc_t0 = _fc_ts[0]
+                                    _fc_ts_rel = [(t - _fc_t0) / 60 for t in _fc_ts]
+                                    _fig_fc_curve = go.Figure()
+                                    _fig_fc_curve.add_trace(go.Scatter(
+                                        x=_fc_ts_rel, y=_hr_vals,
                                         mode='lines', line=dict(color='#F44336', width=1.5),
                                         name='FC (bpm)',
                                         hovertemplate='%{x:.1f} min — %{y:.0f} bpm<extra></extra>',
                                     ))
                                     # Linhas de zona
-                                    for _lo, _hi, _mult, _lbl, _col in _zona_bounds:
-                                        _fig_hr_curve.add_hline(
-                                            y=_lo * _hrmax_v,
-                                            line=dict(color=_col, width=1, dash='dot'),
+                                    for _lo, _hi, _mult, _lbl, _fcol in _fc_zona_bounds:
+                                        _fig_fc_curve.add_hline(
+                                            y=_lo * _fc_hrmax,
+                                            line=dict(color=_fcol, width=1, dash='dot'),
                                             annotation_text=_lbl,
-                                            annotation_font=dict(color=_col, size=9),
+                                            annotation_font=dict(color=_fcol, size=9),
                                         )
-                                    _fig_hr_curve.update_layout(
+                                    _fig_fc_curve.update_layout(
                                         paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
                                         font=dict(color='white'),
                                         xaxis=dict(title='Tempo (min)', gridcolor='#333'),
                                         yaxis=dict(title='FC (bpm)', gridcolor='#333',
-                                                   range=[30, _hrmax_v * 1.05]),
-                                        height=300, margin=dict(t=15, b=10),
+                                                   range=[40, _fc_hrmax * 1.05]),
+                                        height=320, margin=dict(t=20, b=10),
                                         showlegend=False,
                                     )
-                                    st.plotly_chart(_fig_hr_curve, use_container_width=True)
+                                    st.plotly_chart(_fig_fc_curve, use_container_width=True)
+
+                            # ── Comparativo TRIMP entre todos os atletas ──────────
+                            st.markdown("---")
+                            st.markdown("### 📊 Comparativo de TRIMP — Todos os Atletas")
+                            _fc_comp_rows = []
+                            for _fc_cp_atl in _fc_atletas_disp:
+                                if _fc_per == _FC_TODOS:
+                                    _fc_cp_pts: list = []
+                                    for _fpv in dados_sensor_por_atleta_por_periodo.values():
+                                        _fc_cp_pts += _fpv.get(_fc_cp_atl, [])
+                                else:
+                                    _fc_cp_pts = dados_sensor_por_atleta_por_periodo.get(_fc_per, {}).get(_fc_cp_atl, [])
+                                _fc_cp_hr = [float(p['hr']) for p in _fc_cp_pts if p.get('hr') and float(p.get('hr', 0)) > 30]
+                                if _fc_cp_hr:
+                                    _fc_cp_trimp = 0.0
+                                    _fc_cp_z = {z[3]: 0 for z in _fc_zona_bounds}
+                                    for _hv2 in _fc_cp_hr:
+                                        _hp2 = _hv2 / _fc_hrmax
+                                        for _lo2, _hi2, _m2, _l2, _c2 in _fc_zona_bounds:
+                                            if _lo2 <= _hp2 < _hi2 or (_hi2 == 1.00 and _hp2 >= _lo2):
+                                                _fc_cp_z[_l2] += 1
+                                                _fc_cp_trimp += _fc_dt_s / 60 * _m2
+                                                break
+                                    _fc_comp_rows.append({
+                                        'Atleta': _fc_cp_atl,
+                                        'TRIMP': round(_fc_cp_trimp, 1),
+                                        'FC Média (bpm)': round(float(np.mean(_fc_cp_hr)), 0),
+                                        'FC Máx (bpm)': round(float(max(_fc_cp_hr)), 0),
+                                        **{l: round(_fc_cp_z[l] * _fc_dt_s / 60, 2) for l in _fc_cp_z}
+                                    })
+                            if _fc_comp_rows:
+                                _df_fc_comp = pd.DataFrame(_fc_comp_rows).sort_values('TRIMP', ascending=False)
+                                st.dataframe(_df_fc_comp, use_container_width=True, hide_index=True)
+                                # Gráfico de barras TRIMP comparativo
+                                _fig_fc_comp_bar = px.bar(
+                                    _df_fc_comp, x='Atleta', y='TRIMP',
+                                    color='TRIMP', color_continuous_scale='Reds',
+                                    title='TRIMP por Atleta',
+                                )
+                                _fig_fc_comp_bar.update_layout(
+                                    paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+                                    font=dict(color='white'),
+                                    xaxis=dict(gridcolor='#333'),
+                                    yaxis=dict(title='TRIMP (u.a.)', gridcolor='#333'),
+                                    height=350, margin=dict(t=40, b=10),
+                                    showlegend=False,
+                                )
+                                st.plotly_chart(_fig_fc_comp_bar, use_container_width=True)
                         else:
                             st.info("ℹ️ Nenhum dado de FC disponível para este atleta/período.")
                     else:
-                        st.info("Busque os dados de atletas na sessão antes de usar esta análise.")
+                        st.info("Selecione um atleta para analisar a FC.")
                 else:
-                    st.info("Busque os dados de atletas na sessão antes de usar esta análise.")
+                    st.info("Carregue dados da sessão para visualizar a análise de FC.")
 
             # ══════════════════════════════════════════════════════════════
             # ABA 7: TABELA DESCRITIVA
             # ══════════════════════════════════════════════════════════════
-            with abas[6]:
+            with abas[7]:
                 st.subheader("📋 Tabela Descritiva de Desempenho")
                 st.caption("Coloração por percentil do grupo: 🟢 Top 33% · 🟡 Médio · 🔴 Bottom 33%")
                 st.caption("ℹ️ **RHIE** — Repeated High Intensity Efforts: blocos de ≥2 esforços >19 km/h separados por <21s · **HSR** — High Speed Running: distância acima de 19 km/h · **M/min** — Metros por minuto: intensidade relativa à duração (elite: 110–130 m/min)")
@@ -8919,7 +9111,7 @@ Escolha um ou mais atletas para análise simultânea.
             # ══════════════════════════════════════════════════════════════
             # ABA 8: POR POSIÇÃO
             # ══════════════════════════════════════════════════════════════
-            with abas[7]:
+            with abas[8]:
                 st.subheader("📊 Análise por Posição")
                 st.caption("Média das métricas agrupada por posição tática dos atletas.")
 
@@ -9255,7 +9447,7 @@ Escolha um ou mais atletas para análise simultânea.
             # ══════════════════════════════════════════════════════════════
             # ABA 9: HISTÓRIA DO JOGO
             # ══════════════════════════════════════════════════════════════
-            with abas[8]:
+            with abas[9]:
                 st.subheader("🎬 História do Jogo")
                 st.caption("Animação top-down de todos os atletas movendo-se pelo campo ao longo do tempo.")
 
@@ -9297,7 +9489,8 @@ Escolha um ou mais atletas para análise simultânea.
                         if d.get('xs') and d.get('ts_pos')
                     ]
                     with _col_hsp:
-                        _hist_default = [a for a in (_hist_atletas_xy[:8] or _hist_atletas_disp[:8])]
+                        # Seleciona todos os atletas do período por padrão
+                        _hist_default = _hist_atletas_disp
                         _hist_atletas_sel = st.multiselect(
                             "Atletas:", _hist_atletas_disp,
                             default=_hist_default,
@@ -9323,7 +9516,7 @@ Escolha um ou mais atletas para análise simultânea.
                         with _col_hc2:
                             _hist_trail_s = st.select_slider(
                                 "🌊 Rastro (s):", options=[3, 10, 20, 30],
-                                value=10, key="hist_trail"
+                                value=3, key="hist_trail"
                             )
                         with _col_hc3:
                             _hist_max_frames = st.select_slider(
@@ -9337,8 +9530,8 @@ Escolha um ou mais atletas para análise simultânea.
                         with _col_hw1:
                             _hist_window_sel = st.select_slider(
                                 "🪟 Janela:",
-                                options=["Completo", "10 min", "5 min", "2 min", "1 min"],
-                                value="5 min",
+                                options=["Completo", "10 min", "5 min", "3 min", "2 min", "1 min"],
+                                value="3 min",
                                 key="hist_window",
                                 help=(
                                     "**Completo**: anima o período inteiro com downsample "
@@ -9355,9 +9548,9 @@ Escolha um ou mais atletas para análise simultânea.
                                 )
                                 _win_s_prev_map = {
                                     "10 min": 600, "5 min": 300,
-                                    "2 min": 120,  "1 min": 60,
+                                    "3 min": 180,  "2 min": 120,  "1 min": 60,
                                 }
-                                _win_s_prev = _win_s_prev_map.get(_hist_window_sel, 300)
+                                _win_s_prev = _win_s_prev_map.get(_hist_window_sel, 180)
 
                                 if _prev_dur_s > 0:
                                     _max_start_min = max(
@@ -9492,6 +9685,7 @@ Escolha um ou mais atletas para análise simultânea.
                                 "Completo": None,
                                 "10 min": 600,
                                 "5 min":  300,
+                                "3 min":  180,
                                 "2 min":  120,
                                 "1 min":   60,
                             }
@@ -9868,138 +10062,6 @@ Escolha um ou mais atletas para análise simultânea.
                             )
 
                             # ══════════════════════════════════════════════════════
-                            # CAMPO 3D ISOMÉTRICO — Trajetórias Espaço-Tempo
-                            # ══════════════════════════════════════════════════════
-                            st.markdown("---")
-                            with st.expander(
-                                "🏟️ Campo 3D Isométrico — Trajetórias Espaço-Tempo",
-                                expanded=False,
-                            ):
-                                st.caption(
-                                    "Visualização 3D: **X** = posição longitudinal · "
-                                    "**Y** = tempo (s) · **Z** = posição lateral. "
-                                    "A profundidade temporal revela padrões e ritmo de movimentação. "
-                                    "Cor = velocidade (verde=lento, vermelho=sprint)."
-                                )
-                                _3d_fig = go.Figure()
-                                _3d_ts_all = np.array([
-                                    t for _hc3 in _hist_coords.values()
-                                    for t in _hc3['ts_norm']
-                                ])
-                                _3d_t0 = float(_3d_ts_all.min()) if len(_3d_ts_all) > 0 else 0.0
-
-                                for _i3, _ha3 in enumerate(_hist_atl_list):
-                                    _hc3  = _hist_coords[_ha3]
-                                    _col3 = _HIST_COLORS[_i3 % len(_HIST_COLORS)]
-                                    _xs3  = np.array(_hc3['xs'])
-                                    _ys3  = np.array(_hc3['ys'])
-                                    _ts3  = np.array(_hc3['ts_norm'])
-                                    _vl3  = np.array(_hc3['vel'])
-
-                                    # Downsample para performance (max 2000 pontos)
-                                    _stp3 = max(1, len(_xs3) // 2000)
-                                    _x3d  = _xs3[::_stp3]
-                                    _y3d  = _ts3[::_stp3]   # tempo = eixo profundidade
-                                    _z3d  = _ys3[::_stp3]
-                                    _v3d  = _vl3[::_stp3]
-
-                                    _3d_fig.add_trace(go.Scatter3d(
-                                        x=_x3d.tolist(),
-                                        y=_y3d.tolist(),
-                                        z=_z3d.tolist(),
-                                        mode='lines+markers',
-                                        line=dict(color=_col3, width=3),
-                                        marker=dict(
-                                            size=3,
-                                            color=_v3d.tolist(),
-                                            colorscale=[
-                                                [0.0,  '#4FC3F7'],   # azul – andando
-                                                [0.25, '#66BB6A'],   # verde – trotando
-                                                [0.5,  '#FFA726'],   # laranja – correndo
-                                                [1.0,  '#EF5350'],   # vermelho – sprint
-                                            ],
-                                            cmin=0, cmax=28,
-                                            opacity=0.88,
-                                            showscale=(_i3 == 0),
-                                            colorbar=dict(
-                                                title=dict(
-                                                    text='Vel (km/h)',
-                                                    font=dict(color='white', size=10),
-                                                ),
-                                                tickfont=dict(color='white', size=9),
-                                                len=0.5, x=1.01,
-                                            ),
-                                        ),
-                                        name=_ha3.split(' ')[0],
-                                        hovertemplate=(
-                                            f"<b>{_ha3.split(' ')[0]}</b><br>"
-                                            "X: %{x:.1f} m<br>"
-                                            "Tempo: %{y:.0f} s<br>"
-                                            "Y: %{z:.1f} m<br>"
-                                            "Vel: %{marker.color:.1f} km/h"
-                                            "<extra></extra>"
-                                        ),
-                                    ))
-
-                                _3d_fig.update_layout(
-                                    height=620,
-                                    paper_bgcolor='#0e1117',
-                                    font=dict(color='white'),
-                                    scene=dict(
-                                        xaxis=dict(
-                                            title=dict(
-                                                text='Campo X (m)',
-                                                font=dict(color='white', size=11),
-                                            ),
-                                            range=[0, _hist_fl],
-                                            showgrid=True,
-                                            gridcolor='rgba(255,255,255,0.10)',
-                                            tickfont=dict(color='rgba(200,200,200,0.8)'),
-                                        ),
-                                        yaxis=dict(
-                                            title=dict(
-                                                text='Tempo (s)',
-                                                font=dict(color='white', size=11),
-                                            ),
-                                            showgrid=True,
-                                            gridcolor='rgba(255,255,255,0.10)',
-                                            tickfont=dict(color='rgba(200,200,200,0.8)'),
-                                        ),
-                                        zaxis=dict(
-                                            title=dict(
-                                                text='Campo Y (m)',
-                                                font=dict(color='white', size=11),
-                                            ),
-                                            range=[0, _hist_fw],
-                                            showgrid=True,
-                                            gridcolor='rgba(255,255,255,0.10)',
-                                            tickfont=dict(color='rgba(200,200,200,0.8)'),
-                                        ),
-                                        camera=dict(
-                                            eye=dict(x=1.6, y=-1.8, z=1.1),
-                                            up=dict(x=0, y=0, z=1),
-                                            center=dict(x=0, y=0, z=0),
-                                        ),
-                                        aspectmode='manual',
-                                        aspectratio=dict(x=2.2, y=1.6, z=1.0),
-                                    ),
-                                    legend=dict(
-                                        font=dict(color='white', size=9),
-                                        bgcolor='rgba(30,30,30,0.85)',
-                                        bordercolor='rgba(150,150,150,0.3)',
-                                        borderwidth=1,
-                                    ),
-                                    margin=dict(t=20, b=10, l=10, r=10),
-                                )
-                                st.plotly_chart(_3d_fig, use_container_width=True)
-                                st.caption(
-                                    "💡 **Dica**: arraste para rotacionar · scroll para zoom · "
-                                    "duplo clique para resetar a câmera. "
-                                    "Atletas com trajetórias mais verticais (mais altas no eixo Z) "
-                                    "exploram mais a largura do campo."
-                                )
-
-                            # ══════════════════════════════════════════════════════
                             # ANÁLISES TÁTICAS COLETIVAS
                             # ══════════════════════════════════════════════════════
                             if _n_ha >= 2:
@@ -10032,8 +10094,6 @@ Escolha um ou mais atletas para análise simultânea.
                                     "🏗️ Estrutura",
                                     "🗺️ Espaço",
                                     "⚡ Dinâmica",
-                                    "🔗 Relações",
-                                    "🤖 Automática",
                                 ])
 
                                 # ──────────────────────────────────────────────
@@ -10259,831 +10319,8 @@ Escolha um ou mais atletas para análise simultânea.
                                     st.markdown("---")
 
 
-                                # ──────────────────────────────────────────────
-                                # TAB RELAÇÕES  (16, 17, 18, 19)
-                                # ──────────────────────────────────────────────
-                                with _tac_tabs[3]:
-                                    st.markdown("### 🔗 Relações Entre Jogadores")
-
-                                    # 16 — Rede de Proximidade
-                                    st.markdown("#### 16 — Rede de Proximidade")
-                                    _net_d = st.slider("Distância de ligação (m):", 5, 30, 15, key="tac_netd")
-                                    _net_f = st.select_slider(
-                                        "Frame (tempo):",
-                                        options=list(range(_n_frames)), value=_n_frames//2,
-                                        format_func=lambda x: f"{int(_frame_ts[x]//60):02d}:{int(_frame_ts[x]%60):02d}",
-                                        key="tac_netf"
-                                    )
-                                    _nfx = _sync_xs[:, _net_f]
-                                    _nfy = _sync_ys[:, _net_f]
-                                    _fig_net = desenhar_campo_futebol_bonito(
-                                        field_length=_hist_fl, field_width=_hist_fw,
-                                        title=f"Rede de Proximidade — {int(_frame_ts[_net_f]//60):02d}:{int(_frame_ts[_net_f]%60):02d}"
-                                    )
-                                    _degs = [0]*_n_ha
-                                    for _na in range(_n_ha):
-                                        for _nb in range(_na+1, _n_ha):
-                                            _dab = float(np.sqrt((_nfx[_na]-_nfx[_nb])**2+(_nfy[_na]-_nfy[_nb])**2))
-                                            if _dab <= _net_d:
-                                                _degs[_na] += 1; _degs[_nb] += 1
-                                                _fig_net.add_trace(go.Scatter(
-                                                    x=[float(_nfx[_na]), float(_nfx[_nb])],
-                                                    y=[float(_nfy[_na]), float(_nfy[_nb])],
-                                                    mode='lines',
-                                                    line=dict(color='rgba(255,255,100,0.45)', width=2),
-                                                    showlegend=False, hoverinfo='skip',
-                                                ))
-                                    for _ni in range(_n_ha):
-                                        _nc = _HIST_COLORS[_ni % len(_HIST_COLORS)]
-                                        _fig_net.add_trace(go.Scatter(
-                                            x=[float(_nfx[_ni])], y=[float(_nfy[_ni])],
-                                            mode='markers+text',
-                                            marker=dict(size=12+_degs[_ni]*4, color=_nc,
-                                                        line=dict(color='white', width=1.5)),
-                                            text=[f"{_hist_atl_list[_ni].split(' ')[0]}({_degs[_ni]})"],
-                                            textposition='top center',
-                                            textfont=dict(size=8, color='white'),
-                                            name=_hist_atl_list[_ni], showlegend=False,
-                                        ))
-                                    _fig_net.update_layout(
-                                        height=400, plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                        font=dict(color='white'), margin=dict(t=40, b=10, l=10, r=10),
-                                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-3, _hist_fl+3]),
-                                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-3, _hist_fw+3], scaleanchor='x', scaleratio=1),
-                                    )
-                                    st.plotly_chart(_fig_net, use_container_width=True)
-                                    st.caption("Tamanho proporcional ao grau (nº de conexões).")
-                                    st.dataframe(
-                                        pd.DataFrame({'Atleta': _hist_atl_list, 'Grau': _degs}).sort_values('Grau', ascending=False),
-                                        use_container_width=True, hide_index=True
-                                    )
-
-                                    st.markdown("---")
-
-                                    # 17 — Distância ao Companheiro Mais Próximo
-                                    st.markdown("#### 17 — Distância ao Companheiro Mais Próximo")
-                                    _mdists = np.full((_n_ha, _n_frames), np.inf)
-                                    for _di in range(_n_ha):
-                                        for _dj in range(_n_ha):
-                                            if _di == _dj: continue
-                                            _d = np.sqrt((_sync_xs[_di]-_sync_xs[_dj])**2+(_sync_ys[_di]-_sync_ys[_dj])**2)
-                                            _mdists[_di] = np.minimum(_mdists[_di], _d)
-                                    _mdists = np.where(np.isinf(_mdists), 0, _mdists)
-                                    _fig_md = go.Figure()
-                                    for _di2, _ha2 in enumerate(_hist_atl_list):
-                                        _fig_md.add_trace(go.Scatter(
-                                            x=list(_ft_arr), y=list(_mdists[_di2]),
-                                            name=_ha2.split(' ')[0],
-                                            line=dict(color=_HIST_COLORS[_di2%len(_HIST_COLORS)], width=1.5),
-                                            opacity=0.8,
-                                        ))
-                                    _fig_md.add_trace(go.Scatter(
-                                        x=list(_ft_arr), y=list(_mdists.mean(axis=0)),
-                                        name='Média equipa', line=dict(color='white', width=2.5, dash='dash'),
-                                    ))
-                                    _fig_md.update_layout(
-                                        xaxis_title='Tempo (s)', yaxis_title='Distância (m)',
-                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                        font=dict(color='white'), height=290,
-                                        legend=dict(font=dict(color='white', size=9)),
-                                        margin=dict(t=10, b=30, l=40, r=10),
-                                    )
-                                    st.plotly_chart(_fig_md, use_container_width=True)
-                                    st.dataframe(pd.DataFrame({
-                                        'Atleta': _hist_atl_list,
-                                        'Dist. Média (m)': [round(float(v),1) for v in _mdists.mean(axis=1)],
-                                        'Dist. Máx (m)':   [round(float(v),1) for v in _mdists.max(axis=1)],
-                                        'Dist. Mín (m)':   [round(float(v),1) for v in _mdists.min(axis=1)],
-                                    }).sort_values('Dist. Média (m)', ascending=False),
-                                    use_container_width=True, hide_index=True)
-
-                                    st.markdown("---")
-
-                                    # 19 — Assimetria Lateral
-                                    st.markdown("#### 19 — Assimetria Lateral da Equipa")
-                                    _fig_as = go.Figure()
-                                    _fig_as.add_trace(go.Scatter(
-                                        x=list(_ft_arr), y=list(_lat_asym),
-                                        mode='lines', line=dict(color='#DDA0DD', width=2),
-                                        fill='tozeroy', fillcolor='rgba(221,160,221,0.2)',
-                                    ))
-                                    _fig_as.add_hline(y=0, line_dash='dash', line_color='white', line_width=1)
-                                    _fig_as.update_layout(
-                                        xaxis_title='Tempo (s)',
-                                        yaxis_title='Desvio do eixo central (m)',
-                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                        font=dict(color='white'), height=255,
-                                        margin=dict(t=10, b=30, l=60, r=10), showlegend=False,
-                                    )
-                                    st.plotly_chart(_fig_as, use_container_width=True)
-                                    _asym_avg = float(_lat_asym.mean())
-                                    _a_side   = "Esquerdo 👈" if _asym_avg < -1 else ("Direito 👉" if _asym_avg > 1 else "Equilibrado ⚖️")
-                                    _pL2 = float((_lat_asym < -1).mean())*100
-                                    _pR2 = float((_lat_asym >  1).mean())*100
-                                    _as1, _as2, _as3, _as4 = st.columns(4)
-                                    _as1.metric("Lado dominante", _a_side)
-                                    _as2.metric("Flanco Esquerdo", f"{_pL2:.0f}%")
-                                    _as3.metric("Equilibrado", f"{100-_pL2-_pR2:.0f}%")
-                                    _as4.metric("Flanco Direito", f"{_pR2:.0f}%")
-
-                                # ──────────────────────────────────────────────
-                                # TAB AUTOMÁTICA  (20)
-                                # ──────────────────────────────────────────────
-                                with _tac_tabs[4]:
-                                    st.markdown("### 🤖 Fase de Jogo Automática")
-                                    st.markdown("#### 20 — Clustering Temporal (K-Means)")
-                                    _km_k = st.select_slider("Nº de fases (k):", options=[2,3,4,5,6], value=4, key="tac_kmk")
-
-                                    def _mm(arr):
-                                        _r = arr.max() - arr.min()
-                                        return (arr - arr.min()) / _r if _r > 0 else arr * 0.0
-
-                                    _km_X = np.column_stack([_mm(_ctr_x), _mm(_ctr_y), _mm(_compact), _mm(_team_spd)])
-                                    _rng_km = np.random.default_rng(42)
-                                    _km_cents = _km_X[_rng_km.choice(_n_frames, size=_km_k, replace=False)].copy()
-                                    _km_lbl   = np.zeros(_n_frames, dtype=int)
-                                    for _ in range(60):
-                                        _km_d   = np.array([np.linalg.norm(_km_X - _km_cents[k], axis=1) for k in range(_km_k)])
-                                        _km_new = _km_d.argmin(axis=0)
-                                        if np.all(_km_new == _km_lbl): break
-                                        _km_lbl = _km_new
-                                        for k in range(_km_k):
-                                            _mk = _km_lbl == k
-                                            if _mk.any(): _km_cents[k] = _km_X[_mk].mean(axis=0)
-
-                                    _km_cx_avg  = [float(_ctr_x[_km_lbl==k].mean()) if (_km_lbl==k).any() else 0.0 for k in range(_km_k)]
-                                    _km_ord     = np.argsort(_km_cx_avg)
-                                    _km_ph_map  = {}
-                                    if _km_k >= 2:
-                                        _km_ph_map[int(_km_ord[0])]  = "🔴 Bloco Baixo"
-                                        _km_ph_map[int(_km_ord[-1])] = "🟢 Pressão Alta"
-                                    if _km_k >= 3:
-                                        _km_ph_map[int(_km_ord[_km_k//2])] = "🟡 Fase Média"
-                                    _km_colors  = ['#FF6B6B','#FFEAA7','#4ECDC4','#96CEB4','#DDA0DD','#45B7D1']
-                                    _km_lbl_map = {k: _km_ph_map.get(k, f"🔵 Fase {k+1}") for k in range(_km_k)}
-
-                                    _fig_km = go.Figure()
-                                    for k in range(_km_k):
-                                        _mk = _km_lbl == k
-                                        if not _mk.any(): continue
-                                        _fig_km.add_trace(go.Scatter(
-                                            x=list(_ft_arr[_mk]), y=[_km_cx_avg[k]]*int(_mk.sum()),
-                                            mode='markers',
-                                            marker=dict(color=_km_colors[k%len(_km_colors)], size=7, symbol='square'),
-                                            name=_km_lbl_map[k],
-                                        ))
-                                    _fig_km.update_layout(
-                                        title='Fases de Jogo ao Longo do Tempo',
-                                        xaxis_title='Tempo (s)', yaxis_title='Centróide X (m)',
-                                        plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                        font=dict(color='white'), height=270,
-                                        legend=dict(font=dict(color='white')),
-                                        margin=dict(t=40, b=30, l=50, r=10),
-                                    )
-                                    st.plotly_chart(_fig_km, use_container_width=True)
-
-                                    _km_counts = [int((_km_lbl==k).sum()) for k in range(_km_k)]
-                                    _kc1, _kc2 = st.columns([1,2])
-                                    with _kc1:
-                                        _fig_pie = go.Figure(go.Pie(
-                                            labels=[_km_lbl_map[k] for k in range(_km_k)],
-                                            values=_km_counts,
-                                            marker=dict(colors=[_km_colors[k%len(_km_colors)] for k in range(_km_k)]),
-                                            textfont=dict(color='white'),
-                                        ))
-                                        _fig_pie.update_layout(
-                                            plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                            font=dict(color='white'), height=260,
-                                            margin=dict(t=10, b=10, l=10, r=10), showlegend=False,
-                                        )
-                                        st.plotly_chart(_fig_pie, use_container_width=True)
-                                    with _kc2:
-                                        _km_rows = []
-                                        for k in range(_km_k):
-                                            _mk = _km_lbl == k
-                                            if not _mk.any(): continue
-                                            _km_rows.append({
-                                                'Fase': _km_lbl_map[k],
-                                                '% Tempo': f"{_mk.sum()/_n_frames*100:.0f}%",
-                                                'Duração (s)': f"{int(_mk.sum()*_dt_frame)}",
-                                                'Centróide X': f"{float(_ctr_x[_mk].mean()):.1f} m",
-                                                'Compacidade': f"{float(_compact[_mk].mean()):.1f} m",
-                                                'Vel. Equipa': f"{float(_team_spd[_mk].mean()):.1f} km/h",
-                                            })
-                                        if _km_rows:
-                                            st.dataframe(pd.DataFrame(_km_rows), use_container_width=True, hide_index=True)
-                                    st.caption("K-Means sobre: centróide X/Y, compacidade e velocidade média da equipa.")
-
-                            # ══════════════════════════════════════════════════════
-                            # COMPARATIVO ENTRE PERÍODOS
-                            # ══════════════════════════════════════════════════════
-                            st.markdown("---")
-                            with st.expander("📊 Comparativo entre Períodos", expanded=False):
-                                st.caption("Métricas de velocidade agregadas por período — todos os atletas com dados GPS.")
-                                _comp_rows = []
-                                for _cp in list(dados_posicao_por_periodo.keys()):
-                                    _cp_atl = [
-                                        a for a, d in dados_posicao_por_periodo[_cp].items()
-                                        if d.get('vels_gps') or d.get('vel')
-                                    ]
-                                    _cp_vels = []
-                                    for _ca in _cp_atl:
-                                        _vg = dados_posicao_por_periodo[_cp][_ca].get(
-                                            'vels_gps',
-                                            dados_posicao_por_periodo[_cp][_ca].get('vel', [])
-                                        )
-                                        if _vg:
-                                            _cp_vels.extend(_vg)
-                                    if not _cp_vels:
-                                        continue
-                                    _cv = np.array(_cp_vels, dtype=float)
-                                    _dur_cp = st.session_state.get(f'_hist_dur_{_cp}', 0.0)
-                                    _comp_rows.append({
-                                        'Período': _cp,
-                                        'Atletas': len(_cp_atl),
-                                        'Duração (min)': (
-                                            f"{int(_dur_cp//60):02d}:{int(_dur_cp%60):02d}"
-                                            if _dur_cp > 0 else '—'
-                                        ),
-                                        'Vel. Média (km/h)': round(float(np.mean(_cv)), 1),
-                                        'Vel. Máx (km/h)': round(float(np.max(_cv)), 1),
-                                        'Corrida >14 km/h (%)': round(float((_cv >= 14).mean() * 100), 1),
-                                        'Sprint >21 km/h (%)': round(float((_cv >= 21).mean() * 100), 1),
-                                    })
-                                if _comp_rows:
-                                    _df_comp = pd.DataFrame(_comp_rows)
-                                    # Gráfico de barras agrupadas
-                                    _comp_metrics = [
-                                        'Vel. Média (km/h)',
-                                        'Corrida >14 km/h (%)',
-                                        'Sprint >21 km/h (%)',
-                                    ]
-                                    _comp_colors = ['#4FC3F7', '#81C784', '#FF8A65']
-                                    _fig_comp = go.Figure()
-                                    for _cm, _cc in zip(_comp_metrics, _comp_colors):
-                                        _fig_comp.add_trace(go.Bar(
-                                            name=_cm,
-                                            x=_df_comp['Período'].tolist(),
-                                            y=_df_comp[_cm].tolist(),
-                                            marker_color=_cc,
-                                        ))
-                                    _fig_comp.update_layout(
-                                        barmode='group',
-                                        plot_bgcolor='#0e1117',
-                                        paper_bgcolor='#0e1117',
-                                        font=dict(color='white'),
-                                        height=320,
-                                        legend=dict(font=dict(color='white')),
-                                        xaxis=dict(tickfont=dict(color='white')),
-                                        yaxis=dict(tickfont=dict(color='white')),
-                                        margin=dict(t=20, b=40, l=50, r=10),
-                                    )
-                                    st.plotly_chart(_fig_comp, use_container_width=True)
-
-                                    # Tabela com velocidade máxima também
-                                    _show_cols = [
-                                        'Período', 'Atletas', 'Duração (min)',
-                                        'Vel. Média (km/h)', 'Vel. Máx (km/h)',
-                                        'Corrida >14 km/h (%)', 'Sprint >21 km/h (%)',
-                                    ]
-                                    st.dataframe(
-                                        _df_comp[_show_cols],
-                                        use_container_width=True,
-                                        hide_index=True,
-                                    )
-                                else:
-                                    st.info("Nenhum dado de velocidade disponível para comparação entre períodos.")
-
-            # ==================== ABA 10: EXPLORAÇÃO LIVRE ====================
-            with abas[9]:
-                st.subheader("🔍 Exploração Livre — Modo Sandbox")
-                st.caption(
-                    "Monte seu próprio gráfico: escolha métricas para os eixos, tamanho e cor. "
-                    "Ideal para descobrir padrões e correlações inesperadas."
-                )
-
-                # Construir DataFrame unificado com todos os atletas e períodos
-                _el_rows = []
-                for _el_per, _el_res in resultados_por_periodo.items():
-                    for _el_r in _el_res:
-                        _el_row = dict(_el_r)
-                        _el_row['Período'] = _el_per
-                        _el_rows.append(_el_row)
-
-                if _el_rows:
-                    _df_el = pd.DataFrame(_el_rows)
-
-                    # Colunas numéricas disponíveis
-                    _el_num_cols = [
-                        c for c in _df_el.columns
-                        if c not in ('Atleta', 'Período', 'Posição', 'Equipe')
-                        and pd.api.types.is_numeric_dtype(_df_el[c])
-                    ]
-                    _el_cat_cols = ['Atleta', 'Período', 'Posição', 'Equipe']
-                    _el_cat_cols = [c for c in _el_cat_cols if c in _df_el.columns]
-
-                    if len(_el_num_cols) >= 2:
-                        _el_c1, _el_c2, _el_c3 = st.columns(3)
-                        with _el_c1:
-                            _el_x = st.selectbox(
-                                "Eixo X:", _el_num_cols,
-                                index=0, key="el_x"
-                            )
-                        with _el_c2:
-                            _idx_y = min(1, len(_el_num_cols) - 1)
-                            _el_y = st.selectbox(
-                                "Eixo Y:", _el_num_cols,
-                                index=_idx_y, key="el_y"
-                            )
-                        with _el_c3:
-                            _el_color = st.selectbox(
-                                "Cor por:", _el_cat_cols,
-                                index=0, key="el_color"
-                            )
-
-                        _el_c4, _el_c5 = st.columns(2)
-                        with _el_c4:
-                            _el_size = st.selectbox(
-                                "Tamanho por:", ["(uniforme)"] + _el_num_cols,
-                                index=0, key="el_size"
-                            )
-                        with _el_c5:
-                            _el_trend = st.checkbox(
-                                "Mostrar linha de tendência", value=True, key="el_trend"
-                            )
-
-                        # Construir scatter
-                        _df_el_clean = _df_el.dropna(subset=[_el_x, _el_y])
-                        _el_fig = go.Figure()
-
-                        _el_color_vals = (
-                            _df_el_clean[_el_color].tolist()
-                            if _el_color in _df_el_clean.columns else ['Todos']
-                        )
-                        _el_unique_cats = list(dict.fromkeys(_el_color_vals))
-                        _EL_PAL = [
-                            '#FF6B6B','#4ECDC4','#45B7D1','#96CEB4',
-                            '#FFEAA7','#DDA0DD','#98FB98','#FFB347',
-                        ]
-
-                        for _ei, _ec in enumerate(_el_unique_cats):
-                            _mask = [v == _ec for v in _el_color_vals]
-                            _sub  = _df_el_clean[[v == _ec for v in _el_color_vals]]
-
-                            if _el_size != "(uniforme)" and _el_size in _sub.columns:
-                                _sz_raw = _sub[_el_size].fillna(0).values.astype(float)
-                                _sz_min, _sz_max = _sz_raw.min(), _sz_raw.max()
-                                _sz_rng = _sz_max - _sz_min if _sz_max > _sz_min else 1
-                                _sizes = ((_sz_raw - _sz_min) / _sz_rng * 24 + 8).tolist()
-                            else:
-                                _sizes = 14
-
-                            _el_fig.add_trace(go.Scatter(
-                                x=_sub[_el_x].tolist(),
-                                y=_sub[_el_y].tolist(),
-                                mode='markers',
-                                marker=dict(
-                                    color=_EL_PAL[_ei % len(_EL_PAL)],
-                                    size=_sizes,
-                                    opacity=0.82,
-                                    line=dict(color='rgba(255,255,255,0.25)', width=0.8),
-                                ),
-                                name=str(_ec),
-                                text=(
-                                    _sub['Atleta'].tolist()
-                                    if 'Atleta' in _sub.columns else []
-                                ),
-                                hovertemplate=(
-                                    "<b>%{text}</b><br>"
-                                    f"{_el_x}: %{{x:.2f}}<br>"
-                                    f"{_el_y}: %{{y:.2f}}<extra></extra>"
-                                ),
-                            ))
-
-                        # Linha de tendência global (OLS simples)
-                        if _el_trend and len(_df_el_clean) >= 3:
-                            _tx = _df_el_clean[_el_x].values.astype(float)
-                            _ty = _df_el_clean[_el_y].values.astype(float)
-                            _tm = np.isfinite(_tx) & np.isfinite(_ty)
-                            if _tm.sum() >= 2:
-                                _tc = np.polyfit(_tx[_tm], _ty[_tm], 1)
-                                _tx_line = np.linspace(_tx[_tm].min(), _tx[_tm].max(), 80)
-                                _ty_line = np.polyval(_tc, _tx_line)
-                                _el_fig.add_trace(go.Scatter(
-                                    x=_tx_line.tolist(), y=_ty_line.tolist(),
-                                    mode='lines',
-                                    line=dict(color='rgba(255,255,255,0.55)', width=1.8, dash='dash'),
-                                    name='Tendência', showlegend=False,
-                                ))
-                                # R²
-                                _ty_hat = np.polyval(_tc, _tx[_tm])
-                                _ss_res = float(np.sum((_ty[_tm] - _ty_hat)**2))
-                                _ss_tot = float(np.sum((_ty[_tm] - _ty[_tm].mean())**2))
-                                _r2     = 1 - _ss_res / _ss_tot if _ss_tot > 0 else 0
-                                _el_fig.add_annotation(
-                                    x=0.98, y=0.04,
-                                    xref='paper', yref='paper',
-                                    text=f"R² = {_r2:.3f}",
-                                    showarrow=False,
-                                    font=dict(size=13, color='rgba(255,255,255,0.7)'),
-                                    bgcolor='rgba(0,0,0,0.4)',
-                                    borderpad=4,
-                                )
-
-                        _el_fig.update_layout(
-                            xaxis_title=_el_x,
-                            yaxis_title=_el_y,
-                            plot_bgcolor='#0e1117',
-                            paper_bgcolor='#0e1117',
-                            font=dict(color='white'),
-                            height=500,
-                            legend=dict(
-                                font=dict(color='white', size=10),
-                                bgcolor='rgba(30,30,30,0.85)',
-                                bordercolor='rgba(150,150,150,0.4)',
-                                borderwidth=1,
-                            ),
-                            xaxis=dict(
-                                showgrid=True,
-                                gridcolor='rgba(255,255,255,0.07)',
-                                tickfont=dict(color='white'),
-                            ),
-                            yaxis=dict(
-                                showgrid=True,
-                                gridcolor='rgba(255,255,255,0.07)',
-                                tickfont=dict(color='white'),
-                            ),
-                            margin=dict(t=20, b=50, l=60, r=20),
-                        )
-                        st.plotly_chart(_el_fig, use_container_width=True)
-
-                        # Tabela de correlação rápida
-                        with st.expander("📐 Matriz de Correlação", expanded=False):
-                            _corr_cols = _el_num_cols[:10]  # limitar a 10 métricas
-                            _df_corr = _df_el[_corr_cols].dropna(axis=1, how='all').corr()
-                            _fig_corr = go.Figure(go.Heatmap(
-                                z=_df_corr.values.tolist(),
-                                x=_df_corr.columns.tolist(),
-                                y=_df_corr.columns.tolist(),
-                                colorscale='RdBu',
-                                zmid=0,
-                                text=[[f"{v:.2f}" for v in row] for row in _df_corr.values],
-                                texttemplate="%{text}",
-                                textfont=dict(size=9),
-                                colorbar=dict(tickfont=dict(color='white')),
-                            ))
-                            _fig_corr.update_layout(
-                                plot_bgcolor='#0e1117',
-                                paper_bgcolor='#0e1117',
-                                font=dict(color='white'),
-                                height=420,
-                                xaxis=dict(tickfont=dict(color='white', size=9)),
-                                yaxis=dict(tickfont=dict(color='white', size=9)),
-                                margin=dict(t=10, b=80, l=80, r=10),
-                            )
-                            st.plotly_chart(_fig_corr, use_container_width=True)
-                    else:
-                        st.info("São necessárias pelo menos 2 métricas numéricas para a exploração livre.")
-
-                    # ── Item 15: Limiares Individuais ─────────────────────────
-                    st.markdown("---")
-                    with st.expander("⚡ Limiares Individuais por Atleta (Item 15)", expanded=False):
-                        st.caption(
-                            "Limiares de velocidade e aceleração específicos de cada atleta, "
-                            "conforme cadastro na plataforma Catapult. Quando disponíveis, "
-                            "estes valores substituem os padrões genéricos na análise."
-                        )
-                        _atletas_thr = list(st.session_state.get('atletas_filtrados', pd.DataFrame()).itertuples(index=False)) if 'atletas_filtrados' in st.session_state else []
-                        _thr_rows = []
-                        for _ar in _atletas_thr:
-                            _aid = getattr(_ar, 'id', None)
-                            _anom = getattr(_ar, 'nome', '?')
-                            if _aid is not None:
-                                _thr_d = st.session_state.get(f"thresholds_{_aid}", {})
-                                if _thr_d:
-                                    _row = {'Atleta': _anom}
-                                    _row.update(_thr_d)
-                                    _thr_rows.append(_row)
-                        if _thr_rows:
-                            _df_thr = pd.DataFrame(_thr_rows)
-                            st.dataframe(_df_thr, use_container_width=True, hide_index=True)
-
-                            # Visualização: scatter de vel máx vs. limiar de sprint
-                            _possible_sprint_keys = ['sprint_threshold', 'sprint', 'high_speed_threshold',
-                                                      'hsr_threshold', 'velocity_zone_5', 'zone_5']
-                            _sprint_key = next((k for k in _possible_sprint_keys if k in _df_thr.columns), None)
-                            if _sprint_key:
-                                _fig_thr = go.Figure()
-                                _vmx_map = {}
-                                for _rp in resultados_por_periodo.values():
-                                    for _rr in _rp:
-                                        _vmx_map[_rr.get('Atleta','')] = _rr.get('Velocidade Máx (km/h)', 0)
-                                _df_thr['Vmax Atingida (km/h)'] = _df_thr['Atleta'].map(_vmx_map)
-                                _df_thr_plot = _df_thr.dropna(subset=[_sprint_key, 'Vmax Atingida (km/h)'])
-                                if not _df_thr_plot.empty:
-                                    _fig_thr.add_trace(go.Scatter(
-                                        x=_df_thr_plot[_sprint_key],
-                                        y=_df_thr_plot['Vmax Atingida (km/h)'],
-                                        mode='markers+text',
-                                        text=_df_thr_plot['Atleta'],
-                                        textposition='top center',
-                                        marker=dict(size=12, color='#FF9800'),
-                                        hovertemplate='%{text}<br>Limiar Sprint: %{x:.1f} km/h<br>Vmax: %{y:.1f} km/h<extra></extra>',
-                                    ))
-                                    # Diagonal = atingiu limiar
-                                    _all_v = pd.concat([_df_thr_plot[_sprint_key], _df_thr_plot['Vmax Atingida (km/h)']]).dropna()
-                                    _vr = [_all_v.min() * 0.9, _all_v.max() * 1.1]
-                                    _fig_thr.add_trace(go.Scatter(
-                                        x=_vr, y=_vr, mode='lines',
-                                        line=dict(color='rgba(255,255,255,0.3)', dash='dot'),
-                                        name='Vmax = Limiar', showlegend=True,
-                                    ))
-                                    _fig_thr.update_layout(
-                                        title=dict(text='Vmax Atingida vs. Limiar de Sprint Individual',
-                                                   font=dict(color='white', size=13)),
-                                        paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
-                                        font=dict(color='white'),
-                                        xaxis=dict(title=f'Limiar de Sprint ({_sprint_key}) km/h', gridcolor='#333'),
-                                        yaxis=dict(title='Vmax Atingida (km/h)', gridcolor='#333'),
-                                        height=360, margin=dict(t=45, b=10, l=10, r=10),
-                                        legend=dict(font=dict(color='white')),
-                                    )
-                                    st.plotly_chart(_fig_thr, use_container_width=True)
-                        else:
-                            st.info(
-                                "Nenhum limiar individual carregado. "
-                                "Verifique se os atletas têm limiares cadastrados na plataforma Catapult "
-                                "ou se o endpoint /athletes/{id}/thresholds está habilitado na sua licença."
-                            )
-                else:
-                    st.info("Carregue dados para usar o modo de exploração livre.")
-
-            # ==================== ABA 11: PERGUNTE AO APP (NLP + Claude AI) ====================
+            # ==================== ABA 10: MONITORAMENTO AO VIVO ====================
             with abas[10]:
-                st.subheader("💬 Pergunte ao App")
-                st.caption(
-                    "Faça perguntas em linguagem natural sobre os dados carregados. "
-                    "Use o Claude AI para respostas mais ricas, ou o modo offline para "
-                    "análises locais baseadas em padrões."
-                )
-
-                # ── Inicializar session state ──────────────────────────────
-                if 'nlp_corrections' not in st.session_state:
-                    st.session_state['nlp_corrections'] = []
-                if 'nlp_history' not in st.session_state:
-                    st.session_state['nlp_history'] = []
-
-                # ── Configuração da API ────────────────────────────────────
-                with st.expander("⚙️ Configurar Claude AI (opcional)", expanded=False):
-                    _nlp_key = st.text_input(
-                        "Anthropic API Key (claude-3-haiku-20240307):",
-                        type="password",
-                        key="nlp_api_key",
-                        help="Deixe em branco para usar o modo offline (padrões locais).",
-                    )
-                    _nlp_model = st.selectbox(
-                        "Modelo:",
-                        ["claude-3-haiku-20240307", "claude-3-5-sonnet-20241022"],
-                        key="nlp_model",
-                    )
-
-                # ── Construir contexto dos dados ────────────────────────────
-                _nlp_ctx_lines = []
-                for _np, _nr in resultados_por_periodo.items():
-                    if _np == _CHAVE_COMBINADO:
-                        continue
-                    _nlp_ctx_lines.append(f"Período: {_np}")
-                    for _nr_row in _nr[:8]:  # max 8 atletas por período no contexto
-                        _nlp_ctx_lines.append(
-                            f"  - {_nr_row.get('Atleta','?')}: "
-                            f"dist={_nr_row.get('Distância (m)',0):.0f}m, "
-                            f"vmax={_nr_row.get('Velocidade Máx (km/h)',0):.1f}km/h, "
-                            f"PL={_nr_row.get('PlayerLoad',0):.0f}, "
-                            f"sprints={_nr_row.get('Sprints (>24 km/h)',0)}"
-                        )
-                _nlp_data_ctx = "\n".join(_nlp_ctx_lines) if _nlp_ctx_lines else "Sem dados numéricos disponíveis."
-
-                # ── Caixinha de perguntas ──────────────────────────────────
-                _nlp_q = st.text_input(
-                    "🔍 Sua pergunta:",
-                    placeholder="Ex: Quem teve a maior velocidade? Qual período foi mais intenso?",
-                    key="nlp_question_input",
-                )
-
-                _nlp_c1, _nlp_c2 = st.columns([3, 1])
-                with _nlp_c1:
-                    _nlp_send = st.button("💬 Perguntar", type="primary", key="nlp_send")
-                with _nlp_c2:
-                    _nlp_clear = st.button("🗑️ Limpar histórico", key="nlp_clear")
-
-                if _nlp_clear:
-                    st.session_state['nlp_history'] = []
-                    st.rerun()
-
-                # ── Modo offline: padrões locais ────────────────────────────
-                def _nlp_offline_answer(question, data_ctx):
-                    """Resposta baseada em padrões regex sem API externa."""
-                    q = question.lower()
-                    lines = []
-
-                    # Coletar métricas
-                    _all_dist, _all_vmax, _all_pl = {}, {}, {}
-                    for _pp, _rr in resultados_por_periodo.items():
-                        if _pp == _CHAVE_COMBINADO:
-                            continue
-                        for _rw in _rr:
-                            _an = _rw.get('Atleta', '?')
-                            _all_dist[_an] = max(
-                                _all_dist.get(_an, 0), _rw.get('Distância (m)', 0)
-                            )
-                            _all_vmax[_an] = max(
-                                _all_vmax.get(_an, 0), _rw.get('Velocidade Máx (km/h)', 0)
-                            )
-                            _all_pl[_an] = max(
-                                _all_pl.get(_an, 0), _rw.get('PlayerLoad', 0) or 0
-                            )
-
-                    if any(w in q for w in ['velocidade', 'vel', 'rápido', 'rapido', 'veloz']):
-                        if _all_vmax:
-                            _best = max(_all_vmax, key=_all_vmax.get)
-                            lines.append(
-                                f"🚀 **{_best}** atingiu a maior velocidade: "
-                                f"**{_all_vmax[_best]:.1f} km/h**."
-                            )
-                            _top3 = sorted(_all_vmax.items(), key=lambda x: x[1], reverse=True)[:3]
-                            lines.append("Top 3: " + " | ".join(f"{n}: {v:.1f}" for n, v in _top3))
-
-                    elif any(w in q for w in ['distância', 'distancia', 'percorr', 'km']):
-                        if _all_dist:
-                            _best = max(_all_dist, key=_all_dist.get)
-                            lines.append(
-                                f"🏃 **{_best}** percorreu a maior distância: "
-                                f"**{_all_dist[_best]:,.0f} m**."
-                            )
-                            _top3 = sorted(_all_dist.items(), key=lambda x: x[1], reverse=True)[:3]
-                            lines.append("Top 3: " + " | ".join(f"{n}: {v:,.0f}m" for n, v in _top3))
-
-                    elif any(w in q for w in ['playerload', 'carga', 'load', 'intensidade']):
-                        if _all_pl:
-                            _best = max(_all_pl, key=_all_pl.get)
-                            lines.append(
-                                f"⚡ **{_best}** tem o maior PlayerLoad: "
-                                f"**{_all_pl[_best]:.0f}** UA."
-                            )
-
-                    elif any(w in q for w in ['período', 'periodo', 'primeiro tempo', 'segundo tempo']):
-                        _per_summ = []
-                        for _pp, _rr in resultados_por_periodo.items():
-                            if _pp == _CHAVE_COMBINADO:
-                                continue
-                            _d_avg = np.mean([r.get('Distância (m)', 0) for r in _rr]) if _rr else 0
-                            _v_avg = np.mean([r.get('Velocidade Média (km/h)', 0) for r in _rr]) if _rr else 0
-                            _per_summ.append(
-                                f"**{_pp}**: dist. média {_d_avg:,.0f}m | vel. média {_v_avg:.1f} km/h"
-                            )
-                        if _per_summ:
-                            lines.append("📊 Resumo por período:")
-                            lines.extend(_per_summ)
-
-                    elif any(w in q for w in ['sprint', 'sprints']):
-                        _spr = {}
-                        for _pp, _rr in resultados_por_periodo.items():
-                            for _rw in _rr:
-                                _an = _rw.get('Atleta', '?')
-                                _spr[_an] = _spr.get(_an, 0) + (_rw.get('Sprints (>24 km/h)', 0) or 0)
-                        if _spr:
-                            _best = max(_spr, key=_spr.get)
-                            lines.append(
-                                f"💨 **{_best}** liderou em sprints: **{_spr[_best]}** sprints >24 km/h."
-                            )
-
-                    if not lines:
-                        lines.append(
-                            "🤔 Não encontrei um padrão específico para essa pergunta no modo offline. "
-                            "Configure a Claude AI API Key para respostas mais avançadas, ou tente perguntar "
-                            "sobre velocidade, distância, PlayerLoad, sprints ou períodos."
-                        )
-
-                    return "\n\n".join(lines)
-
-                # ── Processar pergunta ──────────────────────────────────────
-                if _nlp_send and _nlp_q.strip():
-                    _nlp_api_key_val = st.session_state.get('nlp_api_key', '').strip()
-
-                    if _nlp_api_key_val:
-                        # ── Modo Claude AI ─────────────────────────────────
-                        try:
-                            import anthropic as _anth
-                            _anth_client = _anth.Anthropic(api_key=_nlp_api_key_val)
-
-                            # Few-shot corrections como contexto
-                            _few_shot_txt = ""
-                            if st.session_state['nlp_corrections']:
-                                _few_shot_txt = "\n\nExemplos de respostas aprovadas pelo usuário:\n"
-                                for _fc in st.session_state['nlp_corrections'][-5:]:
-                                    _few_shot_txt += (
-                                        f"P: {_fc['q']}\nR: {_fc['a']}\n---\n"
-                                    )
-
-                            _sys_prompt = (
-                                "Você é um assistente especialista em ciência do esporte e análise de desempenho "
-                                "de futebol com dados GPS da Catapult. Responda de forma objetiva, técnica e em "
-                                "português do Brasil. Use os dados fornecidos para embasar suas respostas. "
-                                "Formate sua resposta em Markdown com negrito para destaques."
-                                + _few_shot_txt
-                            )
-                            _user_msg = (
-                                f"Dados do jogo/treino:\n{_nlp_data_ctx}\n\n"
-                                f"Pergunta: {_nlp_q}"
-                            )
-
-                            _anth_resp = _anth_client.messages.create(
-                                model=st.session_state.get('nlp_model', 'claude-3-haiku-20240307'),
-                                max_tokens=800,
-                                system=_sys_prompt,
-                                messages=[{"role": "user", "content": _user_msg}],
-                            )
-                            _nlp_answer = _anth_resp.content[0].text
-
-                        except ImportError:
-                            _nlp_answer = (
-                                "⚠️ Biblioteca `anthropic` não instalada. "
-                                "Execute `pip install anthropic` e reinicie o app. "
-                                "Usando modo offline:\n\n"
-                                + _nlp_offline_answer(_nlp_q, _nlp_data_ctx)
-                            )
-                        except Exception as _anth_err:
-                            _nlp_answer = (
-                                f"⚠️ Erro na API Claude: {_anth_err}\n\n"
-                                "Resposta offline:\n\n"
-                                + _nlp_offline_answer(_nlp_q, _nlp_data_ctx)
-                            )
-                    else:
-                        # ── Modo offline ───────────────────────────────────
-                        _nlp_answer = _nlp_offline_answer(_nlp_q, _nlp_data_ctx)
-
-                    # Adicionar ao histórico
-                    st.session_state['nlp_history'].append({
-                        'q': _nlp_q,
-                        'a': _nlp_answer,
-                        'mode': 'claude' if _nlp_api_key_val else 'offline',
-                    })
-
-                # ── Exibir histórico ───────────────────────────────────────
-                if st.session_state['nlp_history']:
-                    for _hi, _hitem in enumerate(
-                        reversed(st.session_state['nlp_history'])
-                    ):
-                        _is_claude = _hitem.get('mode') == 'claude'
-                        st.markdown(
-                            f"<div style='background:#1a2332;border-left:3px solid "
-                            f"{'#4FC3F7' if _is_claude else '#81C784'}"
-                            f";border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
-                            f"<span style='color:#94a3b8;font-size:12px'>"
-                            f"{'🤖 Claude AI' if _is_claude else '🔍 Offline'}</span><br>"
-                            f"<b style='color:white'>❓ {_hitem['q']}</b>"
-                            f"</div>",
-                            unsafe_allow_html=True,
-                        )
-                        st.markdown(_hitem['a'])
-
-                        # Opção de aprovação para few-shot learning
-                        _col_fb1, _col_fb2, _ = st.columns([1, 1, 6])
-                        with _col_fb1:
-                            if st.button(
-                                "👍 Útil", key=f"nlp_approve_{_hi}",
-                                help="Salvar como exemplo para melhorar futuras respostas"
-                            ):
-                                st.session_state['nlp_corrections'].append({
-                                    'q': _hitem['q'], 'a': _hitem['a']
-                                })
-                                st.success("✅ Salvo como exemplo de treinamento!")
-                        with _col_fb2:
-                            if st.button("🗑️", key=f"nlp_del_{_hi}", help="Remover do histórico"):
-                                _idx_del = len(st.session_state['nlp_history']) - 1 - _hi
-                                st.session_state['nlp_history'].pop(_idx_del)
-                                st.rerun()
-                        st.markdown("---")
-
-                    # Mostrar quantos exemplos de treinamento foram salvos
-                    _n_few = len(st.session_state['nlp_corrections'])
-                    if _n_few > 0:
-                        st.caption(
-                            f"🧠 {_n_few} exemplo(s) de treinamento salvo(s) — "
-                            f"o Claude usará como referência nas próximas perguntas."
-                        )
-                else:
-                    st.info(
-                        "💡 **Exemplos de perguntas:**\n\n"
-                        "- Quem foi o atleta mais rápido?\n"
-                        "- Qual período teve maior intensidade?\n"
-                        "- Quem percorreu mais distância?\n"
-                        "- Compare a velocidade entre os períodos\n"
-                        "- Quantos sprints foram registrados no total?"
-                    )
-
-            # ==================== ABA 12: MONITORAMENTO AO VIVO ====================
-            with abas[11]:
                 st.subheader("📡 Monitoramento em Tempo Real")
                 st.caption(
                     "Conecta ao endpoint `/live` da API Catapult para acompanhar métricas "
@@ -11518,166 +10755,6 @@ Escolha um ou mais atletas para análise simultânea.
                         "dados no OpenField Cloud agora. O endpoint `/live` só retorna dados "
                         "durante sessões ativas."
                     )
-
-            # ==================== ABA 13: EVOLUÇÃO & ACWR ====================
-            with abas[12]:
-                st.subheader("📅 Evolução & ACWR")
-                st.markdown(
-                    "Carregue o histórico semanal via `/stats` para calcular ACWR e "
-                    "visualizar a periodização das cargas."
-                )
-
-                _acwr_api = st.session_state.get('api')
-
-                # ── Seção 1: Histórico via /stats ─────────────────────────────
-                st.markdown("### 📊 Histórico Semanal (POST /stats)")
-                _acwr_col1, _acwr_col2 = st.columns([2, 1])
-                with _acwr_col2:
-                    _acwr_src = st.selectbox(
-                        "Fonte dos dados:",
-                        ["cached_stats", "raw"],
-                        key="acwr_source",
-                    )
-                with _acwr_col1:
-                    if st.button("🔄 Carregar histórico via /stats", key="btn_acwr_load"):
-                        if _acwr_api:
-                            try:
-                                _acwr_payload = {
-                                    "group_by": ["athlete", "week"],
-                                    "parameters": [
-                                        "player_load", "total_distance",
-                                        "hsr_distance", "sprint_distance", "max_velocity",
-                                    ],
-                                    "source": _acwr_src,
-                                }
-                                _acwr_raw = _acwr_api.get_stats(_acwr_payload)
-                                st.session_state['acwr_raw'] = _acwr_raw
-                            except Exception as _e:
-                                st.error(f"Erro ao carregar histórico: {_e}")
-                        else:
-                            st.warning("API não disponível.")
-
-                _acwr_raw = st.session_state.get('acwr_raw')
-                if _acwr_raw:
-                    try:
-                        # Parsear resposta em DataFrame
-                        _acwr_rows = []
-                        _raw_list = _acwr_raw if isinstance(_acwr_raw, list) else _acwr_raw.get('data', [])
-                        for _item in (_raw_list or []):
-                            _ath = _item.get('athlete') or _item.get('athlete_name', '')
-                            _week = _item.get('week') or _item.get('period', '')
-                            _params = _item.get('parameters', _item)
-                            _acwr_rows.append({
-                                'Atleta': str(_ath),
-                                'Semana': str(_week),
-                                'PlayerLoad': float(_params.get('player_load', 0) or 0),
-                                'Distância (m)': float(_params.get('total_distance', 0) or 0),
-                                'HSR (m)': float(_params.get('hsr_distance', 0) or 0),
-                                'Sprint (m)': float(_params.get('sprint_distance', 0) or 0),
-                                'Vmax (km/h)': float(_params.get('max_velocity', 0) or 0) * 3.6,
-                            })
-                        if _acwr_rows:
-                            _df_acwr = pd.DataFrame(_acwr_rows).sort_values(['Atleta', 'Semana'])
-                            st.dataframe(_df_acwr, use_container_width=True, hide_index=True)
-
-                            # ACWR por atleta
-                            st.markdown("### ⚡ ACWR por Atleta")
-                            st.caption("ℹ️ **ACWR** — Acute:Chronic Workload Ratio: semana atual ÷ média 4 semanas. Zona segura: 0.8–1.3")
-                            _acwr_results = []
-                            for _ath_name, _gdf in _df_acwr.groupby('Atleta'):
-                                _gdf = _gdf.sort_values('Semana')
-                                _loads = _gdf['PlayerLoad'].tolist()
-                                if len(_loads) >= 4:
-                                    _acute = _loads[-1]
-                                    _chronic = float(np.mean(_loads[-4:-1])) if len(_loads) >= 4 else _acute
-                                    _acwr_val = _acute / _chronic if _chronic > 0 else 0
-                                    _zone = (
-                                        "🟢 Seguro" if 0.8 <= _acwr_val <= 1.3 else
-                                        "🟡 Atenção" if (0.5 <= _acwr_val < 0.8) or (1.3 < _acwr_val <= 1.5) else
-                                        "🔴 Risco"
-                                    )
-                                    _acwr_results.append({
-                                        'Atleta': _ath_name,
-                                        'ACWR': round(_acwr_val, 2),
-                                        'Carga Aguda': round(_acute, 0),
-                                        'Carga Crônica': round(_chronic, 0),
-                                        'Status': _zone,
-                                    })
-                            if _acwr_results:
-                                _df_acwr_res = pd.DataFrame(_acwr_results)
-                                st.dataframe(_df_acwr_res, use_container_width=True, hide_index=True)
-
-                            # Gráfico de linha: PlayerLoad semanal por atleta
-                            st.markdown("### 📈 PlayerLoad Semanal")
-                            _fig_acwr = px.line(
-                                _df_acwr, x='Semana', y='PlayerLoad',
-                                color='Atleta', markers=True,
-                                title="PlayerLoad Semanal por Atleta",
-                            )
-                            _fig_acwr.update_layout(
-                                plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                font=dict(color='white'),
-                            )
-                            st.plotly_chart(_fig_acwr, use_container_width=True)
-                        else:
-                            st.info("Nenhum dado retornado pelo /stats.")
-                    except Exception as _ep:
-                        st.error(f"Erro ao processar dados: {_ep}")
-
-                # ── Seção 2: Comparação longitudinal de atividades ────────────
-                st.markdown("---")
-                st.markdown("### 🔄 Comparação de Atividades (Longitudinal)")
-
-                _df_acts = st.session_state.get('df_activities')
-                if _df_acts is not None and not _df_acts.empty:
-                    _act_opts = _df_acts['nome'].tolist() if 'nome' in _df_acts.columns else []
-                    _sel_acts = st.multiselect(
-                        "Selecione atividades para comparar (máx. 10):",
-                        _act_opts,
-                        max_selections=10,
-                        key="longit_acts_sel",
-                    )
-
-                    if _sel_acts and st.button("🔄 Comparar atividades", key="btn_longit_compare"):
-                        if _acwr_api:
-                            try:
-                                _sel_ids = _df_acts[_df_acts['nome'].isin(_sel_acts)]['id'].tolist()
-                                _longit_payload = {
-                                    "group_by": ["athlete"],
-                                    "parameters": [
-                                        "player_load", "total_distance", "max_velocity",
-                                        "hsr_distance", "sprint_distance",
-                                    ],
-                                    "activity_ids": _sel_ids,
-                                    "source": "cached_stats",
-                                }
-                                _longit_raw = _acwr_api.get_stats(_longit_payload)
-                                st.session_state['longit_compare_raw'] = _longit_raw
-                                st.session_state['longit_compare_acts'] = _sel_acts
-                            except Exception as _el:
-                                st.error(f"Erro: {_el}")
-
-                    _longit_raw = st.session_state.get('longit_compare_raw')
-                    if _longit_raw:
-                        try:
-                            _longit_list = _longit_raw if isinstance(_longit_raw, list) else _longit_raw.get('data', [])
-                            _longit_rows = []
-                            for _li in (_longit_list or []):
-                                _la = _li.get('athlete') or _li.get('athlete_name', '')
-                                _lp = _li.get('parameters', _li)
-                                _longit_rows.append({
-                                    'Atleta': str(_la),
-                                    'Distância (m)': float(_lp.get('total_distance', 0) or 0),
-                                    'PlayerLoad': float(_lp.get('player_load', 0) or 0),
-                                    'Vmax (km/h)': float(_lp.get('max_velocity', 0) or 0) * 3.6,
-                                })
-                            if _longit_rows:
-                                _df_longit = pd.DataFrame(_longit_rows)
-                                st.dataframe(_df_longit, use_container_width=True, hide_index=True)
-                        except Exception as _elp:
-                            st.error(f"Erro ao processar: {_elp}")
-                else:
-                    st.info("Carregue atividades na sidebar para usar a comparação longitudinal.")
 
         else:
             st.warning("Nenhum dado encontrado")
