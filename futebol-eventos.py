@@ -909,7 +909,7 @@ def plotar_trajetoria_campo(x_coords, y_coords, velocidades, athlete_name):
         mode='markers',
         name='Velocidade',
         marker=dict(size=3, color=velocidades, colorscale='Viridis',
-                   showscale=True, colorbar=dict(title="Velocidade (km/h)", x=1.05, len=0.5)),
+                   showscale=True, colorbar=dict(title=dict(text="Velocidade (km/h)"), x=1.05, len=0.5)),
         hovertemplate='X: %{x:.1f}m<br>Y: %{y:.1f}m<br>Vel: %{marker.color:.1f} km/h<extra></extra>'
     ))
     
@@ -954,7 +954,7 @@ def plotar_heatmap_campo(x_coords, y_coords, velocidades, athlete_name):
         colorscale='Hot',
         opacity=0.6,
         name='Intensidade (Velocidade)',
-        colorbar=dict(title="Velocidade (km/h)", x=1.05, len=0.5),
+        colorbar=dict(title=dict(text="Velocidade (km/h)"), x=1.05, len=0.5),
         hovertemplate='X: %{x:.0f}m<br>Y: %{y:.0f}m<br>Vel: %{z:.1f} km/h<extra></extra>'
     ))
     
@@ -979,7 +979,7 @@ def plotar_heatmap_presenca_campo(x_coords, y_coords, athlete_name):
         colorscale='YlOrRd',
         opacity=0.65,
         name='Presença',
-        colorbar=dict(title="Frequência", x=1.05, len=0.5),
+        colorbar=dict(title=dict(text="Frequência"), x=1.05, len=0.5),
         hovertemplate='X: %{x:.0f}m<br>Y: %{y:.0f}m<br>Frequência: %{z:.0f}<extra></extra>'
     ))
 
@@ -9518,18 +9518,23 @@ Escolha um ou mais atletas para análise simultânea.
                                     # Scatter: tempo x pico_a colorido por impulso
                                     _fig_qa_sc = go.Figure()
                                     _fig_qa_sc.add_trace(go.Scatter(
-                                        x=_df_qa['inicio_min'], y=_df_qa['pico_a'],
+                                        x=_df_qa['inicio_min'].tolist(),
+                                        y=_df_qa['pico_a'].tolist(),
                                         mode='markers',
                                         marker=dict(
-                                            size=_df_qa['impulso'].clip(3, 20),
-                                            color=_df_qa['impulso'],
+                                            size=_df_qa['impulso'].clip(3, 20).tolist(),
+                                            color=_df_qa['impulso'].tolist(),
                                             colorscale='RdYlGn_r',
                                             showscale=True,
-                                            colorbar=dict(title='Impulso (m/s)',
-                                                          titlefont=dict(color='white'),
-                                                          tickfont=dict(color='white')),
+                                            colorbar=dict(
+                                                title=dict(
+                                                    text='Impulso (m/s)',
+                                                    font=dict(color='white'),
+                                                ),
+                                                tickfont=dict(color='white'),
+                                            ),
                                         ),
-                                        customdata=_df_qa[['impulso','vel_entrada','duracao_s']].values,
+                                        customdata=_df_qa[['impulso','vel_entrada','duracao_s']].values.tolist(),
                                         hovertemplate=(
                                             'Min: %{x:.1f}<br>'
                                             'Pico Acc: %{y:.2f} m/s²<br>'
