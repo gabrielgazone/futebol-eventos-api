@@ -45,7 +45,13 @@
       "Bash(echo \"EXIT: $?\")",
       "Bash(python -c ' *)",
       "Bash(python -c \"print\\(sum\\(1 for _ in open\\('futebol-eventos.py', encoding='utf-8'\\)\\), 'linhas'\\)\")",
-      "Bash(wc -l \"/mnt/c/Users/User/Desktop/curso/futebol-eventos-api/futebol-eventos.py\")"
+      "Bash(wc -l \"/mnt/c/Users/User/Desktop/curso/futebol-eventos-api/futebol-eventos.py\")",
+      "Bash(python -)",
+      "Bash(python _add_wcs_tab.py)",
+      "Bash(del _add_wcs_tab.py)",
+      "Bash(python _patch_wcs2.py)",
+      "Bash(python -c \"import sys; sys.stdout.reconfigure\\(encoding='utf-8'\\)\")",
+      "Bash(git commit -m 'fix\\(wcs\\): troca medalhas por semaforo de carga \\(vermelho=maior fadiga\\) *)"
     ]
   }
 }
