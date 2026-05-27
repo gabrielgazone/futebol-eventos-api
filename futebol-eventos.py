@@ -7429,77 +7429,59 @@ Escolha um ou mais atletas para análise simultânea.
                                                         title=(f"WCS — {_pdw_show} "
                                                                f"(início: {_rr_show['Início (min)']} min)")
                                                     )
-                                                    # Rastro de fundo removido — apenas o WCS selecionado é exibido
-                                                    _sbg_p = 1  # mantido para compatibilidade com frames
-
-                                                    # ── Construir animação WCS ────────────────────
+                                                    # ── Animação WCS — mesmo estilo do esforço selecionado ──────────
                                                     _xpk  = list(_pdw_xn[_si_p:_ei_p])
                                                     _ypk  = list(_pdw_yn[_si_p:_ei_p])
                                                     _vpk  = list(_pdw_vel[_si_p:_ei_p])
                                                     _n_fr = len(_xpk)
 
-                                                    # Downsampling para máx. 120 frames (fluidez vs. desempenho)
+                                                    def _vc_wcs(v):
+                                                        if v < 7:  return '#2196F3'
+                                                        if v < 14: return '#4CAF50'
+                                                        if v < 19: return '#FFEB3B'
+                                                        if v < 24: return '#FF9800'
+                                                        return '#F44336'
+
                                                     _step_fr = max(1, _n_fr // 120)
                                                     _fr_idxs = list(range(0, _n_fr, _step_fr))
                                                     if _fr_idxs[-1] != _n_fr - 1:
                                                         _fr_idxs.append(_n_fr - 1)
 
-                                                    _vmax_pk = float(max(_vpk)) if _vpk else 1.0
-                                                    _cs_wcs = [
-                                                        [0.0,  '#4FC3F7'], [0.4, '#66BB6A'],
-                                                        [0.7,  '#FFA726'], [1.0, '#EF5350'],
-                                                    ]
+                                                    _n_base_wcs = len(_fig_pdw_c.data)
 
-                                                    # Trace 1: rastro colorido (trail) — atualizado por frame
+                                                    # Marcadores início / fim (estáticos) — igual ao esforço
                                                     _fig_pdw_c.add_trace(go.Scatter(
-                                                        x=[_xpk[0]], y=[_ypk[0]],
-                                                        mode='markers',
-                                                        marker=dict(
-                                                            size=5,
-                                                            color=[_vpk[0]],
-                                                            colorscale=_cs_wcs,
-                                                            cmin=0, cmax=_vmax_pk,
-                                                            showscale=True,
-                                                            colorbar=dict(
-                                                                title=dict(text='km/h', font=dict(color='white')),
-                                                                tickfont=dict(color='white'),
-                                                                len=0.5,
-                                                            ),
-                                                            opacity=0.85,
-                                                        ),
-                                                        showlegend=False,
-                                                        name='_trail',
-                                                    ))
-
-                                                    # Trace 2: ponto atual (círculo grande animado)
-                                                    _fig_pdw_c.add_trace(go.Scatter(
-                                                        x=[_xpk[0]], y=[_ypk[0]],
-                                                        mode='markers+text',
-                                                        marker=dict(size=14, color='white',
-                                                                    line=dict(color='#4CAF50', width=3)),
+                                                        x=[_xpk[0]], y=[_ypk[0]], mode='markers+text',
+                                                        marker=dict(size=13, color='#4CAF50', symbol='circle',
+                                                                    line=dict(color='white', width=2)),
                                                         text=['▶'], textposition='top center',
-                                                        textfont=dict(color='white', size=10),
-                                                        showlegend=False,
-                                                        name='_dot',
+                                                        textfont=dict(color='#4CAF50', size=11),
+                                                        name='Início', showlegend=False, hoverinfo='skip'
+                                                    ))
+                                                    _fig_pdw_c.add_trace(go.Scatter(
+                                                        x=[_xpk[-1]], y=[_ypk[-1]], mode='markers+text',
+                                                        marker=dict(size=13, color='#F44336', symbol='x',
+                                                                    line=dict(color='white', width=2)),
+                                                        text=['■'], textposition='top center',
+                                                        textfont=dict(color='#F44336', size=11),
+                                                        name='Fim', showlegend=False, hoverinfo='skip'
+                                                    ))
+                                                    # Traço animado (linha sólida)
+                                                    _fig_pdw_c.add_trace(go.Scatter(
+                                                        x=[_xpk[0]], y=[_ypk[0]], mode='lines',
+                                                        line=dict(color=_vc_wcs(_vpk[0] if _vpk else 0), width=4),
+                                                        name='WCS', showlegend=False
+                                                    ))
+                                                    # Marcador de posição atual (animado)
+                                                    _fig_pdw_c.add_trace(go.Scatter(
+                                                        x=[_xpk[0]], y=[_ypk[0]], mode='markers',
+                                                        marker=dict(size=18, color=_vc_wcs(_vpk[0] if _vpk else 0),
+                                                                    symbol='circle', line=dict(color='white', width=3)),
+                                                        name='Posicao', showlegend=False
                                                     ))
 
-                                                    # Marca início/fim fixos
-                                                    _fig_pdw_c.add_trace(go.Scatter(
-                                                        x=[_xpk[0], _xpk[-1]],
-                                                        y=[_ypk[0], _ypk[-1]],
-                                                        mode='markers+text',
-                                                        marker=dict(
-                                                            size=[13, 13],
-                                                            color=['#4CAF50', '#F44336'],
-                                                            symbol=['circle', 'square'],
-                                                            line=dict(color='white', width=2),
-                                                        ),
-                                                        text=['▶', '■'],
-                                                        textposition='top center',
-                                                        textfont=dict(color='white', size=9),
-                                                        showlegend=False, hoverinfo='skip',
-                                                        name='_marks',
-                                                    ))
+                                                    _idx_wcs_trail = _n_base_wcs + 2
+                                                    _idx_wcs_dot   = _n_base_wcs + 3
 
                                                     # Gerar frames
                                                     _frames_wcs = []
@@ -7507,31 +7489,32 @@ Escolha um ou mais atletas para análise simultânea.
                                                         _dur_s = (_fi / max(_n_fr - 1, 1)) * _sel_wm * 60
                                                         _dur_m = int(_dur_s // 60)
                                                         _dur_s2 = int(_dur_s % 60)
+                                                        _v_fi   = float(_vpk[_fi]) if _fi < len(_vpk) else 0.0
+                                                        _col_fi = _vc_wcs(_v_fi)
                                                         _frames_wcs.append(go.Frame(
                                                             data=[
-                                                                # (bg trace removido)
-                                                                # trail: todos os pontos até _fi
                                                                 go.Scatter(
-                                                                    x=_xpk[:_fi + 1],
-                                                                    y=_ypk[:_fi + 1],
-                                                                    marker=dict(
-                                                                        color=_vpk[:_fi + 1],
-                                                                        cmin=0, cmax=_vmax_pk,
-                                                                    ),
+                                                                    x=_xpk[:_fi + 1], y=_ypk[:_fi + 1],
+                                                                    mode='lines',
+                                                                    line=dict(color=_col_fi, width=4),
                                                                 ),
-                                                                # dot: posição atual
                                                                 go.Scatter(
-                                                                    x=[_xpk[_fi]],
-                                                                    y=[_ypk[_fi]],
-                                                                    text=[f'{_dur_m}:{_dur_s2:02d}'],
-                                                                ),
-                                                                # marks — sem mudança
-                                                                go.Scatter(
-                                                                    x=[_xpk[0], _xpk[-1]],
-                                                                    y=[_ypk[0], _ypk[-1]],
+                                                                    x=[_xpk[_fi]], y=[_ypk[_fi]],
+                                                                    mode='markers',
+                                                                    marker=dict(size=18, color=_col_fi, symbol='circle',
+                                                                                line=dict(color='white', width=3)),
                                                                 ),
                                                             ],
+                                                            traces=[_idx_wcs_trail, _idx_wcs_dot],
                                                             name=str(_fi),
+                                                            layout=go.Layout(title=dict(
+                                                                text=(
+                                                                    f'WCS {_pdw_show} | '
+                                                                    f'⏱️ {_dur_m}:{_dur_s2:02d} / {int(_sel_wm)}:00'
+                                                                    f'   |   💨 {_v_fi:.1f} km/h'
+                                                                ),
+                                                                font=dict(color='white', size=12)
+                                                            ))
                                                         ))
 
                                                     _fig_pdw_c.frames = _frames_wcs
