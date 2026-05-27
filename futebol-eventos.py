@@ -922,7 +922,7 @@ def plotar_trajetoria_campo(x_coords, y_coords, velocidades, athlete_name):
         mode='markers',
         name='Velocidade',
         marker=dict(size=3, color=velocidades, colorscale='Viridis',
-                   showscale=True, colorbar=dict(title="Velocidade (km/h)", x=1.05, len=0.5)),
+                   showscale=True, colorbar=dict(title=dict(text="Velocidade (km/h)"), x=1.05, len=0.5)),
         hovertemplate='X: %{x:.1f}m<br>Y: %{y:.1f}m<br>Vel: %{marker.color:.1f} km/h<extra></extra>'
     ))
     
@@ -967,7 +967,7 @@ def plotar_heatmap_campo(x_coords, y_coords, velocidades, athlete_name):
         colorscale='Hot',
         opacity=0.6,
         name='Intensidade (Velocidade)',
-        colorbar=dict(title="Velocidade (km/h)", x=1.05, len=0.5),
+        colorbar=dict(title=dict(text="Velocidade (km/h)"), x=1.05, len=0.5),
         hovertemplate='X: %{x:.0f}m<br>Y: %{y:.0f}m<br>Vel: %{z:.1f} km/h<extra></extra>'
     ))
     
@@ -992,7 +992,7 @@ def plotar_heatmap_presenca_campo(x_coords, y_coords, athlete_name):
         colorscale='YlOrRd',
         opacity=0.65,
         name='Presença',
-        colorbar=dict(title="Frequência", x=1.05, len=0.5),
+        colorbar=dict(title=dict(text="Frequência"), x=1.05, len=0.5),
         hovertemplate='X: %{x:.0f}m<br>Y: %{y:.0f}m<br>Frequência: %{z:.0f}<extra></extra>'
     ))
 
@@ -9266,8 +9266,7 @@ Escolha um ou mais atletas para análise simultânea.
                                             color=_df_qa['impulso'],
                                             colorscale='RdYlGn_r',
                                             showscale=True,
-                                            colorbar=dict(title='Impulso (m/s)',
-                                                          titlefont=dict(color='white'),
+                                            colorbar=dict(title=dict(text='Impulso (m/s)', font=dict(color='white')),
                                                           tickfont=dict(color='white')),
                                         ),
                                         customdata=_df_qa[['impulso','vel_entrada','duracao_s']].values,
