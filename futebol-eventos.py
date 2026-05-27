@@ -1194,8 +1194,12 @@ def analisar_fadiga_eventos(sensor_points, eventos_dict, tipos_sel, janela_s=10)
     return df
 
 
-def desenhar_campo_futebol_bonito(field_length=105, field_width=68, margin=3, title=""):
-    """Campo de futebol com faixas verdes alternadas e marcações oficiais FIFA (top-down)."""
+def desenhar_campo_futebol_bonito(field_length=105, field_width=68, margin=3, title="", attack_direction=None):
+    """Campo de futebol com faixas verdes alternadas e marcações oficiais FIFA (top-down).
+
+    attack_direction: None | 'left_to_right' | 'right_to_left'
+        Quando definido, exibe uma seta dourada acima do campo indicando o sentido de ataque.
+    """
     FL, FW, MG = field_length, field_width, margin
     cy = FW / 2  # centro y
     fig = go.Figure()
@@ -1274,6 +1278,42 @@ def desenhar_campo_futebol_bonito(field_length=105, field_width=68, margin=3, ti
     lkw = dict(showarrow=False, font=dict(color='rgba(255,255,255,0.55)', size=9))
     for xl, txt in [(0, "GL"), (FL/2, "50m"), (FL, "GL")]:
         fig.add_annotation(x=xl, y=-2.5, text=txt, **lkw)
+
+    # ── Seta de direção de ataque ────────────────────────────────────────────
+    if attack_direction == 'left_to_right':
+        # Seta da esquerda para a direita acima do campo
+        fig.add_annotation(
+            x=FL * 0.72, y=FW + MG - 0.2,
+            ax=FL * 0.28, ay=FW + MG - 0.2,
+            axref='x', ayref='y',
+            text="", showarrow=True,
+            arrowhead=2, arrowsize=1.4, arrowwidth=3,
+            arrowcolor='#FFD700',
+        )
+        fig.add_annotation(
+            x=FL * 0.5, y=FW + MG + 0.5,
+            text="⚽  ATAQUE",
+            showarrow=False,
+            font=dict(color='#FFD700', size=11, family='Arial Black'),
+            xanchor='center',
+        )
+    elif attack_direction == 'right_to_left':
+        # Seta da direita para a esquerda acima do campo
+        fig.add_annotation(
+            x=FL * 0.28, y=FW + MG - 0.2,
+            ax=FL * 0.72, ay=FW + MG - 0.2,
+            axref='x', ayref='y',
+            text="", showarrow=True,
+            arrowhead=2, arrowsize=1.4, arrowwidth=3,
+            arrowcolor='#FFD700',
+        )
+        fig.add_annotation(
+            x=FL * 0.5, y=FW + MG + 0.5,
+            text="ATAQUE  ⚽",
+            showarrow=False,
+            font=dict(color='#FFD700', size=11, family='Arial Black'),
+            xanchor='center',
+        )
 
     fig.update_layout(
         title=dict(text=title, font=dict(color='white', size=13)) if title else {},
@@ -4169,53 +4209,75 @@ Escolha um ou mais atletas para análise simultânea.
                 st.session_state.periodos_selecionados = periodos_selecionados
 
                 if st.button("🔍 Buscar Atletas da Atividade"):
-                    with st.spinner("Buscando atletas..."):
+                    with st.spinner("Buscando atletas em todos os períodos..."):
                         api = st.session_state.api
-                        primeiro_periodo = periodos_selecionados[0] if periodos_selecionados else (st.session_state.period_options[0] if st.session_state.period_options else 'Atividade Completa')
-                        period_id = st.session_state.period_ids.get(primeiro_periodo)
-                        
-                        if period_id:
-                            response_data = api.get_athletes_in_period(period_id)
+                        # ── Busca atletas em TODOS os períodos selecionados e faz união ──
+                        _periodos_para_busca = periodos_selecionados if periodos_selecionados else (
+                            st.session_state.period_options if st.session_state.period_options else []
+                        )
+                        athletes_by_id = {}  # {athlete_id: athlete_dict} — chave para deduplicar
+
+                        def _extrair_lista_atletas(resp):
+                            """Normaliza a resposta da API para lista de dicts de atleta."""
+                            if not resp:
+                                return []
+                            if isinstance(resp, list):
+                                return resp
+                            if isinstance(resp, dict):
+                                for _k in ['data', 'items', 'athletes']:
+                                    if _k in resp and isinstance(resp[_k], list):
+                                        return resp[_k]
+                                if 'id' in resp:
+                                    return [resp]
+                            return []
+
+                        if _periodos_para_busca:
+                            for _per_nome in _periodos_para_busca:
+                                _pid = st.session_state.period_ids.get(_per_nome)
+                                if _pid:
+                                    _resp = api.get_athletes_in_period(_pid)
+                                else:
+                                    _resp = api.get_activity_athletes(activity_id)
+                                for _a in _extrair_lista_atletas(_resp):
+                                    _aid = _a.get('id')
+                                    if _aid and _aid not in athletes_by_id:
+                                        athletes_by_id[_aid] = _a
                         else:
-                            response_data = api.get_activity_athletes(activity_id)
-                        
-                        if response_data:
-                            athletes_in = None
-                            if isinstance(response_data, list):
-                                athletes_in = response_data
-                            elif isinstance(response_data, dict):
-                                for key in ['data', 'items', 'athletes']:
-                                    if key in response_data and isinstance(response_data[key], list):
-                                        athletes_in = response_data[key]
-                                        break
-                                if athletes_in is None and 'id' in response_data:
-                                    athletes_in = [response_data]
-                            
-                            if athletes_in:
-                                atletas_temp = []
-                                for a in athletes_in:
-                                    nome = f"{a.get('first_name', '')} {a.get('last_name', '')}".strip()
-                                    if not nome:
-                                        nome = a.get('name', 'Sem nome')
-                                    position_name = a.get('position_name', a.get('position', ''))
-                                    team_name = st.session_state.athlete_team_map.get(a.get('id'), '')
-                                    atletas_temp.append({
-                                        'id': a.get('id'), 'nome': nome, 'camisa': a.get('jersey', ''),
-                                        'posicao': position_name, 'equipe': team_name
-                                    })
-                                
-                                df_atletas_temp = pd.DataFrame(atletas_temp)
-                                
-                                if 'equipes_selecionadas' in st.session_state:
-                                    if 'Todas' not in st.session_state.equipes_selecionadas:
-                                        df_atletas_temp = df_atletas_temp[df_atletas_temp['equipe'].isin(st.session_state.equipes_selecionadas)]
-                                
-                                if 'posicoes_selecionadas' in st.session_state:
-                                    if 'Todas' not in st.session_state.posicoes_selecionadas:
-                                        df_atletas_temp = df_atletas_temp[df_atletas_temp['posicao'].isin(st.session_state.posicoes_selecionadas)]
-                                
-                                st.session_state.atletas_filtrados = df_atletas_temp
-                                st.success(f"✅ {len(df_atletas_temp)} atletas encontrados")
+                            # Nenhum período selecionado — busca atletas da atividade inteira
+                            _resp = api.get_activity_athletes(activity_id)
+                            for _a in _extrair_lista_atletas(_resp):
+                                _aid = _a.get('id')
+                                if _aid and _aid not in athletes_by_id:
+                                    athletes_by_id[_aid] = _a
+
+                        athletes_in = list(athletes_by_id.values())
+
+                        if athletes_in:
+                            atletas_temp = []
+                            for a in athletes_in:
+                                nome = f"{a.get('first_name', '')} {a.get('last_name', '')}".strip()
+                                if not nome:
+                                    nome = a.get('name', 'Sem nome')
+                                position_name = a.get('position_name', a.get('position', ''))
+                                team_name = st.session_state.athlete_team_map.get(a.get('id'), '')
+                                atletas_temp.append({
+                                    'id': a.get('id'), 'nome': nome, 'camisa': a.get('jersey', ''),
+                                    'posicao': position_name, 'equipe': team_name
+                                })
+
+                            df_atletas_temp = pd.DataFrame(atletas_temp)
+
+                            if 'equipes_selecionadas' in st.session_state:
+                                if 'Todas' not in st.session_state.equipes_selecionadas:
+                                    df_atletas_temp = df_atletas_temp[df_atletas_temp['equipe'].isin(st.session_state.equipes_selecionadas)]
+
+                            if 'posicoes_selecionadas' in st.session_state:
+                                if 'Todas' not in st.session_state.posicoes_selecionadas:
+                                    df_atletas_temp = df_atletas_temp[df_atletas_temp['posicao'].isin(st.session_state.posicoes_selecionadas)]
+
+                            st.session_state.atletas_filtrados = df_atletas_temp
+                            _n_per_buscados = len(_periodos_para_busca) if _periodos_para_busca else 1
+                            st.success(f"✅ {len(df_atletas_temp)} atletas encontrados em {_n_per_buscados} período(s)")
                 
                 if 'atletas_filtrados' in st.session_state and not st.session_state.atletas_filtrados.empty:
                     st.subheader("🏃 Selecionar Atletas")
@@ -5133,7 +5195,31 @@ Escolha um ou mais atletas para análise simultânea.
                                 _sp_ys = _sp_d.get('ys', [])
                                 _sp_vs = _sp_d.get('vel', _sp_d.get('vels_gps', []))
                                 if _sp_xs:
-                                    _sp_fig = desenhar_campo_futebol_bonito(title=f"{_sp_atl} — {_sp_per}")
+                                    # Direção de ataque para este lado do split view
+                                    _sp_atk_opts = ["— Não definido", "➡️  Esq → Dir", "⬅️  Dir → Esq"]
+                                    _sp_atk_key = f"attack_dir_split_{_lbl}"
+                                    _sp_atk_default = 0
+                                    if st.session_state.get(_sp_atk_key) == 'left_to_right':
+                                        _sp_atk_default = 1
+                                    elif st.session_state.get(_sp_atk_key) == 'right_to_left':
+                                        _sp_atk_default = 2
+                                    _sp_atk_sel = st.radio(
+                                        "⚽ Ataque:",
+                                        _sp_atk_opts,
+                                        index=_sp_atk_default,
+                                        horizontal=True,
+                                        key=f"_sp_atk_radio_{_lbl}",
+                                    )
+                                    if "➡️" in _sp_atk_sel:
+                                        st.session_state[_sp_atk_key] = 'left_to_right'
+                                    elif "⬅️" in _sp_atk_sel:
+                                        st.session_state[_sp_atk_key] = 'right_to_left'
+                                    else:
+                                        st.session_state[_sp_atk_key] = None
+                                    _sp_fig = desenhar_campo_futebol_bonito(
+                                        title=f"{_sp_atl} — {_sp_per}",
+                                        attack_direction=st.session_state[_sp_atk_key],
+                                    )
                                     _sp_step = max(1, len(_sp_xs) // 5000)
                                     _sp_vs_sub = [_sp_vs[i] for i in range(0, len(_sp_vs), _sp_step)] if _sp_vs else [0] * len(_sp_xs[::_sp_step])
                                     _sp_fig.add_trace(go.Scatter(
@@ -5892,6 +5978,33 @@ Escolha um ou mais atletas para análise simultânea.
                                             ov_heatmap_comp = st.checkbox("🔥 Heatmap por Período",  key="ov_hcmp")
                                             ov_voronoi_comp = st.checkbox("🔷 Voronoi por Período",  key="ov_vcmp")
 
+                                    # ── Direção de ataque por período ─────────────────
+                                    _atk_key = f"attack_dir_{periodo_mapa}"
+                                    _atk_opts = [
+                                        "— Não definido",
+                                        "➡️  Esq → Dir  (ataque para a direita)",
+                                        "⬅️  Dir → Esq  (ataque para a esquerda)",
+                                    ]
+                                    _atk_default_idx = 0
+                                    if st.session_state.get(_atk_key) == 'left_to_right':
+                                        _atk_default_idx = 1
+                                    elif st.session_state.get(_atk_key) == 'right_to_left':
+                                        _atk_default_idx = 2
+                                    _atk_sel = st.radio(
+                                        f"⚽ Direção de ataque — {periodo_mapa}:",
+                                        options=_atk_opts,
+                                        index=_atk_default_idx,
+                                        horizontal=True,
+                                        key=f"_atk_radio_{periodo_mapa}",
+                                    )
+                                    if "➡️" in _atk_sel:
+                                        st.session_state[_atk_key] = 'left_to_right'
+                                    elif "⬅️" in _atk_sel:
+                                        st.session_state[_atk_key] = 'right_to_left'
+                                    else:
+                                        st.session_state[_atk_key] = None
+                                    _attack_dir_val = st.session_state[_atk_key]
+
                                     # ── Seletores de bandas (dependem do modo) ────────
                                     bandas_vel_sel = list(BANDAS_VEL.keys())
                                     bandas_acc_sel = list(BANDAS_ACC.keys())
@@ -5975,7 +6088,10 @@ Escolha um ou mais atletas para análise simultânea.
                                         if len(atletas_mapa) > 1
                                         else f"📍 {atleta_mapa} — {_label_periodos}"
                                     )
-                                    fig_campo = desenhar_campo_futebol_bonito(title=_titulo_campo)
+                                    fig_campo = desenhar_campo_futebol_bonito(
+                                        title=_titulo_campo,
+                                        attack_direction=_attack_dir_val,
+                                    )
 
                                     # ── Plota TODOS os atletas com o mesmo modo ───────
                                     # Usa _coords_atletas para garantir que cada atleta
