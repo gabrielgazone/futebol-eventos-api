@@ -9498,7 +9498,7 @@ Escolha um ou mais atletas para análise simultânea.
                                         _qa_eventos.append({
                                             'inicio_min': (_seg_t[0] - _qa_ts[0]) / 60,
                                             'pico_a': float(np.max(_seg_a)),
-                                            'impulso': float(np.trapz(_seg_a, dx=0.1)),
+                                            'impulso': float(np.trapezoid(_seg_a, dx=0.1)),
                                             'tdr': float((np.max(_seg_a) - _seg_a[0]) / max(0.1, (_seg_t[np.argmax(_seg_a)] - _seg_t[0]))),
                                             'vel_entrada': float(_seg_v[0]),
                                             'duracao_s': float(len(_seg_a) * 0.1),
@@ -9955,7 +9955,7 @@ Escolha um ou mais atletas para análise simultânea.
                                     if _mask.sum() > 1:
                                         _dist_win = float(np.sum(np.abs(np.diff(_fa_vs[_mask])) * 0.1 / 3.6 * 3.6))
                                         # distância real via integral v×dt
-                                        _d_real = float(np.trapz(_fa_vs[_mask] / 3.6, _fa_ts[_mask]))
+                                        _d_real = float(np.trapezoid(_fa_vs[_mask] / 3.6, _fa_ts[_mask]))
                                         _pl_sum = float(np.sum(_fa_pl[_mask]))
                                         _win_mmin.append(_d_real / _fat_janela_min)
                                         _win_plmin.append(_pl_sum / _fat_janela_min)
