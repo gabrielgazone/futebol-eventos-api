@@ -11369,7 +11369,7 @@ Escolha um ou mais atletas para análise simultânea.
                         }
 
                     _wcs2_rows.sort(key=lambda r: r.get(_wcs2_metric, 0), reverse=True)
-                    _rank_icons = ['🥇', '🥈', '🥉']
+                    _rank_icons = ['🔴', '🟠', '🟡']   # vermelho = maior carga/fadiga
                     for _ri2, _wr2 in enumerate(_wcs2_rows):
                         _wr2['#'] = _rank_icons[_ri2] if _ri2 < 3 else f'#{_ri2 + 1}'
 
@@ -11388,7 +11388,7 @@ Escolha um ou mais atletas para análise simultânea.
                         # KPIs resumo
                         _wk1, _wk2, _wk3, _wk4 = st.columns(4)
                         _wk1.metric(
-                            "🏆 Atleta Destaque",
+                            "🔴 Maior Fadiga",
                             _wcs2_rows[0]['Atleta'],
                             f"{_wcs2_top:.1f} — {_wcs2_rows[0].get('Período', '—')}",
                         )
