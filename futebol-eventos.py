@@ -4152,6 +4152,16 @@ Escolha um ou mais atletas para análise simultânea.
                     _hvm_auto = st.session_state.get('hist_vmax', {})
                     _src_auto = st.session_state.get('hist_vmax_source', {})
                     _n_vmax_auto = 0
+                    # Índice de nomes dos atletas para matching robusto:
+                    # { nome_normalizado: nome_real }
+                    def _norm(s):
+                        return s.lower().strip()
+                    _atleta_nome_idx  = {_norm(a['nome']): a['nome'] for a in atletas}
+                    # Também índice com tokens ordenados ("Lima Jorge" → "jorge lima")
+                    _atleta_token_idx = {
+                        ' '.join(sorted(_norm(a['nome']).split())): a['nome']
+                        for a in atletas
+                    }
                     try:
                         _stats_auto = api.get_stats({
                             "group_by": ["athlete"],
@@ -4161,12 +4171,16 @@ Escolha um ou mais atletas para análise simultânea.
                         if _stats_auto:
                             _sa_list = (_stats_auto if isinstance(_stats_auto, list)
                                         else _stats_auto.get('data', []))
+                            # Salva resposta bruta para debug
+                            st.session_state['_debug_stats_raw'] = _sa_list[:3] if _sa_list else []
                             for _sa in (_sa_list or []):
-                                _sa_name = str(
+                                # Extrai nome vindo da API — pode ser "Primeiro Ultimo"
+                                # ou "Ultimo Primeiro" dependendo da conta
+                                _sa_name_raw = str(
                                     _sa.get('athlete') or _sa.get('athlete_name') or
-                                    _sa.get('name') or ''
+                                    _sa.get('name') or _sa.get('athlete_id') or ''
                                 )
-                                # max_velocity pode estar em parâmetros aninhados ou direto
+                                # max_velocity em parâmetros aninhados ou direto
                                 _sa_params = _sa.get('parameters') or _sa
                                 _sa_val = float(
                                     _sa_params.get('max_velocity') or
@@ -4174,13 +4188,18 @@ Escolha um ou mais atletas para análise simultânea.
                                     _sa.get('max_velocity') or
                                     _sa.get('max_speed') or 0
                                 )
-                                if _sa_name and _sa_val > 0:
-                                    # Converte km/h → m/s se necessário (valor > 15 = provavelmente km/h)
-                                    _sa_ms = _sa_val / 3.6 if _sa_val > 15 else _sa_val
-                                    if _src_auto.get(_sa_name, '') != 'manual':
-                                        _hvm_auto[_sa_name] = _sa_ms
-                                        _src_auto[_sa_name] = 'catapult_stats'
-                                        _n_vmax_auto += 1
+                                if not _sa_name_raw or _sa_val <= 0:
+                                    continue
+                                # Matching: 1) exato, 2) tokens ordenados (cobre inversão nome)
+                                _sa_ms = _sa_val / 3.6 if _sa_val > 15 else _sa_val
+                                _match_nome = (
+                                    _atleta_nome_idx.get(_norm(_sa_name_raw)) or
+                                    _atleta_token_idx.get(' '.join(sorted(_norm(_sa_name_raw).split())))
+                                )
+                                if _match_nome and _src_auto.get(_match_nome, '') != 'manual':
+                                    _hvm_auto[_match_nome] = _sa_ms
+                                    _src_auto[_match_nome] = 'catapult_stats'
+                                    _n_vmax_auto += 1
                     except Exception:
                         pass
                     st.session_state['hist_vmax']        = _hvm_auto
@@ -4588,6 +4607,23 @@ Escolha um ou mais atletas para análise simultânea.
                     st.session_state['hist_vmax_source'] = _src_g
                     st.rerun()
 
+                # ── Debug: inspeciona resposta bruta da API ───────────────────
+                with st.expander("🛠️ Debug — resposta bruta da API", expanded=False):
+                    st.caption("Use para identificar campos retornados pela API Catapult.")
+                    _dbg_raw = st.session_state.get('_debug_stats_raw', [])
+                    if _dbg_raw:
+                        st.markdown("**Primeiros itens do POST /stats (cached_stats):**")
+                        st.json(_dbg_raw)
+                    else:
+                        st.info("Carregue os atletas para ver a resposta bruta.")
+                    _dbg_api = st.session_state.get('api')
+                    _dbg_df  = st.session_state.get('df_athletes', pd.DataFrame())
+                    if _dbg_api and not _dbg_df.empty:
+                        if st.button("Inspecionar GET /athletes/{id}", key="btn_dbg_profile"):
+                            _aid_dbg = _dbg_df.iloc[0]['id']
+                            _prof_dbg = _dbg_api.get_athlete(_aid_dbg)
+                            st.json(_prof_dbg or {})
+
                 # ── Botão fallback: /stats ─────────────────────────────────────
                 with st.expander("🔍 Buscar via /stats (fallback)", expanded=False):
                     st.caption("Use se os campos abaixo aparecerem como 'não detectado'.")
@@ -4631,6 +4667,7 @@ Escolha um ou mais atletas para análise simultânea.
                     'profile':           '👤 Perfil',
                     'zones':             '🏷️ Zonas',
                     'stats':             '📊 /stats',
+                    'summary':           '📋 Activity Summary',
                     'manual':            '✏️ Manual',
                     '':                  '❓ Não detectado',
                 }
@@ -4942,6 +4979,28 @@ Escolha um ou mais atletas para análise simultânea.
                                     'n_pontos': 0,
                                 }
                             dados_posicao[atleta_nome]['openfield_summary'] = _of_sum
+                            # ── Extrai max_velocity da summary para hist_vmax ──
+                            # A summary retorna max_velocity em m/s (confirmado no
+                            # código de comparação OpenField, linha ~9955).
+                            # Guarda o maior valor observado entre os períodos carregados.
+                            try:
+                                _sum_d = (_of_sum if isinstance(_of_sum, dict)
+                                          else (_of_sum[0] if isinstance(_of_sum, list) and _of_sum else {}))
+                                _sum_p = _sum_d.get('parameters', _sum_d)
+                                _sum_vmax_ms = float(_sum_p.get('max_velocity') or 0)
+                                if _sum_vmax_ms > 0:
+                                    _hvm_now = st.session_state.get('hist_vmax', {})
+                                    _src_now = st.session_state.get('hist_vmax_source', {})
+                                    # Só sobrescreve se maior que o atual (max histórico entre períodos)
+                                    # e se não for manual
+                                    if (_src_now.get(atleta_nome, '') != 'manual'
+                                            and _sum_vmax_ms > _hvm_now.get(atleta_nome, 0)):
+                                        _hvm_now[atleta_nome] = _sum_vmax_ms
+                                        _src_now[atleta_nome] = 'summary'
+                                        st.session_state['hist_vmax']        = _hvm_now
+                                        st.session_state['hist_vmax_source'] = _src_now
+                            except Exception:
+                                pass
                     except Exception:
                         pass
                     
@@ -11281,17 +11340,37 @@ Escolha um ou mais atletas para análise simultânea.
                             help="Métrica para identificar a janela de maior exigência"
                         )
 
-                    _wcs2_hz = 10.0
-                    _wcs2_n  = int(_wcs2_min * 60 * _wcs2_hz)
+                    # ── Detecta Hz real a partir dos timestamps ─────────────────────
+                    def _detect_hz(_periodos_list, _dppp):
+                        """Estima frequência de amostragem (Hz) a partir dos ts_pos."""
+                        _diffs = []
+                        for _pnn in _periodos_list[:3]:
+                            for _adat in list(_dppp.get(_pnn, {}).values())[:2]:
+                                _tss = _adat.get('ts_pos', [])
+                                if len(_tss) > 10:
+                                    _diffs += [abs(_tss[_i+1] - _tss[_i])
+                                               for _i in range(1, min(20, len(_tss)-1))
+                                               if abs(_tss[_i+1] - _tss[_i]) > 0]
+                        if _diffs:
+                            import statistics as _st
+                            _med_dt = _st.median(_diffs)
+                            if _med_dt > 0:
+                                return round(1.0 / _med_dt, 1)
+                        return 10.0  # fallback conservador
+
+                    _wcs2_periodos_tmp = [
+                        k for k in dados_posicao_por_periodo
+                        if k != _CHAVE_COMBINADO
+                    ]
+                    _wcs2_hz = _detect_hz(_wcs2_periodos_tmp, dados_posicao_por_periodo)
+                    _wcs2_n  = max(2, int(_wcs2_min * 60 * _wcs2_hz))
+                    st.caption(f"📡 Frequência GPS detectada: **{_wcs2_hz} Hz** — janela = {_wcs2_n} amostras")
 
                     # ── Cálculo do WCS por atleta ───────────────────────────────────
                     _wcs2_rows = []
                     _wcs2_segs = {}  # atleta → {xn, yn, vel} para animação
 
-                    _wcs2_periodos = [
-                        k for k in dados_posicao_por_periodo
-                        if k != _CHAVE_COMBINADO
-                    ]
+                    _wcs2_periodos = _wcs2_periodos_tmp
                     _wcs2_athletes = sorted(set(
                         a for _pn in _wcs2_periodos
                         for a in dados_posicao_por_periodo.get(_pn, {}).keys()
@@ -11329,15 +11408,20 @@ Escolha um ou mais atletas para análise simultânea.
                             _xs  = _da.get('xs', [])
                             _ys  = _da.get('ys', [])
                             _vl  = _da.get('vel', [])         # km/h
-                            _ac  = _da.get('acc', [0.0] * len(_xs))
-                            _ts  = _da.get('ts_pos', [0.0] * len(_xs))
-                            _nn  = min(len(_xs), len(_ys), len(_vl))
+                            _ac  = _da.get('acc', [])
+                            _ts  = _da.get('ts_pos', [])
+                            # _nn usa xs/ys como referência — vel pode estar vazia
+                            _nn  = min(len(_xs), len(_ys))
                             if _nn > 0:
+                                # Preenche vel/acc/ts com zeros se ausentes ou mais curtos
+                                _vl_pad  = list(_vl[:_nn])  + [0.0] * max(0, _nn - len(_vl))
+                                _ac_pad  = list(_ac[:_nn])  + [0.0] * max(0, _nn - len(_ac))
+                                _ts_pad  = list(_ts[:_nn])  + [0.0] * max(0, _nn - len(_ts))
                                 _wx  += list(_xs[:_nn])
                                 _wy  += list(_ys[:_nn])
-                                _wv  += list(_vl[:_nn])
-                                _wac += list(_ac[:_nn])
-                                _wts += list(_ts[:_nn])
+                                _wv  += _vl_pad
+                                _wac += _ac_pad
+                                _wts += _ts_pad
                                 _wper += [_pn] * _nn
 
                         if len(_wx) < max(_wcs2_n, 2):
