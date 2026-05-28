@@ -4140,12 +4140,33 @@ Escolha um ou mais atletas para análise simultânea.
                             if not pos_row.empty:
                                 position_name = pos_row.iloc[0]['nome']
                         team_name = st.session_state.athlete_team_map.get(a.get('id'), '')
+                        # Captura max_speed diretamente do cadastro Catapult.
+                        # A API retorna em m/s; se valor > 15 assume km/h e converte.
+                        _ms_raw = float(
+                            a.get('max_speed') or a.get('max_velocity') or
+                            a.get('maximum_velocity') or a.get('v_max') or 0
+                        )
+                        _ms_stored = (_ms_raw / 3.6) if _ms_raw > 15 else _ms_raw
                         atletas.append({
                             'id': a.get('id'), 'nome': nome, 'camisa': a.get('jersey', ''),
-                            'posicao': position_name, 'equipe': team_name
+                            'posicao': position_name, 'equipe': team_name,
+                            'max_speed_ms': _ms_stored,
                         })
                     st.session_state.df_athletes = pd.DataFrame(atletas)
-                    st.success(f"✅ {len(atletas)} atletas carregados")
+                    # Popula hist_vmax imediatamente a partir do cadastro Catapult
+                    _hvm_init = st.session_state.get('hist_vmax', {})
+                    _src_init = st.session_state.get('hist_vmax_source', {})
+                    _n_vmax_loaded = 0
+                    for _ai in atletas:
+                        _ams = _ai.get('max_speed_ms', 0.0)
+                        if _ams > 0 and _src_init.get(_ai['nome'], '') != 'manual':
+                            _hvm_init[_ai['nome']] = _ams
+                            _src_init[_ai['nome']] = 'catapult_athletes'
+                            _n_vmax_loaded += 1
+                    st.session_state['hist_vmax']        = _hvm_init
+                    st.session_state['hist_vmax_source'] = _src_init
+                    _vmax_msg = f" · {_n_vmax_loaded} Vmax detectadas" if _n_vmax_loaded else ""
+                    st.success(f"✅ {len(atletas)} atletas carregados{_vmax_msg}")
                 
                 st.subheader("📋 Carregando Atividades...")
                 activities_raw = api.get_activities()
@@ -4562,12 +4583,13 @@ Escolha um ou mais atletas para análise simultânea.
                 _src_dict  = st.session_state.get('hist_vmax_source', {})
 
                 _src_labels = {
-                    'thresholds': '📋 Limiares',
-                    'profile':    '👤 Perfil',
-                    'zones':      '🏷️ Zonas',
-                    'stats':      '📊 /stats',
-                    'manual':     '✏️ Manual',
-                    '':           '❓ Não detectado',
+                    'catapult_athletes': '📡 Cadastro Catapult',
+                    'thresholds':        '📋 Limiares',
+                    'profile':           '👤 Perfil',
+                    'zones':             '🏷️ Zonas',
+                    'stats':             '📊 /stats',
+                    'manual':            '✏️ Manual',
+                    '':                  '❓ Não detectado',
                 }
 
                 for _an in _atletas_sidebar:
@@ -4780,16 +4802,27 @@ Escolha um ou mais atletas para análise simultânea.
                             if _prof_key not in st.session_state:
                                 _prof_raw = api.get_athlete(athlete_id)
                                 st.session_state[_prof_key] = _prof_raw or {}
-                            _prof = st.session_state.get(_prof_key, {})
+                            _prof_outer = st.session_state.get(_prof_key, {})
+                            # Suporta resposta direta OU aninhada em {"data": {...}}
+                            _prof = (
+                                _prof_outer.get('data', _prof_outer)
+                                if isinstance(_prof_outer, dict)
+                                else (_prof_outer[0] if isinstance(_prof_outer, list) and _prof_outer else {})
+                            )
                             _vmax_prof_keys = [
-                                'max_speed', 'max_velocity', 'velocity',
+                                'max_speed', 'max_velocity', 'maximum_velocity',
                                 'maximum_speed', 'peak_speed', 'v_max',
                             ]
                             for _pk in _vmax_prof_keys:
                                 _pv = _prof.get(_pk, 0)
-                                if _pv and float(_pv) > _vmax_encontrado:
-                                    _vmax_encontrado = float(_pv)
-                                    _vmax_fonte = 'profile'
+                                if _pv:
+                                    _pvf = float(_pv)
+                                    # Converte km/h → m/s se necessário
+                                    if _pvf > 15:
+                                        _pvf /= 3.6
+                                    if _pvf > _vmax_encontrado:
+                                        _vmax_encontrado = _pvf
+                                        _vmax_fonte = 'profile'
                         except Exception:
                             pass
                     # — Fonte 3: topo da zona de velocidade mais alta ——————
