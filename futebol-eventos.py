@@ -4563,8 +4563,9 @@ Escolha um ou mais atletas para análise simultânea.
             with st.expander("📊 Máximo Histórico", expanded=False):
                 st.caption(
                     "Vmax histórico buscado automaticamente do cadastro Catapult "
-                    "(limiares → perfil → zonas). Usado em '% do Máximo' nas abas "
-                    "de esforços. Você pode sobrescrever manualmente por atleta."
+                    "(limiares → perfil → openfield_summary → /stats). "
+                    "Usado em '% do Máximo' nas abas de esforços. "
+                    "Você pode sobrescrever manualmente por atleta."
                 )
                 _hist_api = st.session_state.get('api')
 
@@ -4852,13 +4853,13 @@ Escolha um ou mais atletas para análise simultânea.
                         st.session_state[_thr_key] = {}
 
                 # ── Auto-popular Vmax histórico a partir do cadastro ──────────
-                # Prioridade: (1) limiares do atleta, (2) perfil do atleta,
-                # (3) zona de velocidade mais alta. Só sobrescreve se ainda
-                # não tiver um valor (ou se o valor for 0 / manual não definido).
+                # Só sobrescreve se o novo valor for MAIOR que o atual
+                # (preserva o máximo histórico entre sessões e não destrói
+                # valores já captados pelo POST /stats ou openfield_summary).
+                # Nunca sobrescreve override manual do usuário.
                 _hvm_global = st.session_state.get('hist_vmax', {})
                 _src_global = st.session_state.get('hist_vmax_source', {})
                 _src_atual  = _src_global.get(atleta_nome, '')
-                # Não sobrescreve sobreposições manuais do usuário
                 if _src_atual != 'manual':
                     _vmax_encontrado = 0.0
                     _vmax_fonte      = ''
@@ -4872,57 +4873,46 @@ Escolha um ou mais atletas para análise simultânea.
                     ]
                     for _vk in _vmax_keys_thr:
                         _vv = _thr_data_now.get(_vk, 0)
-                        if _vv and float(_vv) > _vmax_encontrado:
-                            _vmax_encontrado = float(_vv)
-                            _vmax_fonte = 'thresholds'
+                        if _vv:
+                            _vvf = float(_vv)
+                            # Converte km/h → m/s se plausível
+                            if _vvf > 15:
+                                _vvf /= 3.6
+                            if 0.5 < _vvf < 15.0 and _vvf > _vmax_encontrado:
+                                _vmax_encontrado = _vvf
+                                _vmax_fonte = 'thresholds'
                     # — Fonte 2: perfil do atleta (GET /athletes/{id}) ————
-                    if _vmax_encontrado == 0:
-                        try:
-                            _prof_key = f"profile_{athlete_id}"
-                            if _prof_key not in st.session_state:
-                                _prof_raw = api.get_athlete(athlete_id)
-                                st.session_state[_prof_key] = _prof_raw or {}
-                            _prof_outer = st.session_state.get(_prof_key, {})
-                            # Suporta resposta direta OU aninhada em {"data": {...}}
-                            _prof = (
-                                _prof_outer.get('data', _prof_outer)
-                                if isinstance(_prof_outer, dict)
-                                else (_prof_outer[0] if isinstance(_prof_outer, list) and _prof_outer else {})
-                            )
-                            _vmax_prof_keys = [
-                                'max_speed', 'max_velocity', 'maximum_velocity',
-                                'maximum_speed', 'peak_speed', 'v_max',
-                            ]
-                            for _pk in _vmax_prof_keys:
-                                _pv = _prof.get(_pk, 0)
-                                if _pv:
-                                    _pvf = float(_pv)
-                                    # Converte km/h → m/s se necessário
-                                    if _pvf > 15:
-                                        _pvf /= 3.6
-                                    if _pvf > _vmax_encontrado:
-                                        _vmax_encontrado = _pvf
-                                        _vmax_fonte = 'profile'
-                        except Exception:
-                            pass
-                    # — Fonte 3: topo da zona de velocidade mais alta ——————
-                    # Exclui valores >= 9000 m/s (sentinel "infinito" da última zona)
-                    if _vmax_encontrado == 0:
-                        try:
-                            _zones_atl = get_zones_for_athlete(atleta_nome)
-                            if _zones_atl:
-                                _top_ms = max(
-                                    (float(z.get('max_ms', 0)) for z in _zones_atl
-                                     if float(z.get('max_ms', 0) or 0) < 9000),
-                                    default=0
-                                )
-                                if _top_ms > 0:
-                                    _vmax_encontrado = _top_ms
-                                    _vmax_fonte = 'zones'
-                        except Exception:
-                            pass
-                    # — Persiste se encontrou algo ────────────────────────
-                    if _vmax_encontrado > 0:
+                    try:
+                        _prof_key = f"profile_{athlete_id}"
+                        if _prof_key not in st.session_state:
+                            _prof_raw = api.get_athlete(athlete_id)
+                            st.session_state[_prof_key] = _prof_raw or {}
+                        _prof_outer = st.session_state.get(_prof_key, {})
+                        _prof = (
+                            _prof_outer.get('data', _prof_outer)
+                            if isinstance(_prof_outer, dict)
+                            else (_prof_outer[0] if isinstance(_prof_outer, list)
+                                  and _prof_outer else {})
+                        )
+                        _vmax_prof_keys = [
+                            'max_speed', 'max_velocity', 'maximum_velocity',
+                            'maximum_speed', 'peak_speed', 'v_max',
+                        ]
+                        for _pk in _vmax_prof_keys:
+                            _pv = _prof.get(_pk, 0)
+                            if _pv:
+                                _pvf = float(_pv)
+                                if _pvf > 15:
+                                    _pvf /= 3.6
+                                if 0.5 < _pvf < 15.0 and _pvf > _vmax_encontrado:
+                                    _vmax_encontrado = _pvf
+                                    _vmax_fonte = 'profile'
+                    except Exception:
+                        pass
+                    # — Persiste apenas se o valor é MAIOR que o já armazenado ─
+                    # (POST /stats já pode ter um valor melhor de outra sessão)
+                    _cur_best = _hvm_global.get(atleta_nome, 0.0)
+                    if _vmax_encontrado > _cur_best:
                         _hvm_global[atleta_nome] = _vmax_encontrado
                         _src_global[atleta_nome] = _vmax_fonte
                 st.session_state['hist_vmax']        = _hvm_global
@@ -4988,11 +4978,13 @@ Escolha um ou mais atletas para análise simultânea.
                                           else (_of_sum[0] if isinstance(_of_sum, list) and _of_sum else {}))
                                 _sum_p = _sum_d.get('parameters', _sum_d)
                                 _sum_vmax_ms = float(_sum_p.get('max_velocity') or 0)
-                                if _sum_vmax_ms > 0:
+                                # Sanity check: valores plausíveis para velocidade humana
+                                # (0.5 a 15 m/s = ~2 a 54 km/h)
+                                if 0.5 < _sum_vmax_ms < 15.0:
                                     _hvm_now = st.session_state.get('hist_vmax', {})
                                     _src_now = st.session_state.get('hist_vmax_source', {})
-                                    # Só sobrescreve se maior que o atual (max histórico entre períodos)
-                                    # e se não for manual
+                                    # Mantém o máximo histórico entre períodos;
+                                    # nunca sobrescreve override manual do usuário
                                     if (_src_now.get(atleta_nome, '') != 'manual'
                                             and _sum_vmax_ms > _hvm_now.get(atleta_nome, 0)):
                                         _hvm_now[atleta_nome] = _sum_vmax_ms
