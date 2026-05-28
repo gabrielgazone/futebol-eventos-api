@@ -4140,32 +4140,52 @@ Escolha um ou mais atletas para análise simultânea.
                             if not pos_row.empty:
                                 position_name = pos_row.iloc[0]['nome']
                         team_name = st.session_state.athlete_team_map.get(a.get('id'), '')
-                        # Captura max_speed diretamente do cadastro Catapult.
-                        # A API retorna em m/s; se valor > 15 assume km/h e converte.
-                        _ms_raw = float(
-                            a.get('max_speed') or a.get('max_velocity') or
-                            a.get('maximum_velocity') or a.get('v_max') or 0
-                        )
-                        _ms_stored = (_ms_raw / 3.6) if _ms_raw > 15 else _ms_raw
                         atletas.append({
                             'id': a.get('id'), 'nome': nome, 'camisa': a.get('jersey', ''),
                             'posicao': position_name, 'equipe': team_name,
-                            'max_speed_ms': _ms_stored,
                         })
                     st.session_state.df_athletes = pd.DataFrame(atletas)
-                    # Popula hist_vmax imediatamente a partir do cadastro Catapult
-                    _hvm_init = st.session_state.get('hist_vmax', {})
-                    _src_init = st.session_state.get('hist_vmax_source', {})
-                    _n_vmax_loaded = 0
-                    for _ai in atletas:
-                        _ams = _ai.get('max_speed_ms', 0.0)
-                        if _ams > 0 and _src_init.get(_ai['nome'], '') != 'manual':
-                            _hvm_init[_ai['nome']] = _ams
-                            _src_init[_ai['nome']] = 'catapult_athletes'
-                            _n_vmax_loaded += 1
-                    st.session_state['hist_vmax']        = _hvm_init
-                    st.session_state['hist_vmax_source'] = _src_init
-                    _vmax_msg = f" · {_n_vmax_loaded} Vmax detectadas" if _n_vmax_loaded else ""
+
+                    # ── Auto-busca Vmax histórico via /stats (cached_stats) ──
+                    # É o mesmo endpoint do botão fallback manual, mas chamado
+                    # automaticamente logo após carregar a lista de atletas.
+                    _hvm_auto = st.session_state.get('hist_vmax', {})
+                    _src_auto = st.session_state.get('hist_vmax_source', {})
+                    _n_vmax_auto = 0
+                    try:
+                        _stats_auto = api.get_stats({
+                            "group_by": ["athlete"],
+                            "parameters": ["max_velocity"],
+                            "source": "cached_stats",
+                        })
+                        if _stats_auto:
+                            _sa_list = (_stats_auto if isinstance(_stats_auto, list)
+                                        else _stats_auto.get('data', []))
+                            for _sa in (_sa_list or []):
+                                _sa_name = str(
+                                    _sa.get('athlete') or _sa.get('athlete_name') or
+                                    _sa.get('name') or ''
+                                )
+                                # max_velocity pode estar em parâmetros aninhados ou direto
+                                _sa_params = _sa.get('parameters') or _sa
+                                _sa_val = float(
+                                    _sa_params.get('max_velocity') or
+                                    _sa_params.get('max_speed') or
+                                    _sa.get('max_velocity') or
+                                    _sa.get('max_speed') or 0
+                                )
+                                if _sa_name and _sa_val > 0:
+                                    # Converte km/h → m/s se necessário (valor > 15 = provavelmente km/h)
+                                    _sa_ms = _sa_val / 3.6 if _sa_val > 15 else _sa_val
+                                    if _src_auto.get(_sa_name, '') != 'manual':
+                                        _hvm_auto[_sa_name] = _sa_ms
+                                        _src_auto[_sa_name] = 'catapult_stats'
+                                        _n_vmax_auto += 1
+                    except Exception:
+                        pass
+                    st.session_state['hist_vmax']        = _hvm_auto
+                    st.session_state['hist_vmax_source'] = _src_auto
+                    _vmax_msg = f" · {_n_vmax_auto} Vmax hist. detectadas" if _n_vmax_auto else ""
                     st.success(f"✅ {len(atletas)} atletas carregados{_vmax_msg}")
                 
                 st.subheader("📋 Carregando Atividades...")
@@ -4530,7 +4550,7 @@ Escolha um ou mais atletas para análise simultânea.
                 _hist_api = st.session_state.get('api')
 
                 # ── Botão para re-buscar o perfil (limpa cache de perfil/thresholds) ──
-                if _hist_api and st.button("🔄 Re-buscar do perfil Catapult", key="btn_refetch_hist_vmax"):
+                if _hist_api and st.button("🔄 Re-buscar via /stats Catapult", key="btn_refetch_hist_vmax"):
                     # Limpa apenas as fontes automáticas (preserva 'manual')
                     _src_g = st.session_state.get('hist_vmax_source', {})
                     _hvm_g = st.session_state.get('hist_vmax', {})
@@ -4538,10 +4558,32 @@ Escolha um ou mais atletas para análise simultânea.
                         if _src_g.get(_an_r) != 'manual':
                             _hvm_g.pop(_an_r, None)
                             _src_g.pop(_an_r, None)
-                    # Limpa cache de perfis e thresholds para forçar nova busca
                     for _k in list(st.session_state.keys()):
                         if _k.startswith('profile_') or _k.startswith('thresholds_'):
                             del st.session_state[_k]
+                    # Re-busca imediatamente via /stats
+                    try:
+                        _rb_stats = _hist_api.get_stats({
+                            "group_by": ["athlete"],
+                            "parameters": ["max_velocity"],
+                            "source": "cached_stats",
+                        })
+                        if _rb_stats:
+                            _rb_list = _rb_stats if isinstance(_rb_stats, list) else _rb_stats.get('data', [])
+                            _n_rb = 0
+                            for _rbs in (_rb_list or []):
+                                _rbs_name = str(_rbs.get('athlete') or _rbs.get('athlete_name') or _rbs.get('name') or '')
+                                _rbs_params = _rbs.get('parameters') or _rbs
+                                _rbs_val = float(_rbs_params.get('max_velocity') or _rbs_params.get('max_speed') or
+                                                 _rbs.get('max_velocity') or _rbs.get('max_speed') or 0)
+                                if _rbs_name and _rbs_val > 0 and _src_g.get(_rbs_name) != 'manual':
+                                    _rbs_ms = _rbs_val / 3.6 if _rbs_val > 15 else _rbs_val
+                                    _hvm_g[_rbs_name] = _rbs_ms
+                                    _src_g[_rbs_name] = 'catapult_stats'
+                                    _n_rb += 1
+                            st.toast(f"✅ {_n_rb} Vmax atualizadas via /stats")
+                    except Exception:
+                        pass
                     st.session_state['hist_vmax'] = _hvm_g
                     st.session_state['hist_vmax_source'] = _src_g
                     st.rerun()
@@ -4583,7 +4625,8 @@ Escolha um ou mais atletas para análise simultânea.
                 _src_dict  = st.session_state.get('hist_vmax_source', {})
 
                 _src_labels = {
-                    'catapult_athletes': '📡 Cadastro Catapult',
+                    'catapult_stats':    '📡 Catapult /stats',
+                    'catapult_athletes': '📡 Cadastro',
                     'thresholds':        '📋 Limiares',
                     'profile':           '👤 Perfil',
                     'zones':             '🏷️ Zonas',
@@ -4826,13 +4869,18 @@ Escolha um ou mais atletas para análise simultânea.
                         except Exception:
                             pass
                     # — Fonte 3: topo da zona de velocidade mais alta ——————
+                    # Exclui valores >= 9000 m/s (sentinel "infinito" da última zona)
                     if _vmax_encontrado == 0:
                         try:
                             _zones_atl = get_zones_for_athlete(atleta_nome)
                             if _zones_atl:
-                                _top_ms = max(z.get('max_ms', 0) for z in _zones_atl)
-                                if _top_ms and float(_top_ms) > 0:
-                                    _vmax_encontrado = float(_top_ms)
+                                _top_ms = max(
+                                    (float(z.get('max_ms', 0)) for z in _zones_atl
+                                     if float(z.get('max_ms', 0) or 0) < 9000),
+                                    default=0
+                                )
+                                if _top_ms > 0:
+                                    _vmax_encontrado = _top_ms
                                     _vmax_fonte = 'zones'
                         except Exception:
                             pass
