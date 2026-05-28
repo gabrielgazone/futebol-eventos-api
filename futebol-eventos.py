@@ -11366,6 +11366,15 @@ Escolha um ou mais atletas para análise simultânea.
                     _wcs2_n  = max(2, int(_wcs2_min * 60 * _wcs2_hz))
                     st.caption(f"📡 Frequência GPS detectada: **{_wcs2_hz} Hz** — janela = {_wcs2_n} amostras")
 
+                    # ── Config do campo (necessário para fallback GPS) ──────────────
+                    _wcs2_cfg = None
+                    for _hkw in list(st.session_state.keys()):
+                        if (_hkw.startswith("campo_cfg__")
+                                and isinstance(st.session_state[_hkw], dict)
+                                and 'fl' in st.session_state[_hkw]):
+                            _wcs2_cfg = st.session_state[_hkw]
+                            break
+
                     # ── Cálculo do WCS por atleta ───────────────────────────────────
                     _wcs2_rows = []
                     _wcs2_segs = {}  # atleta → {xn, yn, vel} para animação
@@ -11412,6 +11421,20 @@ Escolha um ou mais atletas para análise simultânea.
                             _ts  = _da.get('ts_pos', [])
                             # _nn usa xs/ys como referência — vel pode estar vazia
                             _nn  = min(len(_xs), len(_ys))
+
+                            if _nn == 0 and _wcs2_cfg:
+                                # Fallback GPS: converte lats/lons para coordenadas de campo
+                                _lp = _da.get('lats', [])
+                                _lo = _da.get('lons', [])
+                                if _lp and _lo:
+                                    try:
+                                        _gx2, _gy2 = gps_para_campo_coords(_lp, _lo, _wcs2_cfg)
+                                        _xs = _gx2;  _ys = _gy2
+                                        _vl = _da.get('vels_gps', [0.0] * len(_gx2))
+                                        _nn = min(len(_xs), len(_ys))
+                                    except Exception:
+                                        _nn = 0
+
                             if _nn > 0:
                                 # Preenche vel/acc/ts com zeros se ausentes ou mais curtos
                                 _vl_pad  = list(_vl[:_nn])  + [0.0] * max(0, _nn - len(_vl))
@@ -11543,6 +11566,23 @@ Escolha um ou mais atletas para análise simultânea.
                             "Dados insuficientes para calcular WCS com essa janela temporal. "
                             "Reduza a janela ou carregue mais períodos."
                         )
+                        # Diagnóstico para debug
+                        with st.expander("🛠️ Diagnóstico de dados", expanded=True):
+                            _diag = []
+                            for _wa_d in _wcs2_athletes[:8]:
+                                _tot_xs, _tot_vel = 0, 0
+                                for _pn_d in _wcs2_periodos:
+                                    _da_d = dados_posicao_por_periodo.get(_pn_d, {}).get(_wa_d, {})
+                                    _tot_xs  += len(_da_d.get('xs', []))
+                                    _tot_vel += len(_da_d.get('vel', []))
+                                _diag.append({'Atleta': _wa_d,
+                                              'Amostras XY': _tot_xs,
+                                              'Amostras vel': _tot_vel,
+                                              'Necessário': _wcs2_n})
+                            if _diag:
+                                st.dataframe(pd.DataFrame(_diag), hide_index=True,
+                                             use_container_width=True)
+                            st.caption(f"Hz detectado: {_wcs2_hz} | Janela: {_wcs2_min} min = {_wcs2_n} amostras | Períodos: {len(_wcs2_periodos)}")
                     else:
                         # % do Máximo do grupo
                         _wcs2_top = _wcs2_rows[0].get(_wcs2_metric, 0) or 1.0
