@@ -5405,14 +5405,18 @@ Escolha um ou mais atletas para análise simultânea.
                         # Métricas que se SOMAM entre períodos
                         _cols_sum = [c for c in [
                             'Distância (m)', 'Dist. > 19 km/h (m)', 'Dist. > 24 km/h (m)',
+                            'Dist. 19-24 km/h (m)',
                             'Sprints (>24 km/h)', 'Acelerações (>3 m/s²)',
-                            'Desacelerações (>-3 m/s²)', 'RHIE Blocos', 'PlayerLoad',
-                            'TRIMP',
+                            'Desacelerações (>-3 m/s²)', 'Desacelerações (<-3 m/s²)',
+                            'RHIE Blocos', 'PlayerLoad', 'TRIMP',
+                            'Acc 2-3 (m/s²)', 'Dcc 2-3 (m/s²)',
+                            'Duração (min)',
                         ] if c in _df_ov_raw.columns]
                         # Métricas que se tomam o MÁXIMO entre períodos
                         _cols_max = [c for c in [
                             'Velocidade Máx (km/h)', 'Velocidade Bruta Máx (km/h)',
-                            'Aceleração Máx (m/s²)', 'Potência Met. Máx (W/kg)',
+                            'Aceleração Máx (m/s²)', 'Acc Max (m/s²)', 'Dcc Max (m/s²)',
+                            'Potência Met. Máx (W/kg)',
                         ] if c in _df_ov_raw.columns]
                         # Métricas que se tomam a MÉDIA entre períodos
                         _cols_mean = [c for c in [
@@ -5477,17 +5481,118 @@ Escolha um ou mais atletas para análise simultânea.
                             )
                             st.plotly_chart(_fig_ov, use_container_width=True)
 
-                        # ── Tabela combinada ────────────────────────────────────────
-                        _ov_display_cols = [c for c in [
-                            'Atleta', 'Posição', 'Distância (m)', 'Velocidade Máx (km/h)',
-                            'Sprints (>24 km/h)', 'PlayerLoad', 'RHIE Blocos',
-                            'Dist. > 19 km/h (m)', 'FC Média (bpm)',
+                        # ── M/min calculado da agregação (Dist / Duração) ────────────
+                        if ('Duração (min)' in _df_ov.columns
+                                and 'Distância (m)' in _df_ov.columns):
+                            _dur_ov = _df_ov['Duração (min)'].replace(0, float('nan'))
+                            _df_ov['M/min'] = (_df_ov['Distância (m)'] / _dur_ov).round(1)
+
+                        # ── %Vmax ──────────────────────────────────────────────────
+                        if 'Velocidade Máx (km/h)' in _df_ov.columns:
+                            _hvm_ov = st.session_state.get('hist_vmax', {})
+                            def _pct_vmax_ov(row):
+                                _vel = float(row.get('Velocidade Máx (km/h)', 0) or 0)
+                                _hist = float(_hvm_ov.get(row.get('Atleta', ''), 0) or 0) * 3.6
+                                if not (5.0 <= _hist <= 60.0):
+                                    _hist = 0.0
+                                if _hist > 0:
+                                    return round(_vel / _hist * 100, 1)
+                                _gmax = _df_ov['Velocidade Máx (km/h)'].max()
+                                return round(_vel / _gmax * 100, 1) if _gmax > 0 else 0.0
+                            _df_ov['%Vmax'] = _df_ov.apply(_pct_vmax_ov, axis=1)
+
+                        # ── Tabela Descritiva com coloração por percentil ─────────
+                        st.markdown("---")
+                        st.subheader("📋 Tabela Descritiva de Desempenho")
+                        st.caption("Coloração por percentil do grupo: 🟢 Top 33% · 🟡 Médio · 🔴 Bottom 33%")
+                        st.caption("ℹ️ **RHIE** — Repeated High Intensity Efforts · **HSR** — Dist. >19 km/h · **M/min** — Metros por minuto (elite: 110–130)")
+
+                        _OV_TD_COLS = [c for c in [
+                            'Atleta', 'Posição',
+                            'Duração (min)', 'Distância (m)',
+                            'Dist. 19-24 km/h (m)', 'Dist. > 24 km/h (m)',
+                            'Dist. > 19 km/h (m)', 'Sprints (>24 km/h)',
+                            'Velocidade Máx (km/h)', '%Vmax', 'M/min',
+                            'Acc 2-3 (m/s²)', 'Dcc 2-3 (m/s²)',
+                            'Acelerações (>3 m/s²)', 'Desacelerações (<-3 m/s²)',
+                            'Acc Max (m/s²)', 'Dcc Max (m/s²)',
+                            'PlayerLoad', 'RHIE Blocos',
+                            'FC Média (bpm)',
                         ] if c in _df_ov.columns]
-                        if _ov_display_cols:
-                            _ov_sort_col = 'Distância (m)' if 'Distância (m)' in _ov_display_cols else _ov_display_cols[0]
+
+                        if _OV_TD_COLS:
+                            _df_ov_show = _df_ov[_OV_TD_COLS].sort_values(
+                                'Distância (m)' if 'Distância (m)' in _OV_TD_COLS else _OV_TD_COLS[0],
+                                ascending=False
+                            ).reset_index(drop=True)
+
+                            _OV_NUM = [c for c in _OV_TD_COLS if c not in ('Atleta', 'Posição')]
+
+                            def _ov_style_pct(col):
+                                if col.name not in _OV_NUM:
+                                    return [''] * len(col)
+                                p33 = col.quantile(0.33)
+                                p66 = col.quantile(0.66)
+                                out = []
+                                for v in col:
+                                    try:
+                                        vf = float(v)
+                                        if vf >= p66:
+                                            out.append('background-color:#1a5c2e;color:white;font-weight:bold')
+                                        elif vf >= p33:
+                                            out.append('background-color:#7d6a08;color:white')
+                                        else:
+                                            out.append('background-color:#7b1a1a;color:white')
+                                    except Exception:
+                                        out.append('')
+                                return out
+
+                            _1dec_ov = {
+                                'Velocidade Máx (km/h)', 'Velocidade Média (km/h)',
+                                'M/min', 'Acc Max (m/s²)', 'Dcc Max (m/s²)',
+                                'FC Média (bpm)',
+                            }
+                            _ov_fmt = {}
+                            for _c in _OV_NUM:
+                                if _c == '%Vmax':
+                                    _ov_fmt[_c] = '{:.1f}%'
+                                elif _c in _1dec_ov:
+                                    _ov_fmt[_c] = '{:.1f}'
+                                else:
+                                    _ov_fmt[_c] = '{:.0f}'
+
+                            st.markdown(
+                                "<style>"
+                                "[data-testid='stDataFrame'] th {"
+                                "  text-align:center !important;"
+                                "  justify-content:center !important;"
+                                "}"
+                                "[data-testid='stDataFrame'] td {"
+                                "  text-align:center !important;"
+                                "}"
+                                "</style>",
+                                unsafe_allow_html=True,
+                            )
                             st.dataframe(
-                                _df_ov[_ov_display_cols].sort_values(_ov_sort_col, ascending=False).reset_index(drop=True),
-                                use_container_width=True, hide_index=True
+                                _df_ov_show.style
+                                .apply(_ov_style_pct, axis=0)
+                                .format(_ov_fmt, na_rep='—')
+                                .set_properties(**{'text-align': 'center'})
+                                .set_table_styles([
+                                    {'selector': 'th',
+                                     'props': [('text-align', 'center'),
+                                               ('font-weight', 'bold')]},
+                                    {'selector': 'td',
+                                     'props': [('text-align', 'center')]},
+                                ]),
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+                            st.download_button(
+                                "📥 Exportar Tabela (CSV)",
+                                _df_ov_show.to_csv(index=False).encode('utf-8'),
+                                "resumo_sessao.csv",
+                                mime='text/csv',
                             )
                 else:
                     st.info("⚽ Carregue uma sessão na sidebar para visualizar o resumo.")
