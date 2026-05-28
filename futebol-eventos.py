@@ -11838,206 +11838,304 @@ Escolha um ou mais atletas para análise simultânea.
                             else:
                                 st.info("Dados GPS insuficientes para animação deste atleta.")
 
-                        # ── Pior Momento Posicional Coletivo ───────────────────────
+                        # ── Pior Momento Coletivo (WCS Coletivo por Variável Catapult) ─
                         st.markdown("---")
-                        with st.expander("🗺️ Pior Momento Posicional Coletivo", expanded=False):
+                        with st.expander("⚡ Pior Momento Coletivo", expanded=False):
                             st.caption(
-                                "Identifica o **instante crítico** em que o grupo apresentou a maior "
-                                "exigência posicional coletiva no período selecionado — "
-                                "revelando padrões de organização ou desorganização tática. "
-                                "Selecione o período e o critério de 'pior momento'."
+                                "Identifica a **janela temporal** em que a demanda física **coletiva** "
+                                "do grupo foi máxima — somando a variável de todos os atletas na janela. "
+                                "Exibe animação do grupo se movendo naquele pior momento."
                             )
                             if not _wcs2_periodos:
                                 st.info("Nenhum período disponível.")
                             else:
-                                _colc1, _colc2 = st.columns(2)
-                                with _colc1:
-                                    _col_per_sel = st.selectbox(
-                                        "📅 Período",
-                                        _wcs2_periodos,
-                                        key="wcol_per_sel",
-                                        help="Período para a análise coletiva",
+                                _pmc_c1, _pmc_c2, _pmc_c3 = st.columns([2, 2, 1])
+                                with _pmc_c1:
+                                    _pmc_per = st.selectbox(
+                                        "📅 Período", _wcs2_periodos, key="pmc_per_sel"
                                     )
-                                with _colc2:
-                                    _col_metric_opts = [
-                                        "🔴 Maior Dispersão  (time mais espalhado)",
-                                        "🔵 Maior Compactidade  (time mais compacto)",
-                                        "📏 Maior Amplitude  (largura máxima)",
-                                        "📐 Maior Profundidade  (comprimento máximo)",
-                                        "⚡ Maior Espaço entre Linhas  (gap def-ata)",
+                                with _pmc_c2:
+                                    _pmc_metric_opts = [
+                                        "📏 Distância Total (m)",
+                                        "⚡ Dist. >14 km/h  — Alta Intensidade (m)",
+                                        "🚀 Dist. >19 km/h  — Sprint (m)",
+                                        "🏋️ PlayerLoad",
+                                        "↗️ Acelerações >2 m/s²  (n)",
+                                        "↗️ Acelerações >3 m/s²  (n)",
+                                        "↘️ Desacelerações <-2 m/s²  (n)",
+                                        "↘️ Desacelerações <-3 m/s²  (n)",
                                     ]
-                                    _col_metric = st.selectbox(
-                                        "📊 Métrica Coletiva",
-                                        _col_metric_opts,
-                                        key="wcol_metric_sel",
-                                        help="Critério do 'pior momento' coletivo",
+                                    _pmc_metric = st.selectbox(
+                                        "📊 Variável Coletiva", _pmc_metric_opts,
+                                        key="pmc_metric_sel"
+                                    )
+                                with _pmc_c3:
+                                    _pmc_win = st.selectbox(
+                                        "⏱️ Janela",
+                                        [1, 3, 5], format_func=lambda x: f"{x} min",
+                                        key="pmc_win_sel"
                                     )
 
-                                # Montar dados do período selecionado
-                                _col_period_data = dados_posicao_por_periodo.get(_col_per_sel, {})
-                                _col_athl_map = {}
-                                for _ca, _cad in _col_period_data.items():
+                                # ── Montar dados do período ─────────────────────────
+                                _pmc_period_data = dados_posicao_por_periodo.get(_pmc_per, {})
+                                _pmc_athl_map = {}
+                                for _ca, _cad in _pmc_period_data.items():
                                     _cxs = list(_cad.get('xs', []))
                                     _cys = list(_cad.get('ys', []))
                                     _cvs = list(_cad.get('vel', []))
+                                    _cac = list(_cad.get('acc', []))
                                     _cts = list(_cad.get('ts_pos', []))
-                                    _nn2 = min(len(_cxs), len(_cys))
-                                    if _nn2 > 1:
-                                        _col_athl_map[_ca] = {
-                                            'xs':  _cxs[:_nn2],
-                                            'ys':  _cys[:_nn2],
-                                            'vel': _cvs[:_nn2] if len(_cvs) >= _nn2 else [0.0] * _nn2,
-                                            'ts':  _cts[:_nn2] if len(_cts) >= _nn2 else [0.0] * _nn2,
+                                    _nn_p = min(len(_cxs), len(_cys))
+                                    # GPS fallback
+                                    if _nn_p == 0 and _wcs2_cfg:
+                                        _lp_p = _cad.get('lats', [])
+                                        _lo_p = _cad.get('lons', [])
+                                        if _lp_p and _lo_p:
+                                            try:
+                                                _gxp, _gyp = gps_para_campo_coords(
+                                                    _lp_p, _lo_p, _wcs2_cfg
+                                                )
+                                                _cxs = _gxp;  _cys = _gyp
+                                                _cvs = _cad.get('vels_gps', [0.0]*len(_gxp))
+                                                _nn_p = min(len(_cxs), len(_cys))
+                                            except Exception:
+                                                _nn_p = 0
+                                    if _nn_p > 1:
+                                        _cvs_p = list(_cvs[:_nn_p]) + [0.0]*max(0, _nn_p-len(_cvs))
+                                        _cac_p = list(_cac[:_nn_p]) + [0.0]*max(0, _nn_p-len(_cac))
+                                        _cts_p = list(_cts[:_nn_p]) + [0.0]*max(0, _nn_p-len(_cts))
+                                        # PlayerLoad from sensor data
+                                        _pl_raw_p = dados_sensor_por_atleta_por_periodo.get(
+                                            _pmc_per, {}
+                                        ).get(_ca, [])
+                                        _pl_p = (
+                                            [float(pt.get('pl') or 0) for pt in _pl_raw_p[:_nn_p]]
+                                            + [0.0] * max(0, _nn_p - len(_pl_raw_p))
+                                        )
+                                        _pmc_athl_map[_ca] = {
+                                            'xs':  list(_cxs[:_nn_p]),
+                                            'ys':  list(_cys[:_nn_p]),
+                                            'vel': _cvs_p,
+                                            'acc': _cac_p,
+                                            'ts':  _cts_p,
+                                            'pl':  _pl_p,
                                             'pos': str(_cad.get('posicao', '—')),
                                         }
 
-                                if len(_col_athl_map) < 2:
+                                if len(_pmc_athl_map) < 2:
                                     st.info("Poucos atletas com GPS neste período para análise coletiva.")
                                 else:
-                                    _col_athletes = list(_col_athl_map.keys())
-                                    _col_n        = min(len(_col_athl_map[a]['xs']) for a in _col_athletes)
+                                    _pmc_hz2 = _wcs2_hz
+                                    _pmc_n2  = max(2, int(_pmc_win * 60 * _pmc_hz2))
+                                    _pmc_athl_list = list(_pmc_athl_map.keys())
+                                    _pmc_len = min(
+                                        len(_pmc_athl_map[a]['xs']) for a in _pmc_athl_list
+                                    )
 
-                                    # Pontuação por frame
-                                    _col_scores = []
-                                    for _ci in range(_col_n):
-                                        _cxi = [_col_athl_map[a]['xs'][_ci] for a in _col_athletes]
-                                        _cyi = [_col_athl_map[a]['ys'][_ci] for a in _col_athletes]
-                                        _nm2 = len(_cxi)
-                                        _xm2 = sum(_cxi) / _nm2
-                                        _ym2 = sum(_cyi) / _nm2
-                                        _cm  = _col_metric
-                                        if "Dispersão" in _cm:
-                                            _sc = sum(
-                                                ((x - _xm2) ** 2 + (y - _ym2) ** 2) ** 0.5
-                                                for x, y in zip(_cxi, _cyi)
-                                            ) / _nm2
-                                        elif "Compactidade" in _cm:
-                                            _sc = -(
-                                                sum(
-                                                    ((x - _xm2) ** 2 + (y - _ym2) ** 2) ** 0.5
-                                                    for x, y in zip(_cxi, _cyi)
-                                                ) / _nm2
-                                            )
-                                        elif "Amplitude" in _cm:
-                                            _sc = max(_cxi) - min(_cxi)
-                                        elif "Profundidade" in _cm:
-                                            _sc = max(_cyi) - min(_cyi)
-                                        elif "Espaço" in _cm:
-                                            _sy2 = sorted(_cyi)
-                                            _h2  = _nm2 // 2
-                                            _sc  = (
-                                                sum(_sy2[_h2:]) / len(_sy2[_h2:]) - sum(_sy2[:_h2]) / len(_sy2[:_h2])
-                                            ) if _h2 else 0.0
-                                        else:
-                                            _sc = 0.0
-                                        _col_scores.append(_sc)
-
-                                    _col_bi  = max(range(len(_col_scores)), key=lambda i: _col_scores[i])
-                                    _col_bv  = abs(_col_scores[_col_bi])
-
-                                    # Timestamp
-                                    _col_ts0 = _col_athl_map[_col_athletes[0]]['ts'][_col_bi]
-                                    try:
-                                        from datetime import datetime as _dtcol
-                                        _col_tstr = (
-                                            _dtcol.fromtimestamp(float(_col_ts0)).strftime('%H:%M:%S')
-                                            if float(_col_ts0) > 1e6
-                                            else f"{int(_col_bi / 10 // 60):02d}:{int(_col_bi / 10 % 60):02d}"
+                                    if _pmc_len < _pmc_n2:
+                                        st.warning(
+                                            f"Dados insuficientes: {_pmc_len} amostras disponíveis, "
+                                            f"necessário {_pmc_n2} para janela de {_pmc_win} min."
                                         )
-                                    except Exception:
-                                        _col_tstr = f"{int(_col_bi / 10 // 60):02d}:{int(_col_bi / 10 % 60):02d}"
+                                    else:
+                                        # ── Série por atleta ───────────────────────
+                                        _pmc_sv_map = {}
+                                        _pmc_m2 = _pmc_metric
+                                        for _pa2 in _pmc_athl_list:
+                                            _pad2 = _pmc_athl_map[_pa2]
+                                            _pv2  = _pad2['vel'][:_pmc_len]
+                                            _pac2 = _pad2['acc'][:_pmc_len]
+                                            _ppl2 = _pad2['pl'][:_pmc_len]
+                                            if "Distância Total" in _pmc_m2:
+                                                _sv2 = [v/(3.6*_pmc_hz2) for v in _pv2]
+                                            elif ">14" in _pmc_m2:
+                                                _sv2 = [v/(3.6*_pmc_hz2) if v>14 else 0.0 for v in _pv2]
+                                            elif ">19" in _pmc_m2:
+                                                _sv2 = [v/(3.6*_pmc_hz2) if v>19 else 0.0 for v in _pv2]
+                                            elif "PlayerLoad" in _pmc_m2:
+                                                _sv2 = _ppl2
+                                            elif ">2" in _pmc_m2 and "cel" in _pmc_m2:
+                                                _sv2 = [1.0 if a>2 else 0.0 for a in _pac2]
+                                            elif ">3" in _pmc_m2 and "cel" in _pmc_m2:
+                                                _sv2 = [1.0 if a>3 else 0.0 for a in _pac2]
+                                            elif "<-2" in _pmc_m2:
+                                                _sv2 = [1.0 if a<-2 else 0.0 for a in _pac2]
+                                            elif "<-3" in _pmc_m2:
+                                                _sv2 = [1.0 if a<-3 else 0.0 for a in _pac2]
+                                            else:
+                                                _sv2 = [v/(3.6*_pmc_hz2) for v in _pv2]
+                                            _pmc_sv_map[_pa2] = _sv2
 
-                                    _ck1, _ck2, _ck3 = st.columns(3)
-                                    _ck1.metric("⏱️ Instante", _col_tstr)
-                                    _ck2.metric("📊 Valor", f"{_col_bv:.1f} m")
-                                    _ck3.metric("👥 Atletas", str(len(_col_athl_map)))
+                                        # ── Rolling window coletivo via numpy ───────
+                                        _col_score2 = np.zeros(_pmc_len - _pmc_n2 + 1)
+                                        for _pa2 in _pmc_athl_list:
+                                            _arr2  = np.array(_pmc_sv_map[_pa2])
+                                            _roll2 = np.convolve(_arr2, np.ones(_pmc_n2), 'valid')
+                                            _col_score2 += _roll2
 
-                                    # Criar campo
-                                    _col_cfg3 = None
-                                    for _hkc3 in list(st.session_state.keys()):
-                                        if (
-                                            _hkc3.startswith("campo_cfg__")
-                                            and isinstance(st.session_state[_hkc3], dict)
-                                            and 'fl' in st.session_state[_hkc3]
-                                        ):
-                                            _col_cfg3 = st.session_state[_hkc3]
-                                            break
-                                    _col_fl3 = float(_col_cfg3.get('fl', 105)) if _col_cfg3 else 105.0
-                                    _col_fw3 = float(_col_cfg3.get('fw', 68))  if _col_cfg3 else 68.0
+                                        _pmc_bi2  = int(np.argmax(_col_score2))
+                                        _pmc_bval2 = float(_col_score2[_pmc_bi2])
+                                        _pmc_bei2  = _pmc_bi2 + _pmc_n2
 
-                                    _fig_col = desenhar_campo_futebol_bonito(
-                                        field_length=_col_fl3,
-                                        field_width=_col_fw3,
-                                        title=(
-                                            f"{_col_metric.split('  ')[0].strip()} | "
-                                            f"{_col_per_sel} | ⏱️ {_col_tstr} | "
-                                            f"Valor: {_col_bv:.1f} m"
-                                        ),
-                                    )
+                                        # Início em tempo
+                                        _pmc_ts_ref = _pmc_athl_map[_pmc_athl_list[0]]['ts'][_pmc_bi2]
+                                        try:
+                                            from datetime import datetime as _dtpmc
+                                            _pmc_tstart = (
+                                                _dtpmc.fromtimestamp(float(_pmc_ts_ref)).strftime('%H:%M:%S')
+                                                if float(_pmc_ts_ref) > 1e6
+                                                else f"{int(_pmc_bi2/_pmc_hz2//60):02d}:{int(_pmc_bi2/_pmc_hz2%60):02d}"
+                                            )
+                                        except Exception:
+                                            _pmc_tstart = f"{int(_pmc_bi2/_pmc_hz2//60):02d}:{int(_pmc_bi2/_pmc_hz2%60):02d}"
 
-                                    _col_palette = [
-                                        '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
-                                        '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#76D7C4',
-                                        '#F1948A', '#85C1E9', '#82E0AA', '#F8C471', '#AED6F1',
-                                    ]
-                                    _cx_all3, _cy_all3 = [], []
-                                    for _ci3, _ca3 in enumerate(_col_athletes):
-                                        _cd3  = _col_athl_map[_ca3]
-                                        _cx3  = _cd3['xs'][_col_bi]
-                                        _cy3  = _cd3['ys'][_col_bi]
-                                        _cv3  = _cd3['vel'][_col_bi] if _col_bi < len(_cd3['vel']) else 0.0
-                                        _ccl3 = _col_palette[_ci3 % len(_col_palette)]
-                                        _cx_all3.append(_cx3)
-                                        _cy_all3.append(_cy3)
-                                        _lbl3 = (_ca3.split()[-1][:10] if _ca3.split() else _ca3[:10])
-                                        _fig_col.add_trace(go.Scatter(
-                                            x=[_cx3], y=[_cy3],
-                                            mode='markers+text',
-                                            marker=dict(
-                                                size=22, color=_ccl3, symbol='circle',
-                                                line=dict(color='white', width=2),
+                                        _pmc_tend  = f"{int(_pmc_bei2/_pmc_hz2//60):02d}:{int(_pmc_bei2/_pmc_hz2%60):02d}"
+                                        _pmc_unit2 = ("m" if "Dist" in _pmc_m2
+                                                      else ("PL" if "Player" in _pmc_m2 else "n"))
+
+                                        # ── KPIs ────────────────────────────────────
+                                        _km1, _km2, _km3, _km4 = st.columns(4)
+                                        _km1.metric("🏋️ WCS Coletivo",
+                                                    f"{_pmc_bval2:.1f} {_pmc_unit2}")
+                                        _km2.metric("📊 Média/Atleta",
+                                                    f"{_pmc_bval2/len(_pmc_athl_list):.1f} {_pmc_unit2}")
+                                        _km3.metric("⏰ Início", _pmc_tstart)
+                                        _km4.metric("🏁 Fim", _pmc_tend)
+
+                                        # ── Campo ───────────────────────────────────
+                                        _pmc_fl2 = float(_wcs2_cfg.get('fl', 105)) if _wcs2_cfg else 105.0
+                                        _pmc_fw2 = float(_wcs2_cfg.get('fw', 68))  if _wcs2_cfg else 68.0
+                                        _fig_pmc = desenhar_campo_futebol_bonito(
+                                            field_length=_pmc_fl2,
+                                            field_width=_pmc_fw2,
+                                            title=(
+                                                f"⚡ Pior Momento Coletivo — "
+                                                f"{_pmc_m2.split('(')[0].strip()} | "
+                                                f"{_pmc_per} | {_pmc_tstart} → {_pmc_tend}"
                                             ),
-                                            text=[_lbl3],
-                                            textposition='top center',
-                                            textfont=dict(color='white', size=8),
-                                            name=_ca3,
-                                            customdata=[[_cd3.get('pos', '—'), round(_cv3, 1)]],
-                                            hovertemplate=(
-                                                '<b>%{meta}</b><br>'
-                                                'Posição: %{customdata[0]}<br>'
-                                                'Velocidade: %{customdata[1]} km/h'
-                                                '<extra></extra>'
-                                            ),
-                                            meta=_ca3,
-                                            showlegend=True,
-                                        ))
+                                        )
+                                        _n_base_pmc = len(_fig_pmc.data)
 
-                                    # Centróide do grupo
-                                    if _cx_all3:
-                                        _cxm3 = sum(_cx_all3) / len(_cx_all3)
-                                        _cym3 = sum(_cy_all3) / len(_cy_all3)
-                                        _fig_col.add_trace(go.Scatter(
-                                            x=[_cxm3], y=[_cym3],
-                                            mode='markers',
-                                            marker=dict(
-                                                size=16, color='white', symbol='x',
-                                                line=dict(color='#333', width=2),
-                                            ),
-                                            name='Centróide',
-                                            hoverinfo='name',
-                                            showlegend=True,
-                                        ))
+                                        _pmc_palette = [
+                                            '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
+                                            '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#76D7C4',
+                                            '#F1948A', '#85C1E9', '#82E0AA', '#F8C471', '#AED6F1',
+                                        ]
 
-                                    _fig_col.update_layout(
-                                        height=580,
-                                        legend=dict(
-                                            orientation='h',
-                                            yanchor='bottom', y=-0.30,
-                                            xanchor='center', x=0.5,
-                                            font=dict(color='white', size=8),
-                                        ),
-                                    )
-                                    st.plotly_chart(_fig_col, use_container_width=True)
+                                        # Fatia de dados do pior janela por atleta
+                                        _pmc_win_segs = {}
+                                        for _ci4, _pa4 in enumerate(_pmc_athl_list):
+                                            _pad4 = _pmc_athl_map[_pa4]
+                                            _pmc_win_segs[_pa4] = {
+                                                'xs':    _pad4['xs'][_pmc_bi2:_pmc_bei2],
+                                                'ys':    _pad4['ys'][_pmc_bi2:_pmc_bei2],
+                                                'vel':   _pad4['vel'][_pmc_bi2:_pmc_bei2],
+                                                'color': _pmc_palette[_ci4 % len(_pmc_palette)],
+                                                'label': (_pa4.split()[-1][:10]
+                                                          if _pa4.split() else _pa4[:10]),
+                                            }
+
+                                        # Traces iniciais (frame 0) — um por atleta
+                                        _pmc_tidxs = []
+                                        for _pa4 in _pmc_athl_list:
+                                            _wd4 = _pmc_win_segs[_pa4]
+                                            _fig_pmc.add_trace(go.Scatter(
+                                                x=[_wd4['xs'][0]] if _wd4['xs'] else [0],
+                                                y=[_wd4['ys'][0]] if _wd4['ys'] else [0],
+                                                mode='markers+text',
+                                                marker=dict(size=20, color=_wd4['color'],
+                                                            symbol='circle',
+                                                            line=dict(color='white', width=2)),
+                                                text=[_wd4['label']],
+                                                textposition='top center',
+                                                textfont=dict(color='white', size=8),
+                                                name=_pa4, showlegend=True,
+                                            ))
+                                            _pmc_tidxs.append(len(_fig_pmc.data) - 1)
+
+                                        # Frames da animação
+                                        _win_len2 = _pmc_bei2 - _pmc_bi2
+                                        _step_pmc = max(1, _win_len2 // 80)
+                                        _fr_pmc   = list(range(0, _win_len2, _step_pmc))
+                                        if _fr_pmc and _fr_pmc[-1] != _win_len2 - 1:
+                                            _fr_pmc.append(_win_len2 - 1)
+
+                                        _frames_pmc = []
+                                        for _fi_p in _fr_pmc:
+                                            _t_s = _fi_p / _pmc_hz2
+                                            _mm_p = int(_t_s // 60)
+                                            _ss_p = int(_t_s % 60)
+                                            _fd = []
+                                            for _pa4 in _pmc_athl_list:
+                                                _wd4 = _pmc_win_segs[_pa4]
+                                                _xi4 = (_wd4['xs'][_fi_p]
+                                                        if _fi_p < len(_wd4['xs'])
+                                                        else (_wd4['xs'][-1] if _wd4['xs'] else 0))
+                                                _yi4 = (_wd4['ys'][_fi_p]
+                                                        if _fi_p < len(_wd4['ys'])
+                                                        else (_wd4['ys'][-1] if _wd4['ys'] else 0))
+                                                _fd.append(go.Scatter(
+                                                    x=[_xi4], y=[_yi4],
+                                                    mode='markers+text',
+                                                    marker=dict(size=20, color=_wd4['color'],
+                                                                symbol='circle',
+                                                                line=dict(color='white', width=2)),
+                                                    text=[_wd4['label']],
+                                                    textposition='top center',
+                                                    textfont=dict(color='white', size=8),
+                                                ))
+                                            _frames_pmc.append(go.Frame(
+                                                data=_fd,
+                                                traces=_pmc_tidxs,
+                                                name=str(_fi_p),
+                                                layout=go.Layout(title=dict(
+                                                    text=(
+                                                        f"⚡ Pior Momento Coletivo | "
+                                                        f"⏱️ {_mm_p}:{_ss_p:02d} / "
+                                                        f"{_pmc_win}:00 min"
+                                                    ),
+                                                    font=dict(color='white', size=12),
+                                                )),
+                                            ))
+
+                                        _fig_pmc.frames = _frames_pmc
+                                        _fig_pmc.update_layout(
+                                            height=580,
+                                            updatemenus=[dict(
+                                                type='buttons', showactive=False,
+                                                y=0, x=0.5, xanchor='center',
+                                                buttons=[
+                                                    dict(label='▶ Play', method='animate',
+                                                         args=[None, dict(
+                                                             frame=dict(duration=100, redraw=True),
+                                                             fromcurrent=True, mode='immediate')]),
+                                                    dict(label='⏸ Pause', method='animate',
+                                                         args=[[None], dict(
+                                                             frame=dict(duration=0, redraw=False),
+                                                             mode='immediate')]),
+                                                ],
+                                            )],
+                                            sliders=[dict(
+                                                steps=[
+                                                    dict(
+                                                        args=[[f.name],
+                                                              dict(frame=dict(duration=0, redraw=True),
+                                                                   mode='immediate')],
+                                                        method='animate', label='',
+                                                    )
+                                                    for f in _frames_pmc
+                                                ],
+                                                x=0.0, y=-0.05, len=1.0,
+                                                currentvalue=dict(visible=False),
+                                            )],
+                                            legend=dict(
+                                                orientation='h',
+                                                yanchor='bottom', y=-0.30,
+                                                xanchor='center', x=0.5,
+                                                font=dict(color='white', size=8),
+                                            ),
+                                        )
+                                        st.plotly_chart(_fig_pmc, use_container_width=True)
 
             # ==================== ABA 10: MONITORAMENTO AO VIVO ====================
             with abas[10]:
