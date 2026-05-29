@@ -945,58 +945,95 @@ def plotar_trajetoria_campo(x_coords, y_coords, velocidades, athlete_name):
     return fig
 
 def plotar_heatmap_campo(x_coords, y_coords, velocidades, athlete_name):
-    """Plota mapa de calor de intensidade no campo"""
+    """Mapa de calor de intensidade com suavização gaussiana (KDE-like)."""
     fig = desenhar_campo_futebol(105, 68)
-
     if len(x_coords) == 0 or len(y_coords) == 0:
         return fig
 
-    x_edges = np.linspace(0, 105, 40)
-    y_edges = np.linspace(0, 68, 40)
-    
-    heatmap, xedges, yedges = np.histogram2d(x_coords, y_coords, bins=[x_edges, y_edges], weights=velocidades)
-    counts, _, _ = np.histogram2d(x_coords, y_coords, bins=[x_edges, y_edges])
-    
+    # Grade fina para KDE suave
+    _nx, _ny = 80, 52
+    x_edges = np.linspace(0, 105, _nx + 1)
+    y_edges = np.linspace(0,  68, _ny + 1)
+    x_ctr   = (x_edges[:-1] + x_edges[1:]) / 2
+    y_ctr   = (y_edges[:-1] + y_edges[1:]) / 2
+
+    heatmap, _, _ = np.histogram2d(x_coords, y_coords,
+                                   bins=[x_edges, y_edges], weights=velocidades)
+    counts,  _, _ = np.histogram2d(x_coords, y_coords, bins=[x_edges, y_edges])
     with np.errstate(divide='ignore', invalid='ignore'):
-        intensity = np.divide(heatmap, counts, out=np.zeros_like(heatmap), where=counts > 0)
-    
+        intensity = np.divide(heatmap, counts,
+                              out=np.zeros_like(heatmap), where=counts > 0)
+
+    # Suavização gaussiana — sigma controla o "blur" (4 → efeito broadcast)
+    intensity_smooth = _gf(intensity, sigma=4)
+
+    # Máscara de zeros para transparência onde não há dados
+    _zdata = intensity_smooth.T.copy()
+    _zdata[_zdata < _zdata.max() * 0.02] = np.nan   # corta ruído baixo
+
     fig.add_trace(go.Heatmap(
-        z=intensity.T,
-        x=xedges[:-1],
-        y=yedges[:-1],
-        colorscale='Hot',
-        opacity=0.6,
-        name='Intensidade (Velocidade)',
-        colorbar=dict(title=dict(text="Velocidade (km/h)"), x=1.05, len=0.5),
-        hovertemplate='X: %{x:.0f}m<br>Y: %{y:.0f}m<br>Vel: %{z:.1f} km/h<extra></extra>'
+        z=_zdata,
+        x=x_ctr, y=y_ctr,
+        colorscale=[
+            [0.0,  'rgba(0,0,128,0)'],
+            [0.2,  'rgba(0,80,200,0.35)'],
+            [0.45, 'rgba(0,200,100,0.6)'],
+            [0.7,  'rgba(255,200,0,0.75)'],
+            [0.88, 'rgba(255,80,0,0.88)'],
+            [1.0,  'rgba(200,0,0,1.0)'],
+        ],
+        zsmooth='best',
+        opacity=0.72,
+        name='Intensidade (Vel.)',
+        colorbar=dict(
+            title=dict(text='km/h', font=dict(color='white', size=10)),
+            tickfont=dict(color='white', size=9), x=1.02, len=0.55,
+        ),
+        hovertemplate='X: %{x:.0f}m<br>Y: %{y:.0f}m<br>Vel média: %{z:.1f} km/h<extra></extra>',
     ))
-    
+    fig.update_layout(title=dict(text=f"🔥 Mapa de Calor — {athlete_name}",
+                                  font=dict(color='white', size=13)))
     return fig
 
-def plotar_heatmap_presenca_campo(x_coords, y_coords, athlete_name):
-    """Plota mapa de calor de presença (frequência de posições) no campo"""
-    fig = desenhar_campo_futebol(105, 68)
 
+def plotar_heatmap_presenca_campo(x_coords, y_coords, athlete_name):
+    """Mapa de calor de presença com suavização gaussiana."""
+    fig = desenhar_campo_futebol(105, 68)
     if len(x_coords) == 0 or len(y_coords) == 0:
         return fig
 
-    x_edges = np.linspace(0, 105, 40)
-    y_edges = np.linspace(0, 68, 40)
+    _nx, _ny = 80, 52
+    x_edges = np.linspace(0, 105, _nx + 1)
+    y_edges = np.linspace(0,  68, _ny + 1)
+    x_ctr   = (x_edges[:-1] + x_edges[1:]) / 2
+    y_ctr   = (y_edges[:-1] + y_edges[1:]) / 2
 
-    counts, xedges, yedges = np.histogram2d(x_coords, y_coords, bins=[x_edges, y_edges])
+    counts, _, _ = np.histogram2d(x_coords, y_coords, bins=[x_edges, y_edges])
+    counts_smooth = _gf(counts, sigma=3.5)
+    _zdata = counts_smooth.T.copy()
+    _zdata[_zdata < _zdata.max() * 0.015] = np.nan
 
     fig.add_trace(go.Heatmap(
-        z=counts.T,
-        x=xedges[:-1],
-        y=yedges[:-1],
-        colorscale='YlOrRd',
-        opacity=0.65,
+        z=_zdata,
+        x=x_ctr, y=y_ctr,
+        colorscale=[
+            [0.0,  'rgba(0,0,80,0)'],
+            [0.25, 'rgba(0,100,200,0.4)'],
+            [0.5,  'rgba(0,220,130,0.65)'],
+            [0.75, 'rgba(255,180,0,0.8)'],
+            [1.0,  'rgba(200,0,0,1.0)'],
+        ],
+        zsmooth='best',
+        opacity=0.7,
         name='Presença',
-        colorbar=dict(title=dict(text="Frequência"), x=1.05, len=0.5),
-        hovertemplate='X: %{x:.0f}m<br>Y: %{y:.0f}m<br>Frequência: %{z:.0f}<extra></extra>'
+        colorbar=dict(
+            title=dict(text='Freq.', font=dict(color='white', size=10)),
+            tickfont=dict(color='white', size=9), x=1.02, len=0.55,
+        ),
+        hovertemplate='X: %{x:.0f}m<br>Y: %{y:.0f}m<br>Frequência: %{z:.0f}<extra></extra>',
     ))
-
-    fig.update_layout(title=f"🔥 Mapa de Calor de Presença — {athlete_name}")
+    fig.update_layout(title=dict(text=f"🔥 Presença — {athlete_name}",
+                                  font=dict(color='white', size=13)))
     return fig
 
 
@@ -1306,80 +1343,133 @@ def desenhar_campo_futebol_bonito(field_length=105, field_width=68, margin=3, ti
     cy = FW / 2  # centro y
     fig = go.Figure()
 
-    # Fundo externo
-    fig.add_shape(type="rect", x0=-MG-4, y0=-MG-2, x1=FL+MG+4, y1=FW+MG+2,
-                  fillcolor="#1a3a18", line_width=0, layer="below")
+    # ── Fundo externo (borda escura ao redor do campo) ───────────────
+    fig.add_shape(type="rect", x0=-MG-5, y0=-MG-3, x1=FL+MG+5, y1=FW+MG+3,
+                  fillcolor="#111f10", line_width=0, layer="below")
 
-    # Faixas verdes alternadas no campo de jogo
-    n_st, sw = 10, FL / 10
-    cores_faixa = ["#2d7828", "#257022"]
+    # ── Faixas verdes alternadas — trama de gramado ──────────────────
+    n_st, sw = 12, FL / 12
+    cores_faixa = ["#2a7325", "#236b1e"]           # ligeiramente mais escuras / distintas
     for i in range(n_st):
         fig.add_shape(type="rect", x0=i*sw, y0=0, x1=(i+1)*sw, y1=FW,
                       fillcolor=cores_faixa[i % 2], line_width=0, layer="below")
 
-    # Perímetro principal
-    fig.add_shape(type="rect", x0=0, y0=0, x1=FL, y1=FW,
-                  line=dict(color="white", width=2), fillcolor="rgba(0,0,0,0)")
+    # ── Glow suave nas linhas brancas (duplicata desfocada) ──────────
+    _gkw = dict(fillcolor="rgba(0,0,0,0)", layer="below")
+    def _glow(x0, y0, x1, y1):
+        fig.add_shape(type="rect", x0=x0-0.25, y0=y0-0.25, x1=x1+0.25, y1=y1+0.25,
+                      line=dict(color="rgba(255,255,255,0.12)", width=4), **_gkw)
 
-    # Linha central
+    _glow(0, 0, FL, FW)
+    _glow(FL/2, 0, FL/2, FW)
+
+    # ── Perímetro principal ──────────────────────────────────────────
+    fig.add_shape(type="rect", x0=0, y0=0, x1=FL, y1=FW,
+                  line=dict(color="white", width=2.5), fillcolor="rgba(0,0,0,0)")
+
+    # ── Linha central ────────────────────────────────────────────────
     fig.add_shape(type="line", x0=FL/2, y0=0, x1=FL/2, y1=FW,
                   line=dict(color="white", width=2))
 
-    # Círculo central (r = 9.15m)
-    th = np.linspace(0, 2*np.pi, 80)
+    # ── Círculo central (r = 9.15 m) ────────────────────────────────
+    th = np.linspace(0, 2*np.pi, 120)
+    # glow do círculo
     fig.add_trace(go.Scatter(x=FL/2 + 9.15*np.cos(th), y=cy + 9.15*np.sin(th),
-                             mode='lines', line=dict(color='white', width=1.5),
+                             mode='lines', line=dict(color='rgba(255,255,255,0.12)', width=4),
+                             showlegend=False, hoverinfo='skip', name='_circg'))
+    fig.add_trace(go.Scatter(x=FL/2 + 9.15*np.cos(th), y=cy + 9.15*np.sin(th),
+                             mode='lines', line=dict(color='white', width=1.8),
                              showlegend=False, hoverinfo='skip', name='_circ'))
-    # Ponto central
+
+    # ── Ponto central ────────────────────────────────────────────────
     fig.add_trace(go.Scatter(x=[FL/2], y=[cy], mode='markers',
-                             marker=dict(size=5, color='white'),
+                             marker=dict(size=7, color='white',
+                                         line=dict(color='rgba(0,0,0,0.5)', width=1)),
                              showlegend=False, hoverinfo='skip', name='_ctr'))
 
-    # Área de penalidade (16.5m × 40.32m)
+    # ── Área de penalidade (16.5 m × 40.32 m) ───────────────────────
     for x0, x1 in [(0, 16.5), (FL-16.5, FL)]:
+        _glow(x0, cy-20.16, x1, cy+20.16)
         fig.add_shape(type="rect", x0=x0, y0=cy-20.16, x1=x1, y1=cy+20.16,
-                      line=dict(color="white", width=1.5), fillcolor="rgba(0,0,0,0)")
+                      line=dict(color="white", width=1.8), fillcolor="rgba(0,0,0,0)")
 
-    # Área pequena (5.5m × 18.32m)
+    # ── Área pequena (5.5 m × 18.32 m) ──────────────────────────────
     for x0, x1 in [(0, 5.5), (FL-5.5, FL)]:
         fig.add_shape(type="rect", x0=x0, y0=cy-9.16, x1=x1, y1=cy+9.16,
                       line=dict(color="white", width=1.5), fillcolor="rgba(0,0,0,0)")
 
-    # Arcos de penalidade (r = 9.15m, apenas fora da área de penalidade)
-    th_full = np.linspace(0, 2*np.pi, 200)
+    # ── Arcos de penalidade (r = 9.15 m, fora da área) ───────────────
+    th_full = np.linspace(0, 2*np.pi, 240)
     for px_p, lado in [(11, 'esq'), (FL-11, 'dir')]:
         arc_x = px_p + 9.15*np.cos(th_full)
-        arc_y = cy + 9.15*np.sin(th_full)
+        arc_y = cy  + 9.15*np.sin(th_full)
         mask = (arc_x > 16.5) if lado == 'esq' else (arc_x < FL-16.5)
         if mask.sum() > 1:
+            fig.add_trace(go.Scatter(x=arc_x[mask], y=arc_y[mask],
+                                     mode='lines',
+                                     line=dict(color='rgba(255,255,255,0.1)', width=4),
+                                     showlegend=False, hoverinfo='skip', name='_parcg'))
             fig.add_trace(go.Scatter(x=arc_x[mask], y=arc_y[mask],
                                      mode='lines', line=dict(color='white', width=1.5),
                                      showlegend=False, hoverinfo='skip', name='_parc'))
 
-    # Pontos de penalidade
+    # ── Pontos de penalidade ─────────────────────────────────────────
     for px_p in [11, FL-11]:
         fig.add_trace(go.Scatter(x=[px_p], y=[cy], mode='markers',
-                                 marker=dict(size=6, color='white'),
+                                 marker=dict(size=7, color='white',
+                                             line=dict(color='rgba(0,0,0,0.4)', width=1)),
                                  showlegend=False, hoverinfo='skip', name='_pen'))
 
-    # Arcos de canto (r = 1m)
-    corners_def = [(0, 0, 0, np.pi/2), (FL, 0, np.pi/2, np.pi),
-                   (FL, FW, np.pi, 3*np.pi/2), (0, FW, 3*np.pi/2, 2*np.pi)]
+    # ── Arcos de canto (r = 1 m) ─────────────────────────────────────
+    corners_def = [(0,  0,  0,       np.pi/2),
+                   (FL, 0,  np.pi/2, np.pi),
+                   (FL, FW, np.pi,   3*np.pi/2),
+                   (0,  FW, 3*np.pi/2, 2*np.pi)]
     for cx_c, cy_c, a1, a2 in corners_def:
-        th_c = np.linspace(a1, a2, 20)
+        th_c = np.linspace(a1, a2, 25)
         fig.add_trace(go.Scatter(x=cx_c + np.cos(th_c), y=cy_c + np.sin(th_c),
                                  mode='lines', line=dict(color='white', width=1.5),
                                  showlegend=False, hoverinfo='skip', name='_corner'))
 
-    # Gols (7.32m × 2.44m) — dourado
-    gd_line = dict(color="#FFD700", width=3)
-    fig.add_shape(type="rect", x0=-2.44, y0=cy-3.66, x1=0,   y1=cy+3.66, line=dict(**gd_line))
-    fig.add_shape(type="rect", x0=FL,   y0=cy-3.66, x1=FL+2.44, y1=cy+3.66, line=dict(**gd_line))
+    # ── Corner flag posts (bandeirinhas) ────────────────────────────
+    for fcx, fcy in [(0, 0), (FL, 0), (FL, FW), (0, FW)]:
+        fig.add_trace(go.Scatter(x=[fcx], y=[fcy], mode='markers',
+                                 marker=dict(size=8, color='#FFD700', symbol='diamond',
+                                             line=dict(color='rgba(0,0,0,0.5)', width=1)),
+                                 showlegend=False, hoverinfo='skip', name='_flag'))
 
-    # Labels das linhas
-    lkw = dict(showarrow=False, font=dict(color='rgba(255,255,255,0.55)', size=9))
+    # ── Gols — rede (fill cinza) + borda dourada ─────────────────────
+    # Rede (fill)
+    fig.add_shape(type="rect", x0=-2.44, y0=cy-3.66, x1=0,      y1=cy+3.66,
+                  fillcolor="rgba(200,200,200,0.12)", line_width=0, layer="below")
+    fig.add_shape(type="rect", x0=FL,    y0=cy-3.66, x1=FL+2.44, y1=cy+3.66,
+                  fillcolor="rgba(200,200,200,0.12)", line_width=0, layer="below")
+    # Grade da rede (linhas horizontais)
+    net_y_lines = np.linspace(cy-3.66, cy+3.66, 6)
+    for _ny in net_y_lines:
+        fig.add_shape(type="line", x0=-2.44, y0=_ny, x1=0, y1=_ny,
+                      line=dict(color="rgba(180,180,180,0.25)", width=0.5))
+        fig.add_shape(type="line", x0=FL, y0=_ny, x1=FL+2.44, y1=_ny,
+                      line=dict(color="rgba(180,180,180,0.25)", width=0.5))
+    # Grade da rede (linhas verticais)
+    net_x_left  = np.linspace(-2.44, 0, 5)
+    net_x_right = np.linspace(FL, FL+2.44, 5)
+    for _nx in net_x_left:
+        fig.add_shape(type="line", x0=_nx, y0=cy-3.66, x1=_nx, y1=cy+3.66,
+                      line=dict(color="rgba(180,180,180,0.25)", width=0.5))
+    for _nx in net_x_right:
+        fig.add_shape(type="line", x0=_nx, y0=cy-3.66, x1=_nx, y1=cy+3.66,
+                      line=dict(color="rgba(180,180,180,0.25)", width=0.5))
+    # Borda dourada dos gols
+    gd_line = dict(color="#FFD700", width=2.5)
+    fig.add_shape(type="rect", x0=-2.44, y0=cy-3.66, x1=0,      y1=cy+3.66, line=gd_line)
+    fig.add_shape(type="rect", x0=FL,    y0=cy-3.66, x1=FL+2.44, y1=cy+3.66, line=gd_line)
+
+    # ── Labels das linhas ────────────────────────────────────────────
+    lkw = dict(showarrow=False, font=dict(color='rgba(255,255,255,0.45)', size=8,
+                                           family='Inter, sans-serif'))
     for xl, txt in [(0, "GL"), (FL/2, "50m"), (FL, "GL")]:
-        fig.add_annotation(x=xl, y=-2.5, text=txt, **lkw)
+        fig.add_annotation(x=xl, y=-2.2, text=txt, **lkw)
 
     # ── Seta de direção de ataque ────────────────────────────────────────────
     if attack_direction == 'left_to_right':
@@ -4018,9 +4108,188 @@ def plotar_acwr(df_acwr):
     return fig
 
 
+# ─── Design helpers ────────────────────────────────────────────────────────────
+def _hr(label: str = "", icon: str = ""):
+    """Divisor de seção temático com ícone e label."""
+    _inner = f"{icon}&nbsp;&nbsp;{label}" if (icon or label) else ""
+    st.markdown(
+        f'<div class="app-divider">{_inner}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _badge(pos: str) -> str:
+    """Retorna HTML de badge colorido por posição."""
+    _pos_l = (pos or "").lower()
+    if any(k in _pos_l for k in ('goleiro', 'goalkeeper', 'gk', 'portero', 'gardien')):
+        return f'<span class="badge-pos badge-gk">{pos}</span>'
+    if any(k in _pos_l for k in ('defens', 'zagueiro', 'lateral', 'defender', 'back')):
+        return f'<span class="badge-pos badge-def">{pos}</span>'
+    if any(k in _pos_l for k in ('meia', 'meio', 'midfield', 'volante', 'centrocampista')):
+        return f'<span class="badge-pos badge-mid">{pos}</span>'
+    if any(k in _pos_l for k in ('atacante', 'forward', 'striker', 'winger', 'delantero')):
+        return f'<span class="badge-pos badge-fwd">{pos}</span>'
+    return f'<span class="badge-pos badge-gen">{pos}</span>'
+
+
 def main():
-    st.title(t("app_title"))
-    st.markdown(f"### {t('app_subtitle')}")
+    # ═══════════════════════════════════════════════════════════════════
+    # DESIGN SYSTEM — CSS global injetado uma vez por sessão
+    # ═══════════════════════════════════════════════════════════════════
+    st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* ─ Tipografia global ─────────────────────────────────────────── */
+html, body, [class*="css"], .stApp, .stMarkdown, .stCaption,
+button, input, select, textarea, label {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+}
+
+/* ─ Fade-in na área principal ──────────────────────────────────── */
+@keyframes _fadeUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0);    }
+}
+.main .block-container { animation: _fadeUp 0.35s ease-out; }
+
+/* ─ Tabs estilo pill ───────────────────────────────────────────── */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 4px;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    padding-bottom: 6px;
+    background: transparent;
+    flex-wrap: wrap;
+}
+.stTabs [data-baseweb="tab"] {
+    border-radius: 20px !important;
+    padding: 5px 15px !important;
+    background: rgba(255,255,255,0.05) !important;
+    color: rgba(255,255,255,0.55) !important;
+    border: 1px solid rgba(255,255,255,0.08) !important;
+    font-size: 0.79rem !important;
+    font-weight: 500 !important;
+    transition: all 0.18s ease !important;
+    white-space: nowrap;
+}
+.stTabs [data-baseweb="tab"]:hover {
+    background: rgba(46,134,193,0.15) !important;
+    color: rgba(255,255,255,0.88) !important;
+}
+.stTabs [aria-selected="true"] {
+    background: linear-gradient(135deg, #1a5276 0%, #2471a3 100%) !important;
+    color: white !important;
+    border-color: rgba(46,134,193,0.45) !important;
+    box-shadow: 0 2px 10px rgba(36,113,163,0.38) !important;
+}
+
+/* ─ Metric cards ───────────────────────────────────────────────── */
+[data-testid="metric-container"] {
+    background: rgba(255,255,255,0.03) !important;
+    border: 1px solid rgba(255,255,255,0.07) !important;
+    border-radius: 10px !important;
+    padding: 10px 14px !important;
+    transition: border-color 0.2s, box-shadow 0.2s !important;
+}
+[data-testid="metric-container"]:hover {
+    border-color: rgba(46,134,193,0.35) !important;
+    box-shadow: 0 0 14px rgba(46,134,193,0.13) !important;
+}
+
+/* ─ Expanders ──────────────────────────────────────────────────── */
+details[data-testid="stExpander"] {
+    border: 1px solid rgba(255,255,255,0.08) !important;
+    border-radius: 10px !important;
+    background: rgba(255,255,255,0.015) !important;
+    overflow: hidden;
+}
+details[data-testid="stExpander"] summary { font-weight: 500; }
+details[data-testid="stExpander"] summary:hover { color: #5dade2 !important; }
+
+/* ─ Divisores temáticos ────────────────────────────────────────── */
+.app-divider {
+    display: flex; align-items: center; gap: 10px;
+    margin: 18px 0 14px 0; color: rgba(255,255,255,0.22);
+    font-size: 0.68rem; font-weight: 600;
+    letter-spacing: 1.8px; text-transform: uppercase;
+}
+.app-divider::before, .app-divider::after {
+    content: ''; flex: 1;
+    border-top: 1px solid rgba(255,255,255,0.07);
+}
+
+/* ─ Badges de posição ──────────────────────────────────────────── */
+.badge-gk  { display:inline-block;padding:2px 9px;border-radius:12px;font-size:0.7rem;font-weight:600;
+             background:#1a237e;border:1px solid #5c6bc0;color:white; }
+.badge-def { display:inline-block;padding:2px 9px;border-radius:12px;font-size:0.7rem;font-weight:600;
+             background:#1b5e20;border:1px solid #43a047;color:white; }
+.badge-mid { display:inline-block;padding:2px 9px;border-radius:12px;font-size:0.7rem;font-weight:600;
+             background:#e65100;border:1px solid #fb8c00;color:white; }
+.badge-fwd { display:inline-block;padding:2px 9px;border-radius:12px;font-size:0.7rem;font-weight:600;
+             background:#880e4f;border:1px solid #e91e8c;color:white; }
+.badge-gen { display:inline-block;padding:2px 9px;border-radius:12px;font-size:0.7rem;font-weight:600;
+             background:#263238;border:1px solid #546e7a;color:white; }
+
+/* ─ Sidebar ────────────────────────────────────────────────────── */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #0a0f18 0%, #0d1520 100%) !important;
+    border-right: 1px solid rgba(255,255,255,0.05) !important;
+}
+
+/* ─ Botões ─────────────────────────────────────────────────────── */
+.stButton > button {
+    border-radius: 8px !important;
+    font-weight: 500 !important;
+    font-family: 'Inter', sans-serif !important;
+    transition: all 0.18s ease !important;
+}
+.stButton > button:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.35) !important;
+}
+
+/* ─ Scrollbar ──────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: rgba(255,255,255,0.02); }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.11); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+</style>
+""", unsafe_allow_html=True)
+
+    # ─── Header branded ──────────────────────────────────────────────────
+    st.markdown(f"""
+<div style="
+    background: linear-gradient(135deg,#0d1b2a 0%,#152235 55%,#0d1b2a 100%);
+    border-radius:14px; padding:22px 28px; margin-bottom:24px;
+    border:1px solid rgba(46,134,193,0.22);
+    box-shadow:0 4px 28px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.04);
+    display:flex; align-items:center; gap:18px;
+">
+  <div style="font-size:2.8rem;line-height:1;
+              filter:drop-shadow(0 0 10px rgba(255,255,255,0.25))">⚽</div>
+  <div style="flex:1;min-width:0">
+    <div style="font-family:'Inter',sans-serif;font-size:1.5rem;font-weight:700;
+                color:white;letter-spacing:-0.4px;line-height:1.2">
+      Futebol Eventos
+      <span style="color:#5dade2;font-weight:400"> — Catapult Sports</span>
+    </div>
+    <div style="font-family:'Inter',sans-serif;font-size:0.8rem;
+                color:rgba(255,255,255,0.4);margin-top:5px;font-weight:400;
+                white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+      {t('app_subtitle')}
+    </div>
+  </div>
+  <div style="text-align:right;flex-shrink:0">
+    <div style="font-size:0.63rem;color:rgba(255,255,255,0.22);
+                font-weight:600;letter-spacing:1.8px;text-transform:uppercase">
+      Catapult API v6
+    </div>
+    <div style="font-size:0.75rem;color:#2ecc71;margin-top:4px;font-weight:600">
+      ● Online
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
     # Inicializar session state
     if 'df_athletes' not in st.session_state:
@@ -5349,9 +5618,9 @@ Escolha um ou mais atletas para análise simultânea.
                     for r in resultados:
                         max_vel = max(max_vel, r.get('Velocidade Máx (km/h)', 0))
                 st.metric("💨 Velocidade Máx", f"{max_vel:.1f} km/h")
-            
-            st.markdown("---")
-            
+
+            _hr("ANÁLISE", "📊")
+
             _main_tabs = st.tabs([
                 "🏠 Resumo",
                 "🗺️ Campo & GPS",
@@ -5458,26 +5727,47 @@ Escolha um ou mais atletas para análise simultânea.
                         if _n_periodos_ov > 1:
                             st.caption(f"📋 Valores combinados de **{_n_periodos_ov} períodos** — somas, máximos e médias ponderadas por atleta.")
 
-                        st.markdown("---")
+                        _hr("DISTÂNCIA POR ATLETA", "📏")
 
-                        # ── Gráfico de barras — distância combinada ────────────────
+                        # ── Gráfico de barras — distância combinada (gradiente %) ─
                         if 'Atleta' in _df_ov.columns and 'Distância (m)' in _df_ov.columns:
                             _fig_ov = go.Figure()
+                            _dist_vals = _df_ov['Distância (m)'].values
+                            _dmin, _dmax = _dist_vals.min(), _dist_vals.max()
+                            _drng = max(_dmax - _dmin, 1)
+                            # Gradiente azul-escuro → ciano brilhante baseado no percentil
+                            def _bar_color(_v):
+                                _t = (_v - _dmin) / _drng          # 0=pior, 1=melhor
+                                _r = int(21  + _t * (0   - 21))
+                                _g = int(101 + _t * (229 - 101))
+                                _b = int(192 + _t * (255 - 192))
+                                return f'rgb({_r},{_g},{_b})'
+                            _bar_colors = [_bar_color(v) for v in _dist_vals]
                             _fig_ov.add_trace(go.Bar(
-                                x=_df_ov['Atleta'], y=_df_ov['Distância (m)'],
-                                marker_color=[st.session_state.get('athlete_colors', {}).get(a, '#2196F3') for a in _df_ov['Atleta']],
-                                text=_df_ov['Distância (m)'].round(0), textposition='outside',
-                                hovertemplate='%{x}<br>Distância total: %{y:.0f} m<extra></extra>',
+                                x=_df_ov['Atleta'], y=_dist_vals,
+                                marker=dict(
+                                    color=_bar_colors,
+                                    line=dict(color='rgba(255,255,255,0.08)', width=1),
+                                ),
+                                text=_dist_vals.round(0).astype(int),
+                                textposition='outside',
+                                textfont=dict(color='white', size=10),
+                                hovertemplate='<b>%{x}</b><br>Distância: %{y:.0f} m<extra></extra>',
                             ))
                             _fig_ov.update_layout(
                                 title=dict(
                                     text=f'Distância Total por Atleta ({_n_periodos_ov} período(s) combinado(s))',
-                                    font=dict(color='white', size=14)
+                                    font=dict(color='white', size=14, family='Inter, sans-serif')
                                 ),
                                 plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
-                                font=dict(color='white'), xaxis=dict(gridcolor='#333', tickangle=-30),
-                                yaxis=dict(gridcolor='#333'), height=320, margin=dict(t=45,b=80,l=10,r=10),
+                                font=dict(color='white', family='Inter, sans-serif'),
+                                xaxis=dict(gridcolor='rgba(255,255,255,0.06)',
+                                           tickangle=-30, tickfont=dict(size=10)),
+                                yaxis=dict(gridcolor='rgba(255,255,255,0.06)',
+                                           title='metros'),
+                                height=330, margin=dict(t=50, b=80, l=10, r=10),
                                 showlegend=False,
+                                bargap=0.28,
                             )
                             st.plotly_chart(_fig_ov, use_container_width=True)
 
@@ -5502,7 +5792,7 @@ Escolha um ou mais atletas para análise simultânea.
                             _df_ov['%Vmax'] = _df_ov.apply(_pct_vmax_ov, axis=1)
 
                         # ── Tabela Descritiva com coloração por percentil ─────────
-                        st.markdown("---")
+                        _hr("TABELA DESCRITIVA DE DESEMPENHO", "📋")
                         st.subheader("📋 Tabela Descritiva de Desempenho")
                         st.caption("Coloração por percentil do grupo: 🟢 Top 33% · 🟡 Médio · 🔴 Bottom 33%")
                         st.caption("ℹ️ **RHIE** — Repeated High Intensity Efforts · **HSR** — Dist. >19 km/h · **M/min** — Metros por minuto (elite: 110–130)")
@@ -5647,8 +5937,7 @@ Escolha um ou mais atletas para análise simultânea.
                 else:
                     _gc_atletas_pos_filtro = None   # sem filtro → todos os atletas
 
-                st.markdown("---")
-                st.markdown("### Modo de Comparação")
+                _hr("MODO DE COMPARAÇÃO", "🔀")
 
                 modo_comparacao = st.radio(
                     "Escolha o tipo de comparação:",
@@ -5834,7 +6123,7 @@ Escolha um ou mais atletas para análise simultânea.
                             st.dataframe(df_comparativo, use_container_width=True)
 
                 # ── #15: Análise de Duplas / Linhas ───────────────────────────
-                st.markdown("---")
+                _hr("ANÁLISE DE DUPLAS E LINHAS", "🤝")
                 st.markdown("## 🤝 Análise de Duplas e Linhas")
                 st.caption(
                     "Selecione 2–6 atletas (uma linha, dupla de zaga, dupla de ataque…) "
@@ -11806,11 +12095,20 @@ Escolha um ou mais atletas para análise simultânea.
                                 _tl_color = _tl_palette[_tli % len(_tl_palette)]
                                 _x_min_tl = [i / (_wcs2_hz * 60) for i in range(len(_roll_tl))]
                                 _pk_idx   = int(np.argmax(_roll_tl))
-                                # Série principal
+                                # Série principal com área sombreada
+                                import re as _re
+                                def _hex_to_rgba(_h, _a):
+                                    _h = _h.lstrip('#')
+                                    _r,_g,_b = (int(_h[i:i+2],16) for i in (0,2,4))
+                                    return f'rgba({_r},{_g},{_b},{_a})'
+                                _fill_c = (_hex_to_rgba(_tl_color, 0.13)
+                                           if _tl_color.startswith('#')
+                                           else _tl_color.replace('rgb(','rgba(').replace(')',',0.13)'))
                                 _fig_tl.add_trace(go.Scatter(
                                     x=_x_min_tl, y=_roll_tl,
                                     mode='lines', name=_tla,
-                                    line=dict(color=_tl_color, width=2),
+                                    line=dict(color=_tl_color, width=2.2),
+                                    fill='tozeroy', fillcolor=_fill_c,
                                 ))
                                 # Marca o pico
                                 _fig_tl.add_trace(go.Scatter(
