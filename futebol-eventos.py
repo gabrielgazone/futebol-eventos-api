@@ -9171,6 +9171,132 @@ Escolha um ou mais atletas para análise simultânea.
 
                         st.markdown("---")
 
+                        # ── Qualidade dos Eventos de Desaceleração ────────────
+                        st.markdown("### 🔴 Qualidade de Desaceleração")
+                        st.caption(
+                            "Cada evento de desaceleração (cruzar −2 m/s² por ≥0.3 s) é "
+                            "caracterizado por: pico, impulso (área sob a curva), velocidade "
+                            "de entrada e duração. Mostra SE os esforços de frenagem mantêm "
+                            "qualidade ao longo do jogo."
+                        )
+                        _qd_atl = st.selectbox("Atleta:", _av_atletas_disp, key="qd_atleta")
+                        if _av_per == _AV_TODOS:
+                            _qd_pts: list = []
+                            for _pv in dados_sensor_por_atleta_por_periodo.values():
+                                _qd_pts += _pv.get(_qd_atl, [])
+                        else:
+                            _qd_pts = dados_sensor_por_atleta_por_periodo.get(_av_per, {}).get(_qd_atl, [])
+
+                        _qd_vs = np.array([float(p.get('v') or 0) * 3.6 for p in _qd_pts])
+                        _qd_as = np.array([float(p.get('a') or 0) for p in _qd_pts])
+                        _qd_ts = np.array([float(p.get('ts') or 0) for p in _qd_pts])
+
+                        if len(_qd_as) > 10:
+                            # Detectar eventos de desaceleração: a < -2 m/s² por ≥ 3 amostras
+                            _qd_eventos = []
+                            _qd_in_event = False
+                            _qd_start = 0
+                            _qd_THRESH = 2.0   # limiar absoluto
+                            _qd_MIN_DUR = 3    # amostras mínimas
+                            for _qi in range(len(_qd_as)):
+                                if not _qd_in_event and _qd_as[_qi] <= -_qd_THRESH:
+                                    _qd_in_event = True
+                                    _qd_start = _qi
+                                elif _qd_in_event and (_qd_as[_qi] > -_qd_THRESH or _qi == len(_qd_as) - 1):
+                                    _qd_end = _qi
+                                    if _qd_end - _qd_start >= _qd_MIN_DUR:
+                                        _seg_ad = _qd_as[_qd_start:_qd_end]
+                                        _seg_vd = _qd_vs[_qd_start:_qd_end]
+                                        _seg_td = _qd_ts[_qd_start:_qd_end]
+                                        _qd_eventos.append({
+                                            'inicio_min': (_seg_td[0] - _qd_ts[0]) / 60,
+                                            'pico_d': float(abs(np.min(_seg_ad))),   # valor absoluto do pico
+                                            'impulso': float(np.trapezoid(np.abs(_seg_ad), dx=0.1)),
+                                            'vel_entrada': float(_seg_vd[0]),
+                                            'duracao_s': float(len(_seg_ad) * 0.1),
+                                        })
+                                    _qd_in_event = False
+
+                            if _qd_eventos:
+                                _df_qd = pd.DataFrame(_qd_eventos)
+                                _qd_kc1, _qd_kc2, _qd_kc3, _qd_kc4 = st.columns(4)
+                                _qd_kc1.metric("Total de Eventos",      len(_qd_eventos))
+                                _qd_kc2.metric("Pico de Desaceleração", f"{_df_qd['pico_d'].max():.2f} m/s²")
+                                _qd_kc3.metric("Impulso Médio",         f"{_df_qd['impulso'].mean():.2f} m/s")
+                                _qd_kc4.metric("Vel. Entrada Média",    f"{_df_qd['vel_entrada'].mean():.1f} km/h")
+
+                                _qd_c1, _qd_c2 = st.columns(2)
+                                with _qd_c1:
+                                    # Scatter: tempo × pico_d colorido por impulso
+                                    _fig_qd_sc = go.Figure()
+                                    _fig_qd_sc.add_trace(go.Scatter(
+                                        x=_df_qd['inicio_min'], y=_df_qd['pico_d'],
+                                        mode='markers',
+                                        marker=dict(
+                                            size=_df_qd['impulso'].clip(3, 20),
+                                            color=_df_qd['impulso'],
+                                            colorscale='RdYlGn_r',
+                                            showscale=True,
+                                            colorbar=dict(
+                                                title=dict(text='Impulso (m/s)', font=dict(color='white')),
+                                                tickfont=dict(color='white'),
+                                            ),
+                                        ),
+                                        customdata=_df_qd[['impulso', 'vel_entrada', 'duracao_s']].values,
+                                        hovertemplate=(
+                                            'Min: %{x:.1f}<br>'
+                                            'Pico Dec: %{y:.2f} m/s²<br>'
+                                            'Impulso: %{customdata[0]:.2f} m/s<br>'
+                                            'Vel entrada: %{customdata[1]:.1f} km/h<br>'
+                                            'Duração: %{customdata[2]:.2f} s<extra></extra>'
+                                        ),
+                                    ))
+                                    # Linha de tendência
+                                    if len(_df_qd) >= 4:
+                                        _qd_z = np.polyfit(_df_qd['inicio_min'], _df_qd['pico_d'], 1)
+                                        _qd_xfit = np.linspace(_df_qd['inicio_min'].min(),
+                                                               _df_qd['inicio_min'].max(), 50)
+                                        _fig_qd_sc.add_trace(go.Scatter(
+                                            x=_qd_xfit, y=np.polyval(_qd_z, _qd_xfit),
+                                            mode='lines', name='Tendência',
+                                            line=dict(color='#FFD700', width=2, dash='dash'),
+                                        ))
+                                    _fig_qd_sc.update_layout(
+                                        title=dict(text='Pico de Desaceleração ao Longo do Jogo',
+                                                   font=dict(color='white', size=13)),
+                                        paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+                                        font=dict(color='white'),
+                                        xaxis=dict(title='Tempo (min)', gridcolor='#333'),
+                                        yaxis=dict(title='Pico de Desaceleração (m/s²)', gridcolor='#333'),
+                                        height=340, margin=dict(t=45, b=10), showlegend=False,
+                                    )
+                                    st.plotly_chart(_fig_qd_sc, use_container_width=True)
+
+                                with _qd_c2:
+                                    # Histograma de velocidade de entrada
+                                    _fig_qd_hist = go.Figure()
+                                    _fig_qd_hist.add_trace(go.Histogram(
+                                        x=_df_qd['vel_entrada'], nbinsx=12,
+                                        marker=dict(color=cor_atleta(_qd_atl), opacity=0.8,
+                                                    line=dict(color='white', width=0.5)),
+                                        name='Vel. Entrada',
+                                        hovertemplate='%{x:.1f} km/h: %{y} eventos<extra></extra>',
+                                    ))
+                                    _fig_qd_hist.update_layout(
+                                        title=dict(text='Velocidade de Entrada nos Eventos de Dec.',
+                                                   font=dict(color='white', size=13)),
+                                        paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+                                        font=dict(color='white'),
+                                        xaxis=dict(title='Velocidade (km/h)', gridcolor='#333'),
+                                        yaxis=dict(title='Nº de Eventos', gridcolor='#333'),
+                                        height=340, margin=dict(t=45, b=10), showlegend=False,
+                                    )
+                                    st.plotly_chart(_fig_qd_hist, use_container_width=True)
+                            else:
+                                st.info("Nenhum evento de desaceleração <−2 m/s² detectado para este atleta/período.")
+
+                        st.markdown("---")
+
                         # ── #11: Player Load Direcional ───────────────────────
                         st.markdown("### 📐 Player Load Direcional")
                         st.caption(
