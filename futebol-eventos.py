@@ -12350,6 +12350,8 @@ Escolha um ou mais atletas para análise simultânea.
                                                               family='monospace'),
                                                     xanchor='center', yanchor='middle',
                                                 )
+                                        # altura: cada linha precisa de ~80px + 160px de margens
+                                        _h_diff = max(260, len(_diff_ys) * 80 + 160)
                                         _fig_diff.update_layout(
                                             title=dict(
                                                 text='Variação % entre Períodos',
@@ -12358,18 +12360,22 @@ Escolha um ou mais atletas para análise simultânea.
                                             plot_bgcolor='#0e1117',
                                             paper_bgcolor='#0e1117',
                                             font=dict(color='white'),
-                                            height=max(160, len(_diff_ys) * 70 + 110),
-                                            margin=dict(t=50, b=100, l=10, r=10),
-                                            xaxis=dict(tickangle=-35,
-                                                       tickfont=dict(size=9,
-                                                                     color='white'),
-                                                       color='white'),
-                                            yaxis=dict(color='white'),
+                                            height=_h_diff,
+                                            margin=dict(t=45, b=110, l=10, r=10),
+                                            xaxis=dict(
+                                                tickangle=-35,
+                                                tickfont=dict(size=9, color='white'),
+                                                color='white',
+                                            ),
+                                            yaxis=dict(
+                                                color='white',
+                                                tickfont=dict(size=10),
+                                            ),
                                         )
                                         st.plotly_chart(_fig_diff, use_container_width=True)
                                         st.caption(
-                                            "🟢 Verde = menos carga no 2º período  "
-                                            "🔴 Vermelho = maior carga (atenção à fadiga)"
+                                            "🟢 Verde = queda de demanda no período seguinte  "
+                                            "🔴 Vermelho = aumento de demanda (atenção à fadiga)"
                                         )
                             else:
                                 st.info("Dados insuficientes para comparar períodos com esta janela.")
