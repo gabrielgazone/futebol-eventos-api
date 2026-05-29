@@ -11917,24 +11917,56 @@ Escolha um ou mais atletas para análise simultânea.
                             _df_ppw = pd.DataFrame(_ppw_data).T
                             _df_ppw.index.name = 'Período'
                             if not _df_ppw.empty and _df_ppw.notna().any().any():
-                                _z_ppw  = _df_ppw.values.tolist()
-                                _txt_ppw = [[f"{v:.1f}" if v is not None else "—"
-                                             for v in row] for row in _z_ppw]
+                                _z_ppw      = _df_ppw.values.tolist()
+                                _aths_ppw   = _df_ppw.columns.tolist()
+                                _pers_ppw   = _df_ppw.index.tolist()
+
+                                # Limites globais para escala
+                                _all_ppw  = [v for row in _z_ppw for v in row if v is not None]
+                                _zmin_ppw = min(_all_ppw) if _all_ppw else 0
+                                _zmax_ppw = max(_all_ppw) if _all_ppw else 1
+
+                                # ── Heatmap principal (sem texttemplate) ──────────────
                                 _fig_ppw = go.Figure(data=go.Heatmap(
                                     z=_z_ppw,
-                                    x=_df_ppw.columns.tolist(),
-                                    y=_df_ppw.index.tolist(),
+                                    x=_aths_ppw,
+                                    y=_pers_ppw,
                                     colorscale='RdYlGn_r',
-                                    text=_txt_ppw,
-                                    texttemplate='%{text}',
-                                    textfont=dict(size=11, color='white'),
-                                    hovertemplate='%{y} — %{x}<br>WCS: %{text}<extra></extra>',
+                                    zmin=_zmin_ppw,
+                                    zmax=_zmax_ppw,
+                                    hovertemplate='%{y} — %{x}<br>WCS: %{z:.1f}<extra></extra>',
                                     showscale=True,
                                     colorbar=dict(
                                         title=dict(text=_wcs2_metric, font=dict(color='white')),
                                         tickfont=dict(color='white'),
                                     ),
                                 ))
+
+                                # Anotações por célula com cor de texto adaptativa:
+                                # RdYlGn_r: baixo→verde(escuro), meio→amarelo(claro), alto→vermelho(escuro)
+                                # Zona amarela (norm 0.25–0.75) → texto preto; demais → branco
+                                _rng_ppw = _zmax_ppw - _zmin_ppw if _zmax_ppw > _zmin_ppw else 1
+                                for _ri_a, _py_a in enumerate(_pers_ppw):
+                                    for _ci_a, _px_a in enumerate(_aths_ppw):
+                                        _v_a = _z_ppw[_ri_a][_ci_a]
+                                        if _v_a is None:
+                                            _lbl_a = '—'
+                                            _tc_a  = '#888888'
+                                        else:
+                                            _lbl_a = f'{_v_a:.1f}'
+                                            _norm_a = (_v_a - _zmin_ppw) / _rng_ppw
+                                            _tc_a   = ('#111111'
+                                                        if 0.25 < _norm_a < 0.75
+                                                        else 'white')
+                                        _fig_ppw.add_annotation(
+                                            x=_px_a, y=_py_a,
+                                            text=_lbl_a,
+                                            showarrow=False,
+                                            font=dict(size=11, color=_tc_a,
+                                                      family='monospace'),
+                                            xanchor='center', yanchor='middle',
+                                        )
+
                                 _fig_ppw.update_layout(
                                     title=dict(
                                         text=f"WCS por Período — {_wcs2_metric} ({_wcs2_min} min)",
@@ -11942,16 +11974,105 @@ Escolha um ou mais atletas para análise simultânea.
                                     ),
                                     plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
                                     font=dict(color='white'),
-                                    height=max(260, len(_wcs2_periodos) * 70 + 120),
+                                    height=max(260, len(_pers_ppw) * 70 + 120),
                                     margin=dict(t=50, b=100, l=10, r=10),
-                                    xaxis=dict(
-                                        tickangle=-35,
-                                        tickfont=dict(size=9, color='white'),
-                                        color='white',
-                                    ),
+                                    xaxis=dict(tickangle=-35,
+                                               tickfont=dict(size=9, color='white'),
+                                               color='white'),
                                     yaxis=dict(color='white'),
                                 )
                                 st.plotly_chart(_fig_ppw, use_container_width=True)
+
+                                # ── Heatmap de variação % entre períodos consecutivos ─
+                                if len(_pers_ppw) >= 2:
+                                    _diff_z    = []
+                                    _diff_lbls = []
+                                    _diff_ys   = []
+                                    for _pi_d in range(1, len(_pers_ppw)):
+                                        _p1d = _pers_ppw[_pi_d - 1]
+                                        _p2d = _pers_ppw[_pi_d]
+                                        _diff_ys.append(f'Δ% {_p1d}→{_p2d}')
+                                        _row_dz = []; _row_dl = []
+                                        for _ath_d in _aths_ppw:
+                                            _v1d = _ppw_data.get(_p1d, {}).get(_ath_d)
+                                            _v2d = _ppw_data.get(_p2d, {}).get(_ath_d)
+                                            if (_v1d is not None and _v2d is not None
+                                                    and _v1d > 0):
+                                                _dv = round((_v2d - _v1d) / _v1d * 100, 1)
+                                                _row_dz.append(_dv)
+                                                _row_dl.append(
+                                                    f'+{_dv:.1f}%' if _dv >= 0
+                                                    else f'{_dv:.1f}%'
+                                                )
+                                            else:
+                                                _row_dz.append(None)
+                                                _row_dl.append('—')
+                                        _diff_z.append(_row_dz)
+                                        _diff_lbls.append(_row_dl)
+
+                                    _all_dv = [v for row in _diff_z
+                                               for v in row if v is not None]
+                                    if _all_dv:
+                                        _absmax_d = max(abs(v) for v in _all_dv) or 10
+                                        _fig_diff = go.Figure(data=go.Heatmap(
+                                            z=_diff_z,
+                                            x=_aths_ppw,
+                                            y=_diff_ys,
+                                            colorscale='RdYlGn_r',
+                                            zmid=0,
+                                            zmin=-_absmax_d,
+                                            zmax=_absmax_d,
+                                            hovertemplate='%{y}<br>%{x}: %{z:+.1f}%<extra></extra>',
+                                            showscale=True,
+                                            colorbar=dict(
+                                                title=dict(text='Δ%',
+                                                           font=dict(color='white')),
+                                                tickfont=dict(color='white'),
+                                                ticksuffix='%',
+                                            ),
+                                        ))
+                                        # Anotações adaptativas para diff
+                                        for _ri_d2, _yd2 in enumerate(_diff_ys):
+                                            for _ci_d2, _xd2 in enumerate(_aths_ppw):
+                                                _vd2  = _diff_z[_ri_d2][_ci_d2]
+                                                _ld2  = _diff_lbls[_ri_d2][_ci_d2]
+                                                if _vd2 is None:
+                                                    _tcd2 = '#888888'
+                                                else:
+                                                    # norm em [-absmax, +absmax] → [0, 1]
+                                                    _nd2  = (_vd2 + _absmax_d) / (2 * _absmax_d)
+                                                    _tcd2 = ('#111111'
+                                                              if 0.25 < _nd2 < 0.75
+                                                              else 'white')
+                                                _fig_diff.add_annotation(
+                                                    x=_xd2, y=_yd2,
+                                                    text=_ld2,
+                                                    showarrow=False,
+                                                    font=dict(size=11, color=_tcd2,
+                                                              family='monospace'),
+                                                    xanchor='center', yanchor='middle',
+                                                )
+                                        _fig_diff.update_layout(
+                                            title=dict(
+                                                text='Variação % entre Períodos',
+                                                font=dict(color='white', size=13)
+                                            ),
+                                            plot_bgcolor='#0e1117',
+                                            paper_bgcolor='#0e1117',
+                                            font=dict(color='white'),
+                                            height=max(160, len(_diff_ys) * 70 + 110),
+                                            margin=dict(t=50, b=100, l=10, r=10),
+                                            xaxis=dict(tickangle=-35,
+                                                       tickfont=dict(size=9,
+                                                                     color='white'),
+                                                       color='white'),
+                                            yaxis=dict(color='white'),
+                                        )
+                                        st.plotly_chart(_fig_diff, use_container_width=True)
+                                        st.caption(
+                                            "🟢 Verde = menos carga no 2º período  "
+                                            "🔴 Vermelho = maior carga (atenção à fadiga)"
+                                        )
                             else:
                                 st.info("Dados insuficientes para comparar períodos com esta janela.")
 
