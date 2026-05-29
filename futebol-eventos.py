@@ -5625,7 +5625,6 @@ Escolha um ou mais atletas para análise simultânea.
                 "🏠 Resumo",
                 "🗺️ Campo & GPS",
                 "📈 Carga Física",
-                "📊 Estatísticas",
                 "📡 Ao Vivo",
             ])
 
@@ -5636,22 +5635,18 @@ Escolha um ou mais atletas para análise simultânea.
                 _sub_campo = st.tabs(["🗺️ Campo de Futebol", "🎬 História do Jogo", "⚡ WCS"])
             with _main_tabs[2]:
                 _sub_carga = st.tabs(["⏱️ Esforços", "📊 Janelas Temporais", "💪 Neuromuscular", "🏎️ Acc-Vel", "❤️ FC"])
-            with _main_tabs[3]:
-                _sub_stats = st.tabs(["📈 Gráficos Comparativos", "📋 Tabela Descritiva"])
 
             # Mapeamento: abas[N] aponta para o container correto na nova estrutura
             abas = [
-                _sub_stats[0],    # 0: Gráficos Comparativos  → Estatísticas
-                _sub_campo[0],    # 1: Campo de Futebol        → Campo & GPS
-                _sub_carga[0],    # 2: Esforços                → Carga Física
-                _sub_carga[1],    # 3: Janelas Temporais       → Carga Física
-                _sub_carga[2],    # 4: Neuromuscular           → Carga Física
-                _sub_carga[3],    # 5: Acc-Vel                 → Carga Física
-                _sub_carga[4],    # 6: FC (TRIMP + Zonas)      → Carga Física
-                _sub_stats[1],    # 7: Tabela Descritiva       → Estatísticas
-                _sub_resumo[1],   # 8: Por Posição             → Resumo ✓
-                _sub_campo[1],    # 9: História do Jogo        → Campo & GPS
-                _main_tabs[4],    # 10: Ao Vivo               → Ao Vivo (tab principal)
+                _sub_campo[0],    # 0: Campo de Futebol        → Campo & GPS
+                _sub_carga[0],    # 1: Esforços                → Carga Física
+                _sub_carga[1],    # 2: Janelas Temporais       → Carga Física
+                _sub_carga[2],    # 3: Neuromuscular           → Carga Física
+                _sub_carga[3],    # 4: Acc-Vel                 → Carga Física
+                _sub_carga[4],    # 5: FC (TRIMP + Zonas)      → Carga Física
+                _sub_resumo[1],   # 6: Por Posição             → Resumo ✓
+                _sub_campo[1],    # 7: História do Jogo        → Campo & GPS
+                _main_tabs[3],    # 8: Ao Vivo                → Ao Vivo (tab principal)
             ]
 
             # ==================== ABA RESUMO: OVERVIEW DASHBOARD ====================
@@ -5897,388 +5892,8 @@ Escolha um ou mais atletas para análise simultânea.
 5. ✅ Clique em "Carregar Dados da Sessão"
                     """)
 
-            # ==================== ABA 1: GRÁFICOS COMPARATIVOS ====================
+            # ==================== ABA 1: CAMPO DE FUTEBOL ====================
             with abas[0]:
-                st.subheader("📈 Gráficos Comparativos")
-
-                # ── Filtro por Posição (conectado aos dados da atividade) ────────
-                _gc_pos_dict: dict = {}   # posição → [atleta1, atleta2, ...]
-                for _gc_per_data in resultados_por_periodo.values():
-                    for _gc_r in _gc_per_data:
-                        _gc_atl_n = _gc_r.get('Atleta', '')
-                        _gc_pos_n = (_gc_r.get('Posição', '') or '').strip()
-                        if _gc_atl_n:
-                            _gc_pos_dict.setdefault(_gc_pos_n, [])
-                            if _gc_atl_n not in _gc_pos_dict[_gc_pos_n]:
-                                _gc_pos_dict[_gc_pos_n].append(_gc_atl_n)
-
-                _gc_posicoes_disp = sorted([p for p in _gc_pos_dict if p])
-
-                _gc_filter_col1, _gc_filter_col2 = st.columns([2, 3])
-                with _gc_filter_col1:
-                    if _gc_posicoes_disp:
-                        _gc_pos_sel = st.selectbox(
-                            "🎯 Filtrar por posição:",
-                            ["— Todas as posições —"] + _gc_posicoes_disp,
-                            key="gc_pos_filter",
-                            help="Selecione uma posição para ver apenas os atletas daquela função tática.",
-                        )
-                    else:
-                        _gc_pos_sel = "— Todas as posições —"
-                        st.selectbox("🎯 Filtrar por posição:", ["— Sem dados de posição —"],
-                                     key="gc_pos_filter_empty", disabled=True)
-
-                if _gc_pos_sel != "— Todas as posições —" and _gc_pos_sel in _gc_pos_dict:
-                    _gc_atletas_pos_filtro: set | None = set(_gc_pos_dict[_gc_pos_sel])
-                    with _gc_filter_col2:
-                        st.caption(
-                            f"🎯 **{_gc_pos_sel}** — "
-                            f"{len(_gc_atletas_pos_filtro)} atleta(s): "
-                            f"{', '.join(sorted(_gc_atletas_pos_filtro))}"
-                        )
-                else:
-                    _gc_atletas_pos_filtro = None   # sem filtro → todos os atletas
-
-                _hr("MODO DE COMPARAÇÃO", "🔀")
-
-                modo_comparacao = st.radio(
-                    "Escolha o tipo de comparação:",
-                    ["Comparar Atletas no Mesmo Período", "Comparar Mesmo Atleta em Diferentes Períodos"],
-                    horizontal=True
-                )
-
-                if modo_comparacao == "Comparar Atletas no Mesmo Período":
-                    periodo_comp = st.selectbox("Selecione o período:", list(resultados_por_periodo.keys()), key="periodo_comp")
-
-                    if periodo_comp in resultados_por_periodo and resultados_por_periodo[periodo_comp]:
-                        df_comp = pd.DataFrame(resultados_por_periodo[periodo_comp])
-                        # Aplica filtro por posição
-                        if _gc_atletas_pos_filtro is not None:
-                            df_comp = df_comp[df_comp['Atleta'].isin(_gc_atletas_pos_filtro)]
-                        atletas_disponiveis = df_comp['Atleta'].tolist()
-                        atletas_selecionados_comp = st.multiselect(
-                            "Selecione os atletas para comparar:",
-                            atletas_disponiveis,
-                            default=atletas_disponiveis[:min(3, len(atletas_disponiveis))]
-                        )
-                        
-                        if atletas_selecionados_comp:
-                            df_filtrado = df_comp[df_comp['Atleta'].isin(atletas_selecionados_comp)]
-                            _todas_metricas = ['Distância (m)', 'Dist. > 19 km/h (m)', 'Dist. > 24 km/h (m)',
-                                               'PlayerLoad', 'Velocidade Máx (km/h)', 'Velocidade Média (km/h)',
-                                               'FC Média (bpm)', 'Sprints (>24 km/h)', 'Acelerações (>3 m/s²)']
-                            metricas_comp = [m for m in _todas_metricas if m in df_filtrado.columns]
-
-                            # ── Mapeamento atleta → posição ────────────────────────────
-                            _atleta_pos_map_gc: dict = {}
-                            for _r_gc in resultados_por_periodo.get(periodo_comp, []):
-                                _an_gc = _r_gc.get('Atleta', '')
-                                _ap_gc = (_r_gc.get('Posição', '') or '').strip()
-                                if _an_gc:
-                                    _atleta_pos_map_gc[_an_gc] = _ap_gc
-
-                            # Agrupa atletas selecionados por grupo tático para variação tonal
-                            _gc_grupo_to_atls: dict = {}
-                            for _atl_gc in atletas_selecionados_comp:
-                                _grp_gc, _ = _get_pos_grupo(_atleta_pos_map_gc.get(_atl_gc, ''))
-                                _gc_grupo_to_atls.setdefault(_grp_gc, []).append(_atl_gc)
-
-                            # Cor final por atleta: tonalidade do grupo + variação de saturação/luminosidade
-                            _color_map_comp: dict = {}
-                            for _grp_gc, _atls_gc in _gc_grupo_to_atls.items():
-                                for _vi_gc, _atl_gc in enumerate(_atls_gc):
-                                    _color_map_comp[_atl_gc] = cor_atleta_pos(
-                                        _atl_gc, _atleta_pos_map_gc.get(_atl_gc, ''),
-                                        _vi_gc, len(_atls_gc)
-                                    )
-
-                            # ── Legenda de grupos de posição ───────────────────────────
-                            _grupos_presentes_gc = sorted(set(
-                                _get_pos_grupo(_atleta_pos_map_gc.get(a, ''))[0]
-                                for a in atletas_selecionados_comp
-                            ))
-                            if _grupos_presentes_gc:
-                                _leg_html = " &nbsp; ".join(
-                                    f"<span style='background:{_POSICAO_COR_LEGENDA.get(g,'#9C27B0')};"
-                                    f"color:white;padding:3px 12px;border-radius:14px;"
-                                    f"font-size:12px;font-weight:600'>{g}</span>"
-                                    for g in _grupos_presentes_gc
-                                )
-                                st.markdown(f"**Grupos táticos:** {_leg_html}", unsafe_allow_html=True)
-
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                df_melted = df_filtrado.melt(id_vars=['Atleta'], value_vars=metricas_comp, var_name='Métrica', value_name='Valor')
-                                fig = px.bar(df_melted, x='Atleta', y='Valor', color='Atleta', barmode='group',
-                                            title=f"Comparação de Métricas — {periodo_comp}",
-                                            facet_col='Métrica', facet_col_wrap=3,
-                                            color_discrete_map=_color_map_comp)
-                                fig.update_layout(paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
-                                                  font=dict(color='white'), height=420,
-                                                  showlegend=True, margin=dict(t=60,b=10))
-                                fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1], font=dict(size=10)))
-                                st.plotly_chart(fig, use_container_width=True)
-                            with col2:
-                                if len(atletas_selecionados_comp) <= 8:
-                                    fig_radar = go.Figure()
-                                    _radar_df = df_filtrado[df_filtrado['Atleta'].isin(atletas_selecionados_comp[:8])][['Atleta'] + metricas_comp].copy()
-                                    _radar_max = _radar_df[metricas_comp].max().replace(0, 1)
-                                    for atleta in atletas_selecionados_comp[:8]:
-                                        _row = _radar_df[_radar_df['Atleta'] == atleta][metricas_comp].iloc[0]
-                                        valores_norm = (_row / _radar_max).tolist()
-                                        _cor_radar = _color_map_comp.get(atleta, cor_atleta(atleta))
-                                        fig_radar.add_trace(go.Scatterpolar(
-                                            r=valores_norm + [valores_norm[0]],
-                                            theta=metricas_comp + [metricas_comp[0]],
-                                            fill='toself', opacity=0.4,
-                                            name=atleta,
-                                            line=dict(color=_cor_radar, width=2),
-                                            fillcolor=_cor_radar,
-                                        ))
-                                    fig_radar.update_layout(
-                                        polar=dict(
-                                            bgcolor='#1e2130',
-                                            radialaxis=dict(visible=True, range=[0,1],
-                                                           gridcolor='#444', tickfont=dict(color='#aaa',size=8)),
-                                            angularaxis=dict(gridcolor='#444', tickfont=dict(color='white',size=10)),
-                                        ),
-                                        paper_bgcolor='#0e1117', font=dict(color='white'),
-                                        title=dict(text='Comparação Radial (Normalizado 0–1)', font=dict(color='white')),
-                                        legend=dict(font=dict(color='white')),
-                                        height=420, margin=dict(t=50,b=10),
-                                    )
-                                    st.plotly_chart(fig_radar, use_container_width=True)
-
-                            # ── Tabela com fundo colorido por grupo de posição ─────────
-                            _cols_show = [c for c in ['Atleta', 'Equipe', 'Posição'] + metricas_comp if c in df_filtrado.columns]
-                            _df_show = df_filtrado[_cols_show].reset_index(drop=True)
-
-                            def _style_gc_row(row):
-                                _pos_r = (_atleta_pos_map_gc.get(row.get('Atleta', ''), '') or '')
-                                _grp_r, _ = _get_pos_grupo(_pos_r)
-                                _base_r = _POSICAO_COR_LEGENDA.get(_grp_r, '#9C27B0')
-                                _hr2 = int(_base_r[1:3], 16)
-                                _hg2 = int(_base_r[3:5], 16)
-                                _hb2 = int(_base_r[5:7], 16)
-                                _bg2 = f'rgba({_hr2},{_hg2},{_hb2},0.12)'
-                                _fg2 = _base_r
-                                return [
-                                    (f'background-color:{_bg2};color:{_fg2};font-weight:700'
-                                     if c == 'Posição'
-                                     else f'background-color:{_bg2}')
-                                    for c in row.index
-                                ]
-
-                            st.dataframe(
-                                _df_show.style.apply(_style_gc_row, axis=1),
-                                use_container_width=True
-                            )
-                
-                else:
-                    primeiro_periodo = list(resultados_por_periodo.keys())[0]
-                    if resultados_por_periodo[primeiro_periodo]:
-                        df_primeiro = pd.DataFrame(resultados_por_periodo[primeiro_periodo])
-                        # Aplica filtro por posição
-                        if _gc_atletas_pos_filtro is not None:
-                            df_primeiro = df_primeiro[df_primeiro['Atleta'].isin(_gc_atletas_pos_filtro)]
-                        _atls_para_comp = df_primeiro['Atleta'].tolist() if not df_primeiro.empty else []
-                        atleta_comp = st.selectbox("Selecione o atleta:", _atls_para_comp, key="atleta_comp") if _atls_para_comp else None
-
-                        if atleta_comp is None:
-                            st.info("Nenhum atleta disponível com os filtros de posição aplicados.")
-
-                        dados_atleta = {}
-                        for periodo, resultados in resultados_por_periodo.items():
-                            if resultados and atleta_comp:
-                                df_periodo = pd.DataFrame(resultados)
-                                atleta_data = df_periodo[df_periodo['Atleta'] == atleta_comp]
-                                if not atleta_data.empty:
-                                    dados_atleta[periodo] = atleta_data.iloc[0]
-                        
-                        if dados_atleta:
-                            _primeiro_periodo_dados = list(dados_atleta.values())[0]
-                            _todas_metricas_p = ['Distância (m)', 'Dist. > 19 km/h (m)', 'Dist. > 24 km/h (m)',
-                                                 'PlayerLoad', 'Velocidade Máx (km/h)', 'Velocidade Média (km/h)',
-                                                 'FC Média (bpm)', 'Sprints (>24 km/h)', 'Acelerações (>3 m/s²)']
-                            metricas_comp = [m for m in _todas_metricas_p if m in _primeiro_periodo_dados.index]
-                            df_comparativo = pd.DataFrame({
-                                periodo: [dados_atleta[periodo].get(m, 0) for m in metricas_comp]
-                                for periodo in dados_atleta.keys()
-                            }, index=metricas_comp).T
-                            
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                fig = px.bar(df_comparativo, x=df_comparativo.index, y=metricas_comp,
-                                            title=f"Comparação de {atleta_comp} entre Períodos", barmode='group')
-                                st.plotly_chart(fig, use_container_width=True)
-                            with col2:
-                                fig_line = go.Figure()
-                                for metrica in metricas_comp:
-                                    fig_line.add_trace(go.Scatter(
-                                        x=list(dados_atleta.keys()),
-                                        y=[dados_atleta[p].get(metrica, 0) for p in dados_atleta.keys()],
-                                        mode='lines+markers',
-                                        name=metrica
-                                    ))
-                                fig_line.update_layout(title="Evolução das Métricas", xaxis_title="Período", yaxis_title="Valor")
-                                st.plotly_chart(fig_line, use_container_width=True)
-                            st.dataframe(df_comparativo, use_container_width=True)
-
-                # ── #15: Análise de Duplas / Linhas ───────────────────────────
-                _hr("ANÁLISE DE DUPLAS E LINHAS", "🤝")
-                st.markdown("## 🤝 Análise de Duplas e Linhas")
-                st.caption(
-                    "Selecione 2–6 atletas (uma linha, dupla de zaga, dupla de ataque…) "
-                    "para analisar **sincronia de esforços**, **cobertura coletiva** e "
-                    "**distância inter-jogadores** ao longo do jogo."
-                )
-                _duo_periodos = list(resultados_por_periodo.keys())
-                if _duo_periodos:
-                    _duo_per = st.selectbox("Período:", _duo_periodos, key="duo_periodo")
-                    _duo_df_all = pd.DataFrame(resultados_por_periodo.get(_duo_per, []))
-                    if not _duo_df_all.empty and 'Atleta' in _duo_df_all.columns:
-                        if _gc_atletas_pos_filtro is not None:
-                            _duo_df_all = _duo_df_all[_duo_df_all['Atleta'].isin(_gc_atletas_pos_filtro)]
-                        _duo_atls_disp = _duo_df_all['Atleta'].tolist()
-                        _duo_sel = st.multiselect(
-                            "Selecione o grupo (2–6 atletas):",
-                            _duo_atls_disp,
-                            default=_duo_atls_disp[:min(4, len(_duo_atls_disp))],
-                            max_selections=6,
-                            key="duo_atletas",
-                        )
-
-                        if len(_duo_sel) >= 2:
-                            _duo_df = _duo_df_all[_duo_df_all['Atleta'].isin(_duo_sel)].set_index('Atleta')
-                            _duo_metricas = [m for m in [
-                                'Distância (m)', 'Dist. > 19 km/h (m)', 'Dist. > 24 km/h (m)',
-                                'PlayerLoad', 'Sprints (>24 km/h)', 'Acelerações (>3 m/s²)',
-                                'Velocidade Máx (km/h)', 'FC Média (bpm)', 'TRIMP',
-                            ] if m in _duo_df.columns]
-
-                            # ── 1. Spider chart do grupo ──────────────────────
-                            _duo_c1, _duo_c2 = st.columns(2)
-                            with _duo_c1:
-                                st.markdown("#### 🕸️ Perfil do Grupo")
-                                _fig_duo_radar = go.Figure()
-                                _duo_max = _duo_df[_duo_metricas].max().replace(0, 1)
-                                for _da in _duo_sel:
-                                    if _da in _duo_df.index:
-                                        _row = _duo_df.loc[_da, _duo_metricas]
-                                        _norm = (_row / _duo_max).tolist()
-                                        _fig_duo_radar.add_trace(go.Scatterpolar(
-                                            r=_norm + [_norm[0]],
-                                            theta=_duo_metricas + [_duo_metricas[0]],
-                                            fill='toself', opacity=0.45,
-                                            name=_da,
-                                            line=dict(color=cor_atleta(_da), width=2),
-                                            fillcolor=cor_atleta(_da),
-                                            hovertemplate='%{theta}: %{r:.2f}<extra>' + _da + '</extra>',
-                                        ))
-                                _fig_duo_radar.update_layout(
-                                    polar=dict(
-                                        bgcolor='#1e2130',
-                                        radialaxis=dict(visible=True, range=[0,1], gridcolor='#444',
-                                                        tickfont=dict(color='#aaa', size=8)),
-                                        angularaxis=dict(gridcolor='#444', tickfont=dict(color='white', size=9)),
-                                    ),
-                                    paper_bgcolor='#0e1117', font=dict(color='white'),
-                                    legend=dict(font=dict(color='white', size=10)),
-                                    height=380, margin=dict(t=30,b=10),
-                                    showlegend=True,
-                                )
-                                st.plotly_chart(_fig_duo_radar, use_container_width=True)
-
-                            with _duo_c2:
-                                # ── 2. Tabela comparativa com ranking por métrica ──
-                                st.markdown("#### 📋 Comparativo do Grupo")
-                                _duo_show = _duo_df[_duo_metricas].copy().reset_index()
-                                _duo_show.columns = ['Atleta'] + _duo_metricas
-                                # Destaca o melhor em cada métrica
-                                st.dataframe(
-                                    _duo_show.style.highlight_max(
-                                        subset=_duo_metricas, color='rgba(42,157,143,0.4)', axis=0
-                                    ).highlight_min(
-                                        subset=_duo_metricas, color='rgba(230,57,70,0.3)', axis=0
-                                    ),
-                                    use_container_width=True, hide_index=True,
-                                )
-
-                                # ── 3. Sincronia de esforços ─────────────────────
-                                st.markdown("#### ⚡ Sincronia de Esforços de Alta Intensidade")
-                                _duo_sprints = {
-                                    a: int(_duo_df.loc[a, 'Sprints (>24 km/h)'])
-                                    if 'Sprints (>24 km/h)' in _duo_df.columns and a in _duo_df.index else 0
-                                    for a in _duo_sel
-                                }
-                                _duo_fig_sync = go.Figure(go.Bar(
-                                    x=list(_duo_sprints.keys()),
-                                    y=list(_duo_sprints.values()),
-                                    marker=dict(color=[cor_atleta(a) for a in _duo_sprints]),
-                                    hovertemplate='%{x}: %{y} sprints<extra></extra>',
-                                ))
-                                _duo_fig_sync.update_layout(
-                                    paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
-                                    font=dict(color='white'),
-                                    xaxis=dict(gridcolor='#333'),
-                                    yaxis=dict(title='Sprints (>24 km/h)', gridcolor='#333'),
-                                    height=220, margin=dict(t=10,b=10), showlegend=False,
-                                )
-                                st.plotly_chart(_duo_fig_sync, use_container_width=True)
-
-                            # ── 4. Distância inter-jogadores (posição) ────────
-                            _duo_pos_avail = all(
-                                a in dados_posicao_por_periodo.get(_duo_per, {}) for a in _duo_sel
-                            )
-                            if _duo_pos_avail and len(_duo_sel) == 2:
-                                st.markdown("#### 📏 Distância Entre os Dois Atletas ao Longo do Jogo")
-                                _da1, _da2 = _duo_sel[0], _duo_sel[1]
-                                _d1 = dados_posicao_por_periodo[_duo_per][_da1]
-                                _d2 = dados_posicao_por_periodo[_duo_per][_da2]
-                                _xs1 = np.array(_d1.get('xs', []))
-                                _ys1 = np.array(_d1.get('ys', []))
-                                _xs2 = np.array(_d2.get('xs', []))
-                                _ys2 = np.array(_d2.get('ys', []))
-                                _n_dist = min(len(_xs1), len(_xs2))
-                                if _n_dist > 10:
-                                    _dists = np.sqrt((_xs1[:_n_dist]-_xs2[:_n_dist])**2 +
-                                                     (_ys1[:_n_dist]-_ys2[:_n_dist])**2)
-                                    _t_dist = np.arange(_n_dist) / 10 / 60  # minutos
-                                    # suavizar
-                                    _dists_sm = savgol_filter(_dists, min(51, _n_dist//4*2+1), 3)
-                                    _fig_dist = go.Figure()
-                                    _fig_dist.add_trace(go.Scatter(
-                                        x=_t_dist, y=_dists_sm,
-                                        mode='lines', line=dict(color='#2196F3', width=2),
-                                        fill='toself', fillcolor='rgba(33,150,243,0.1)',
-                                        name='Distância',
-                                        hovertemplate='%{x:.1f} min — %{y:.1f} m<extra></extra>',
-                                    ))
-                                    _fig_dist.add_hline(y=float(np.mean(_dists_sm)),
-                                        line=dict(color='#FFD700', dash='dash', width=1.5),
-                                        annotation_text=f"Média: {np.mean(_dists_sm):.1f}m",
-                                        annotation_font=dict(color='#FFD700'))
-                                    _fig_dist.update_layout(
-                                        paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
-                                        font=dict(color='white'),
-                                        xaxis=dict(title='Tempo (min)', gridcolor='#333'),
-                                        yaxis=dict(title='Distância (m)', gridcolor='#333'),
-                                        height=280, margin=dict(t=15,b=10), showlegend=False,
-                                    )
-                                    st.plotly_chart(_fig_dist, use_container_width=True)
-                                    _d_k1, _d_k2, _d_k3 = st.columns(3)
-                                    _d_k1.metric("Distância Média", f"{np.mean(_dists_sm):.1f} m")
-                                    _d_k2.metric("Distância Máxima", f"{np.max(_dists_sm):.1f} m")
-                                    _d_k3.metric("% do tempo > 20m", f"{np.sum(_dists_sm>20)/_n_dist*100:.1f}%")
-                        else:
-                            st.info("Selecione 2 a 6 atletas para ativar a análise de grupo.")
-                    else:
-                        st.info("Nenhum dado disponível para este período.")
-                else:
-                    st.info("Carregue dados para usar a análise de duplas/linhas.")
-
-            # ==================== ABA 2: CAMPO DE FUTEBOL ====================
-            with abas[1]:
                 st.subheader("🗺️ Campo de Futebol — Análise de Movimentação")
                 st.caption(REFERENCIAS["campo"])
 
@@ -8377,8 +7992,8 @@ Escolha um ou mais atletas para análise simultânea.
                 else:
                     st.info("Carregue os dados de uma atividade para usar anotações.")
 
-            # ==================== ABA 3: ESFORÇOS AO LONGO DO TEMPO ====================
-            with abas[2]:
+            # ==================== ABA 2: ESFORÇOS AO LONGO DO TEMPO ====================
+            with abas[1]:
                 st.subheader("⏱️ Esforços ao Longo do Tempo")
                 
                 if dados_sensor_por_atleta_por_periodo:
@@ -8585,8 +8200,8 @@ Escolha um ou mais atletas para análise simultânea.
                             except Exception as _e:
                                 st.error(f"Erro ao gerar PDF: {_e}")
 
-            # ==================== ABA 4: JANELAS TEMPORAIS MÓVEIS ====================
-            with abas[3]:
+            # ==================== ABA 3: JANELAS TEMPORAIS MÓVEIS ====================
+            with abas[2]:
                 st.subheader("📊 Análise de Intensidade - Janelas Temporais Móveis")
                 st.markdown("""
                 Esta análise calcula a **média da métrica** em janelas discretas de tempo. 
@@ -8680,8 +8295,8 @@ Escolha um ou mais atletas para análise simultânea.
                 else:
                     st.info("Selecione um atleta para análise")
 
-            # ==================== ABA 5: CARGA NEUROMUSCULAR ====================
-            with abas[4]:
+            # ==================== ABA 4: CARGA NEUROMUSCULAR ====================
+            with abas[3]:
                 st.subheader("💪 Análise de Carga Neuromuscular")
                 st.markdown("""
                 Esforços de **aceleração** e **desaceleração** intensa são indicadores críticos de
@@ -8796,8 +8411,8 @@ Escolha um ou mais atletas para análise simultânea.
                 else:
                     st.info("Carregue os dados de um atleta para analisar a carga neuromuscular.")
 
-            # ==================== ABA 6: PERFIL ACELERAÇÃO-VELOCIDADE ====================
-            with abas[5]:
+            # ==================== ABA 5: PERFIL ACELERAÇÃO-VELOCIDADE ====================
+            with abas[4]:
                 st.subheader("🏎️ Perfil Aceleração × Velocidade")
                 st.caption(
                     "Baseado no modelo de Samozino & Morin (2016) — relação linear entre aceleração e velocidade "
@@ -9411,7 +9026,7 @@ Escolha um ou mais atletas para análise simultânea.
             # ══════════════════════════════════════════════════════════════
             # ABA 6: FC — TRIMP & ZONAS DE FREQUÊNCIA CARDÍACA
             # ══════════════════════════════════════════════════════════════
-            with abas[6]:
+            with abas[5]:
                 st.subheader("❤️ Frequência Cardíaca & TRIMP")
                 st.caption(
                     "**TRIMP** (Training Impulse — Edwards): carga interna calculada pelo tempo em cada zona de "
@@ -9741,225 +9356,9 @@ Escolha um ou mais atletas para análise simultânea.
                 else:
                     st.info("Carregue dados para visualizar a curva de fadiga.")
 
+            # ABA 6: POR POSIÇÃO
             # ══════════════════════════════════════════════════════════════
-            # ABA 7: TABELA DESCRITIVA
-            # ══════════════════════════════════════════════════════════════
-            with abas[7]:
-                st.subheader("📋 Tabela Descritiva de Desempenho")
-                st.caption("Coloração por percentil do grupo: 🟢 Top 33% · 🟡 Médio · 🔴 Bottom 33%")
-                st.caption("ℹ️ **RHIE** — Repeated High Intensity Efforts: blocos de ≥2 esforços >19 km/h separados por <21s · **HSR** — High Speed Running: distância acima de 19 km/h · **M/min** — Metros por minuto: intensidade relativa à duração (elite: 110–130 m/min)")
-
-                _td_periodos = list(resultados_por_periodo.keys())
-                if _td_periodos:
-                    _td_periodo_sel = st.selectbox("Período:", _td_periodos, key="td_periodo_sel")
-
-                    if resultados_por_periodo.get(_td_periodo_sel):
-                        _df_td = pd.DataFrame(resultados_por_periodo[_td_periodo_sel])
-
-                        # ── Usar dados OpenField pré-computados (FEATURE 2) ─────
-                        _use_of = st.toggle(
-                            "Usar dados OpenField (pré-computados)",
-                            value=False,
-                            key="td_use_openfield",
-                            help="Compara os valores calculados localmente com os pré-computados pelo OpenField Cloud.",
-                        )
-
-                        # Calcula %Vmax = vel_max_periodo / vel_max_historica × 100
-                        if 'Velocidade Máx (km/h)' in _df_td.columns:
-                            _hist_vmax_dict = st.session_state.get('hist_vmax', {})
-
-                            def _calc_pct_vmax(row):
-                                _ath      = row.get('Atleta', '')
-                                _vel_per  = float(row.get('Velocidade Máx (km/h)', 0) or 0)
-                                _hist_raw = _hist_vmax_dict.get(_ath, 0) or 0
-                                # hist_vmax armazenado em m/s → converte para km/h
-                                _hist_kmh = float(_hist_raw) * 3.6 if _hist_raw > 0 else 0.0
-                                # Sanidade: aceitar apenas se estiver no intervalo razoável (5–60 km/h)
-                                if not (5.0 <= _hist_kmh <= 60.0):
-                                    _hist_kmh = 0.0
-                                if _hist_kmh > 0:
-                                    return round(_vel_per / _hist_kmh * 100, 1)
-                                # Sem histórico → % em relação à maior vel do grupo nesta sessão
-                                _vmax_grupo = _df_td['Velocidade Máx (km/h)'].max()
-                                if _vmax_grupo > 0:
-                                    return round(_vel_per / _vmax_grupo * 100, 1)
-                                return 0.0
-
-                            _df_td['%Vmax'] = _df_td.apply(_calc_pct_vmax, axis=1)
-
-                        # Colunas exibidas na tabela (ordem igual ao Power BI)
-                        _TD_COLS = [c for c in [
-                            'Atleta', 'Posição', 'Duração (min)', 'Distância (m)',
-                            'Dist. 19-24 km/h (m)', 'Dist. > 24 km/h (m)',
-                            'Dist. > 19 km/h (m)', 'Sprints (>24 km/h)',
-                            'Velocidade Máx (km/h)', '%Vmax', 'M/min',
-                            'Acc 2-3 (m/s²)', 'Dcc 2-3 (m/s²)',
-                            'Acelerações (>3 m/s²)', 'Desacelerações (<-3 m/s²)',
-                            'Acc Max (m/s²)', 'Dcc Max (m/s²)',
-                            'PlayerLoad', 'RHIE Blocos',
-                        ] if c in _df_td.columns]
-
-                        _df_td_show = _df_td[_TD_COLS].copy()
-
-                        # Colunas numéricas para coloração por percentil
-                        _TD_NUM = [c for c in _TD_COLS if c not in ('Atleta', 'Posição')]
-
-                        def _td_style_percentile(col):
-                            if col.name not in _TD_NUM:
-                                return [''] * len(col)
-                            p33 = col.quantile(0.33)
-                            p66 = col.quantile(0.66)
-                            out = []
-                            for v in col:
-                                try:
-                                    vf = float(v)
-                                    if vf >= p66:
-                                        out.append('background-color:#1a5c2e;color:white;font-weight:bold')
-                                    elif vf >= p33:
-                                        out.append('background-color:#7d6a08;color:white')
-                                    else:
-                                        out.append('background-color:#7b1a1a;color:white')
-                                except Exception:
-                                    out.append('')
-                            return out
-
-                        # Montar dict de formato num único .format() — dois .format()
-                        # encadeados sobrescrevem um ao outro em versões antigas do pandas.
-                        _1dec_cols = {
-                            'Velocidade Máx (km/h)', 'Velocidade Média (km/h)',
-                            'M/min', 'Acc Max (m/s²)', 'Dcc Max (m/s²)',
-                        }
-                        _td_fmt = {}
-                        for _c in _TD_NUM:
-                            if _c == '%Vmax':
-                                _td_fmt[_c] = '{:.1f}%'
-                            elif _c in _1dec_cols:
-                                _td_fmt[_c] = '{:.1f}'
-                            else:
-                                _td_fmt[_c] = '{:.0f}'
-
-                        _styled_td = (
-                            _df_td_show.style
-                            .apply(_td_style_percentile, axis=0)
-                            .format(_td_fmt, na_rep='—')
-                            .set_properties(**{'text-align': 'center'})
-                            .set_table_styles([
-                                {'selector': 'th', 'props': [('text-align', 'center'), ('font-weight', 'bold')]},
-                                {'selector': 'td', 'props': [('text-align', 'center')]},
-                            ])
-                        )
-                        # CSS injetado para garantir centralização independente do tema Streamlit
-                        st.markdown(
-                            "<style>"
-                            "[data-testid='stDataFrame'] th {"
-                            "  text-align: center !important;"
-                            "  justify-content: center !important;"
-                            "}"
-                            "[data-testid='stDataFrame'] td {"
-                            "  text-align: center !important;"
-                            "}"
-                            "</style>",
-                            unsafe_allow_html=True,
-                        )
-                        st.dataframe(_styled_td, use_container_width=True, hide_index=True)
-
-                        # ── OpenField vs Calculado Localmente (FEATURE 2) ─────────
-                        if _use_of:
-                            st.markdown("---")
-                            st.markdown("### 🔬 OpenField vs Calculado Localmente")
-                            _pos_dados_td = dados_posicao_por_periodo.get(_td_periodo_sel, {})
-                            _of_comparisons = []
-                            for _td_row in resultados_por_periodo.get(_td_periodo_sel, []):
-                                _td_atl = _td_row.get('Atleta', '')
-                                _of_sum = _pos_dados_td.get(_td_atl, {}).get('openfield_summary')
-                                if _of_sum and isinstance(_of_sum, (dict, list)):
-                                    _of_data = _of_sum if isinstance(_of_sum, dict) else (_of_sum[0] if _of_sum else {})
-                                    _of_params = _of_data.get('parameters', _of_data)
-                                    _of_dist = float(_of_params.get('total_distance', 0) or 0)
-                                    _loc_dist = _td_row.get('Distância (m)', 0)
-                                    _of_vmax = float(_of_params.get('max_velocity', 0) or 0) * 3.6
-                                    _loc_vmax = _td_row.get('Velocidade Máx (km/h)', 0)
-                                    _of_comparisons.append({
-                                        'Atleta': _td_atl,
-                                        'Dist. OpenField (m)': round(_of_dist, 0),
-                                        'Dist. Local (m)': _loc_dist,
-                                        'Δ Distância (m)': round(_of_dist - _loc_dist, 0),
-                                        'Vmax OpenField (km/h)': round(_of_vmax, 1),
-                                        'Vmax Local (km/h)': _loc_vmax,
-                                        'Δ Vmax (km/h)': round(_of_vmax - _loc_vmax, 1),
-                                    })
-                            if _of_comparisons:
-                                _df_of_cmp = pd.DataFrame(_of_comparisons)
-
-                                def _color_delta(val):
-                                    try:
-                                        v = float(val)
-                                        if abs(v) < 5:
-                                            return 'color:#4CAF50'
-                                        elif abs(v) < 20:
-                                            return 'color:#FF9800'
-                                        return 'color:#F44336'
-                                    except Exception:
-                                        return ''
-
-                                _delta_cols = ['Δ Distância (m)', 'Δ Vmax (km/h)']
-                                _of_styled = _df_of_cmp.style.applymap(
-                                    _color_delta, subset=_delta_cols
-                                )
-                                st.dataframe(_of_styled, use_container_width=True, hide_index=True)
-                            else:
-                                st.info(
-                                    "Dados OpenField não disponíveis. O endpoint `/activities/{id}/athletes/{id}/summary` "
-                                    "pode não estar habilitado na licença desta conta."
-                                )
-
-                        # ── Valores Médios do Grupo ──────────────────────────────
-                        st.markdown("---")
-                        st.markdown("### 📊 Valores Médios do Grupo")
-                        _td_med = _df_td[_TD_NUM].mean()
-                        _grp_cols = st.columns(6)
-                        _grp_kpis = [
-                            ('Distância (m)',          '📏', '{:,.0f} m'),
-                            ('M/min',                  '⚡', '{:.1f} m/min'),
-                            ('Dist. > 19 km/h (m)',    '🏃', '{:,.0f} m'),
-                            ('Sprints (>24 km/h)',      '💨', '{:.0f}'),
-                            ('Acelerações (>3 m/s²)',   '🔼', '{:.0f}'),
-                            ('PlayerLoad',             '⚙️', '{:,.0f}'),
-                        ]
-                        for _gi, (_mk, _ico, _fmt) in enumerate(_grp_kpis):
-                            if _mk in _td_med.index:
-                                _grp_cols[_gi].metric(f"{_ico} {_mk}", _fmt.format(_td_med[_mk]))
-
-                        # Segunda linha de médias
-                        _grp_cols2 = st.columns(6)
-                        _grp_kpis2 = [
-                            ('Acc 2-3 (m/s²)',         '🟡', '{:.0f}'),
-                            ('Dcc 2-3 (m/s²)',         '🟡', '{:.0f}'),
-                            ('Desacelerações (<-3 m/s²)', '🔽', '{:.0f}'),
-                            ('RHIE Blocos',             '🔁', '{:.0f}'),
-                            ('Velocidade Máx (km/h)',   '💨', '{:.1f} km/h'),
-                            ('%Vmax',                   '📈', '{:.1f}%'),
-                        ]
-                        for _gi2, (_mk2, _ico2, _fmt2) in enumerate(_grp_kpis2):
-                            if _mk2 in _td_med.index:
-                                _grp_cols2[_gi2].metric(f"{_ico2} {_mk2}", _fmt2.format(_td_med[_mk2]))
-
-                        # ── Download CSV ─────────────────────────────────────────
-                        st.download_button(
-                            "📥 Exportar Tabela (CSV)",
-                            _df_td_show.to_csv(index=False).encode('utf-8'),
-                            f"tabela_descritiva_{_td_periodo_sel}.csv",
-                            mime='text/csv'
-                        )
-                    else:
-                        st.info("Nenhum dado disponível para este período.")
-                else:
-                    st.info("Carregue os dados para visualizar a tabela descritiva.")
-
-            # ══════════════════════════════════════════════════════════════
-            # ABA 8: POR POSIÇÃO
-            # ══════════════════════════════════════════════════════════════
-            with abas[8]:
+            with abas[6]:
                 st.subheader("📊 Análise por Posição")
                 st.caption("Média das métricas agrupada por posição tática dos atletas.")
 
@@ -10291,9 +9690,9 @@ Escolha um ou mais atletas para análise simultânea.
                     st.info("Carregue os dados para visualizar a análise por posição.")
 
             # ══════════════════════════════════════════════════════════════
-            # ABA 9: HISTÓRIA DO JOGO
+            # ABA 7: HISTÓRIA DO JOGO
             # ══════════════════════════════════════════════════════════════
-            with abas[9]:
+            with abas[7]:
                 st.subheader("🎬 História do Jogo")
                 st.caption("Animação top-down de todos os atletas movendo-se pelo campo ao longo do tempo.")
 
@@ -12374,8 +11773,8 @@ Escolha um ou mais atletas para análise simultânea.
                                         )
                                         st.plotly_chart(_fig_pmc, use_container_width=True)
 
-            # ==================== ABA 10: MONITORAMENTO AO VIVO ====================
-            with abas[10]:
+            # ==================== ABA 8: MONITORAMENTO AO VIVO ====================
+            with abas[8]:
                 st.subheader("📡 Monitoramento em Tempo Real")
                 st.caption(
                     "Conecta ao endpoint `/live` da API Catapult para acompanhar métricas "
