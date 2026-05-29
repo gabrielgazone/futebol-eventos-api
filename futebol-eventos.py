@@ -11636,21 +11636,50 @@ Escolha um ou mais atletas para análise simultânea.
                             if _posicao2 != '—':
                                 break
 
+                        # ── Série rolling completa (para timeline) ─────────────
+                        _is_vm3 = (_m == "Velocidade Máx (km/h)")
+                        if _is_vm3:
+                            from collections import deque as _DqTL
+                            _dqTL = _DqTL(); _roll_full = []
+                            for _iRL in range(len(_sv)):
+                                while _dqTL and _sv[_dqTL[-1]] <= _sv[_iRL]:
+                                    _dqTL.pop()
+                                _dqTL.append(_iRL)
+                                if _dqTL[0] <= _iRL - _wcs2_n:
+                                    _dqTL.popleft()
+                                if _iRL >= _wcs2_n - 1:
+                                    _roll_full.append(_sv[_dqTL[0]])
+                        else:
+                            _roll_full = list(np.convolve(
+                                np.array(_sv), np.ones(_wcs2_n), 'valid'
+                            ))
+
+                        # ── Densidade de Pico (janelas ≥ 90% do WCS) ───────────
+                        _density_90 = (
+                            sum(1 for _rv in _roll_full if _rv >= 0.9 * _best_val2)
+                            if _best_val2 > 0 and _roll_full else 0
+                        )
+
                         _row_d = {
                             '_atl_orig':   _wa,
                             'Atleta':      _wa,
                             'Posição':     _posicao2,
                             'Período':     _wper[_best_si2] if _best_si2 < len(_wper) else '—',
                             _wcs2_metric:  round(_best_val2, 1),
+                            'Picos ≥90%':  _density_90,
                             'Início':      _ini_str,
                             'Fim':         _fim_str,
                         }
                         _row_d.update(_mw_vals)
                         _wcs2_rows.append(_row_d)
                         _wcs2_segs[_wa] = {
-                            'xn':  _wx[_best_si2:_best_ei2],
-                            'yn':  _wy[_best_si2:_best_ei2],
-                            'vel': _wv[_best_si2:_best_ei2],
+                            'xn':     _wx[_best_si2:_best_ei2],
+                            'yn':     _wy[_best_si2:_best_ei2],
+                            'vel':    _wv[_best_si2:_best_ei2],
+                            'rolling': _roll_full,
+                            'vel_all': _wv,        # velocidade de toda a série (trilha colorida)
+                            'xn_all':  _wx,
+                            'yn_all':  _wy,
                         }
 
                     _wcs2_rows.sort(key=lambda r: r.get(_wcs2_metric, 0), reverse=True)
@@ -11715,7 +11744,7 @@ Escolha um ou mais atletas para análise simultânea.
                                        and _df_all_tmp[c].notna().any()]
                         _wcs2_col_order = (
                             ['#', 'Atleta', 'Posição', 'Período',
-                             _wcs2_metric, '% Máx Grupo']
+                             _wcs2_metric, '% Máx Grupo', 'Picos ≥90%']
                             + _mw_avail
                             + ['Início', 'Fim']
                         )
@@ -11738,8 +11767,195 @@ Escolha um ou mais atletas para análise simultânea.
                         )
                         st.caption(
                             "💡 Clique em uma linha para visualizar o percurso animado no campo abaixo. "
-                            "As colunas 1/3/5 min mostram o valor WCS para janelas fixas de comparação."
+                            "As colunas 1/3/5 min mostram o valor WCS para janelas fixas de comparação. "
+                            "**Picos ≥90%** = nº de janelas onde o atleta atingiu ≥90% do seu WCS."
                         )
+
+                        st.markdown("---")
+
+                        # ── Timeline do Rolling Window ──────────────────────────────
+                        with st.expander("📈 Timeline do Rolling Window", expanded=True):
+                            st.caption(
+                                "Valor da janela rolante ao longo de toda a sessão. "
+                                "⭐ = pico (WCS). Linha tracejada = 90% do WCS de cada atleta."
+                            )
+                            _tl_opts  = [r['Atleta'] for r in _wcs2_rows]
+                            _tl_sel   = st.multiselect(
+                                "Atletas:", _tl_opts,
+                                default=_tl_opts[:min(5, len(_tl_opts))],
+                                key="wcs2_tl_atl"
+                            )
+                            _fig_tl = go.Figure()
+                            _tl_palette = [
+                                '#FF6B6B','#4ECDC4','#45B7D1','#96CEB4','#FFEAA7',
+                                '#DDA0DD','#98D8C8','#F7DC6F','#BB8FCE','#76D7C4',
+                            ]
+                            for _tli, _tla in enumerate(_tl_sel):
+                                _orig_tla = next(
+                                    (r.get('_atl_orig', r['Atleta'])
+                                     for r in _wcs2_rows if r['Atleta'] == _tla), _tla
+                                )
+                                _seg_tl  = _wcs2_segs.get(_orig_tla, {})
+                                _roll_tl = _seg_tl.get('rolling', [])
+                                _peak_tl = next(
+                                    (r.get(_wcs2_metric, 0)
+                                     for r in _wcs2_rows if r['Atleta'] == _tla), 0
+                                )
+                                if not _roll_tl:
+                                    continue
+                                _tl_color = _tl_palette[_tli % len(_tl_palette)]
+                                _x_min_tl = [i / (_wcs2_hz * 60) for i in range(len(_roll_tl))]
+                                _pk_idx   = int(np.argmax(_roll_tl))
+                                # Série principal
+                                _fig_tl.add_trace(go.Scatter(
+                                    x=_x_min_tl, y=_roll_tl,
+                                    mode='lines', name=_tla,
+                                    line=dict(color=_tl_color, width=2),
+                                ))
+                                # Marca o pico
+                                _fig_tl.add_trace(go.Scatter(
+                                    x=[_x_min_tl[_pk_idx]], y=[_roll_tl[_pk_idx]],
+                                    mode='markers', name=f'{_tla} WCS',
+                                    marker=dict(size=14, color=_tl_color, symbol='star',
+                                                line=dict(color='white', width=1)),
+                                    showlegend=False,
+                                    hovertemplate=(
+                                        f'<b>{_tla}</b><br>⭐ WCS: {_roll_tl[_pk_idx]:.1f}<br>'
+                                        f'⏱ {_x_min_tl[_pk_idx]:.1f} min<extra></extra>'
+                                    ),
+                                ))
+                                # Linha 90%
+                                if _peak_tl > 0:
+                                    _fig_tl.add_hline(
+                                        y=_peak_tl * 0.9,
+                                        line_dash='dot',
+                                        line_color=_tl_color,
+                                        opacity=0.4,
+                                        annotation_text=f'90% {_tla[:8]}',
+                                        annotation_font_color=_tl_color,
+                                        annotation_font_size=9,
+                                    )
+                            _fig_tl.update_layout(
+                                title=dict(
+                                    text=f"Rolling Window {_wcs2_min} min — {_wcs2_metric}",
+                                    font=dict(color='white', size=13)
+                                ),
+                                plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                font=dict(color='white'),
+                                xaxis=dict(title='Tempo (min)', gridcolor='#333', color='white'),
+                                yaxis=dict(title=_wcs2_metric, gridcolor='#333', color='white'),
+                                height=340,
+                                legend=dict(font=dict(color='white'), orientation='h',
+                                            yanchor='bottom', y=1.02, x=0),
+                                margin=dict(t=60, b=40),
+                            )
+                            st.plotly_chart(_fig_tl, use_container_width=True)
+
+                        # ── WCS por Período ─────────────────────────────────────────
+                        with st.expander("📊 WCS por Período", expanded=False):
+                            st.caption(
+                                "WCS de cada atleta calculado **separadamente por período**. "
+                                "🔴 Vermelho = maior demanda. Detecta queda de desempenho por fadiga entre tempos."
+                            )
+                            _ppw_data = {}
+                            for _pn_pp in _wcs2_periodos:
+                                _ppw_data[_pn_pp] = {}
+                                for _wa_pp in _wcs2_athletes:
+                                    _da_pp  = dados_posicao_por_periodo.get(_pn_pp, {}).get(_wa_pp, {})
+                                    _xs_pp  = list(_da_pp.get('xs', []))
+                                    _ys_pp  = list(_da_pp.get('ys', []))
+                                    _vl_pp  = list(_da_pp.get('vel', []))
+                                    _ac_pp  = list(_da_pp.get('acc', []))
+                                    _nn_pp  = min(len(_xs_pp), len(_ys_pp))
+                                    if _nn_pp == 0 and _wcs2_cfg:
+                                        _lp_pp = _da_pp.get('lats', [])
+                                        _lo_pp = _da_pp.get('lons', [])
+                                        if _lp_pp and _lo_pp:
+                                            try:
+                                                _gx_pp, _gy_pp = gps_para_campo_coords(
+                                                    _lp_pp, _lo_pp, _wcs2_cfg
+                                                )
+                                                _xs_pp = _gx_pp; _ys_pp = _gy_pp
+                                                _vl_pp = _da_pp.get('vels_gps', [0.0]*len(_gx_pp))
+                                                _nn_pp = min(len(_xs_pp), len(_ys_pp))
+                                            except Exception:
+                                                _nn_pp = 0
+                                    if _nn_pp < _wcs2_n:
+                                        _ppw_data[_pn_pp][_wa_pp] = None
+                                        continue
+                                    _vl_pp_p = list(_vl_pp[:_nn_pp]) + [0.0]*max(0,_nn_pp-len(_vl_pp))
+                                    _ac_pp_p = list(_ac_pp[:_nn_pp]) + [0.0]*max(0,_nn_pp-len(_ac_pp))
+                                    _m_pp = _wcs2_metric
+                                    if _m_pp == "Distância (m)":
+                                        _sv_pp = [v/(3.6*_wcs2_hz) for v in _vl_pp_p]
+                                    elif ">14" in _m_pp:
+                                        _sv_pp = [v/(3.6*_wcs2_hz) if v>14 else 0.0 for v in _vl_pp_p]
+                                    elif "19" in _m_pp:
+                                        _sv_pp = [v/(3.6*_wcs2_hz) if v>19 else 0.0 for v in _vl_pp_p]
+                                    elif "24" in _m_pp:
+                                        _sv_pp = [v/(3.6*_wcs2_hz) if v>24 else 0.0 for v in _vl_pp_p]
+                                    elif "Velocidade Máx" in _m_pp:
+                                        _sv_pp = _vl_pp_p
+                                    elif "PlayerLoad" in _m_pp:
+                                        _pl_pp = dados_sensor_por_atleta_por_periodo.get(_pn_pp,{}).get(_wa_pp,[])
+                                        _sv_pp = ([float(p.get('pl') or 0) for p in _pl_pp[:_nn_pp]]
+                                                  + [0.0]*max(0,_nn_pp-len(_pl_pp)))
+                                    elif ">2" in _m_pp and "Acel" in _m_pp:
+                                        _sv_pp = [1.0 if a>2 else 0.0 for a in _ac_pp_p]
+                                    elif ">3" in _m_pp and "Acel" in _m_pp:
+                                        _sv_pp = [1.0 if a>3 else 0.0 for a in _ac_pp_p]
+                                    elif "<-2" in _m_pp:
+                                        _sv_pp = [1.0 if a<-2 else 0.0 for a in _ac_pp_p]
+                                    elif "<-3" in _m_pp:
+                                        _sv_pp = [1.0 if a<-3 else 0.0 for a in _ac_pp_p]
+                                    else:
+                                        _sv_pp = [v/(3.6*_wcs2_hz) for v in _vl_pp_p]
+                                    _is_vm_pp = ("Velocidade Máx" in _m_pp)
+                                    _wcs_pp   = _wcalc_wcs(_sv_pp, _wcs2_n, _is_vm_pp)
+                                    _ppw_data[_pn_pp][_wa_pp] = round(_wcs_pp, 1) if _wcs_pp > 0 else None
+
+                            _df_ppw = pd.DataFrame(_ppw_data).T
+                            _df_ppw.index.name = 'Período'
+                            if not _df_ppw.empty and _df_ppw.notna().any().any():
+                                _z_ppw  = _df_ppw.values.tolist()
+                                _txt_ppw = [[f"{v:.1f}" if v is not None else "—"
+                                             for v in row] for row in _z_ppw]
+                                _fig_ppw = go.Figure(data=go.Heatmap(
+                                    z=_z_ppw,
+                                    x=_df_ppw.columns.tolist(),
+                                    y=_df_ppw.index.tolist(),
+                                    colorscale='RdYlGn_r',
+                                    text=_txt_ppw,
+                                    texttemplate='%{text}',
+                                    textfont=dict(size=11, color='white'),
+                                    hovertemplate='%{y} — %{x}<br>WCS: %{text}<extra></extra>',
+                                    showscale=True,
+                                    colorbar=dict(
+                                        title=dict(text=_wcs2_metric, font=dict(color='white')),
+                                        tickfont=dict(color='white'),
+                                    ),
+                                ))
+                                _fig_ppw.update_layout(
+                                    title=dict(
+                                        text=f"WCS por Período — {_wcs2_metric} ({_wcs2_min} min)",
+                                        font=dict(color='white', size=13)
+                                    ),
+                                    plot_bgcolor='#0e1117', paper_bgcolor='#0e1117',
+                                    font=dict(color='white'),
+                                    height=max(260, len(_wcs2_periodos) * 70 + 120),
+                                    margin=dict(t=50, b=100, l=10, r=10),
+                                    xaxis=dict(
+                                        tickangle=-35,
+                                        tickfont=dict(size=9, color='white'),
+                                        color='white',
+                                    ),
+                                    yaxis=dict(color='white'),
+                                )
+                                st.plotly_chart(_fig_ppw, use_container_width=True)
+                            else:
+                                st.info("Dados insuficientes para comparar períodos com esta janela.")
+
+                        st.markdown("---")
 
                         # ── Animação no campo ao selecionar linha ──────────────────
                         _wcs2_sel = (_wcs2_evt.selection.rows
@@ -11797,47 +12013,74 @@ Escolha um ou mais atletas para análise simultânea.
                                 if _fr2[-1] != _nf2 - 1:
                                     _fr2.append(_nf2 - 1)
 
-                                # Traces estáticos: início / fim
+                                # ── Trilha completa colorida por velocidade (estática) ──
+                                # Mostra toda a janela WCS colorida por faixa de velocidade
+                                _trail_colors = [_vc_wcs2(v) for v in _wcs2_vel]
+                                _fig_wcs2.add_trace(go.Scatter(
+                                    x=_wcs2_xn, y=_wcs2_yn,
+                                    mode='markers',
+                                    marker=dict(
+                                        color=_trail_colors,
+                                        size=7, opacity=0.55,
+                                    ),
+                                    name='Trilha', showlegend=False, hoverinfo='skip',
+                                ))
+                                # Legenda de velocidade inline
+                                _fig_wcs2.add_trace(go.Scatter(
+                                    x=[None], y=[None], mode='markers',
+                                    marker=dict(size=10, color='#2196F3'), name='< 7 km/h',
+                                ))
+                                _fig_wcs2.add_trace(go.Scatter(
+                                    x=[None], y=[None], mode='markers',
+                                    marker=dict(size=10, color='#4CAF50'), name='7–14 km/h',
+                                ))
+                                _fig_wcs2.add_trace(go.Scatter(
+                                    x=[None], y=[None], mode='markers',
+                                    marker=dict(size=10, color='#FFEB3B'), name='14–19 km/h',
+                                ))
+                                _fig_wcs2.add_trace(go.Scatter(
+                                    x=[None], y=[None], mode='markers',
+                                    marker=dict(size=10, color='#FF9800'), name='19–24 km/h',
+                                ))
+                                _fig_wcs2.add_trace(go.Scatter(
+                                    x=[None], y=[None], mode='markers',
+                                    marker=dict(size=10, color='#F44336'), name='> 24 km/h',
+                                ))
+                                # Marcadores início / fim
                                 _fig_wcs2.add_trace(go.Scatter(
                                     x=[_wcs2_xn[0]], y=[_wcs2_yn[0]],
                                     mode='markers+text',
-                                    marker=dict(size=13, color='#4CAF50', symbol='circle',
+                                    marker=dict(size=14, color='#4CAF50', symbol='circle',
                                                 line=dict(color='white', width=2)),
                                     text=['▶'], textposition='top center',
                                     textfont=dict(color='#4CAF50', size=11),
-                                    name='Início', showlegend=False, hoverinfo='skip'
+                                    name='Início', showlegend=False, hoverinfo='skip',
                                 ))
                                 _fig_wcs2.add_trace(go.Scatter(
                                     x=[_wcs2_xn[-1]], y=[_wcs2_yn[-1]],
                                     mode='markers+text',
-                                    marker=dict(size=13, color='#F44336', symbol='x',
+                                    marker=dict(size=14, color='#F44336', symbol='x',
                                                 line=dict(color='white', width=2)),
                                     text=['■'], textposition='top center',
                                     textfont=dict(color='#F44336', size=11),
-                                    name='Fim', showlegend=False, hoverinfo='skip'
+                                    name='Fim', showlegend=False, hoverinfo='skip',
                                 ))
-                                # Traço animado
-                                _fig_wcs2.add_trace(go.Scatter(
-                                    x=[_wcs2_xn[0]], y=[_wcs2_yn[0]], mode='lines',
-                                    line=dict(color=_vc_wcs2(_wcs2_vel[0] if _wcs2_vel else 0), width=4),
-                                    name='Percurso', showlegend=False
-                                ))
-                                # Dot animado
+                                # Dot animado (único trace que muda nos frames)
                                 _fig_wcs2.add_trace(go.Scatter(
                                     x=[_wcs2_xn[0]], y=[_wcs2_yn[0]], mode='markers',
                                     marker=dict(
-                                        size=18,
+                                        size=20,
                                         color=_vc_wcs2(_wcs2_vel[0] if _wcs2_vel else 0),
                                         symbol='circle',
-                                        line=dict(color='white', width=3)
+                                        line=dict(color='white', width=3),
                                     ),
-                                    name='Posição', showlegend=False
+                                    name='Posição atual', showlegend=False,
                                 ))
 
-                                _idx_t2 = _n_base_wcs2 + 2
-                                _idx_d2 = _n_base_wcs2 + 3
+                                # Índice: dot é o último trace adicionado
+                                _idx_d2 = len(_fig_wcs2.data) - 1
 
-                                # Frames
+                                # Frames — só atualiza o dot
                                 _frames2 = []
                                 for _fk2 in _fr2:
                                     _ds3  = (_fk2 / max(_nf2 - 1, 1)) * _wcs2_min * 60
@@ -11846,25 +12089,17 @@ Escolha um ou mais atletas para análise simultânea.
                                     _v3   = float(_wcs2_vel[_fk2]) if _fk2 < len(_wcs2_vel) else 0.0
                                     _c3   = _vc_wcs2(_v3)
                                     _frames2.append(go.Frame(
-                                        data=[
-                                            go.Scatter(
-                                                x=_wcs2_xn[:_fk2 + 1],
-                                                y=_wcs2_yn[:_fk2 + 1],
-                                                mode='lines',
-                                                line=dict(color=_c3, width=4),
+                                        data=[go.Scatter(
+                                            x=[_wcs2_xn[_fk2]],
+                                            y=[_wcs2_yn[_fk2]],
+                                            mode='markers',
+                                            marker=dict(
+                                                size=20, color=_c3,
+                                                symbol='circle',
+                                                line=dict(color='white', width=3),
                                             ),
-                                            go.Scatter(
-                                                x=[_wcs2_xn[_fk2]],
-                                                y=[_wcs2_yn[_fk2]],
-                                                mode='markers',
-                                                marker=dict(
-                                                    size=18, color=_c3,
-                                                    symbol='circle',
-                                                    line=dict(color='white', width=3)
-                                                ),
-                                            ),
-                                        ],
-                                        traces=[_idx_t2, _idx_d2],
+                                        )],
+                                        traces=[_idx_d2],
                                         name=str(_fk2),
                                         layout=go.Layout(title=dict(
                                             text=(
@@ -11872,8 +12107,8 @@ Escolha um ou mais atletas para análise simultânea.
                                                 f'⏱️ {_dm3}:{_dsr3:02d} / {_wcs2_min}:00'
                                                 f'   |   💨 {_v3:.1f} km/h'
                                             ),
-                                            font=dict(color='white', size=12)
-                                        ))
+                                            font=dict(color='white', size=12),
+                                        )),
                                     ))
 
                                 _fig_wcs2.frames = _frames2
