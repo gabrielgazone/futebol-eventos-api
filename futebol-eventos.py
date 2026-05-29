@@ -5630,12 +5630,14 @@ Escolha um ou mais atletas para análise simultânea.
             ])
 
             # ── Criar sub-tabs dentro de cada aba principal ────────────────────
+            with _main_tabs[0]:
+                _sub_resumo = st.tabs(["🏠 Visão Geral", "📊 Por Posição"])
             with _main_tabs[1]:
                 _sub_campo = st.tabs(["🗺️ Campo de Futebol", "🎬 História do Jogo", "⚡ WCS"])
             with _main_tabs[2]:
                 _sub_carga = st.tabs(["⏱️ Esforços", "📊 Janelas Temporais", "💪 Neuromuscular", "🏎️ Acc-Vel", "❤️ FC"])
             with _main_tabs[3]:
-                _sub_stats = st.tabs(["📈 Gráficos Comparativos", "📋 Tabela Descritiva", "📊 Por Posição"])
+                _sub_stats = st.tabs(["📈 Gráficos Comparativos", "📋 Tabela Descritiva"])
 
             # Mapeamento: abas[N] aponta para o container correto na nova estrutura
             abas = [
@@ -5647,13 +5649,13 @@ Escolha um ou mais atletas para análise simultânea.
                 _sub_carga[3],    # 5: Acc-Vel                 → Carga Física
                 _sub_carga[4],    # 6: FC (TRIMP + Zonas)      → Carga Física
                 _sub_stats[1],    # 7: Tabela Descritiva       → Estatísticas
-                _sub_stats[2],    # 8: Por Posição             → Estatísticas
+                _sub_resumo[1],   # 8: Por Posição             → Resumo ✓
                 _sub_campo[1],    # 9: História do Jogo        → Campo & GPS
                 _main_tabs[4],    # 10: Ao Vivo               → Ao Vivo (tab principal)
             ]
 
             # ==================== ABA RESUMO: OVERVIEW DASHBOARD ====================
-            with _main_tabs[0]:
+            with _sub_resumo[0]:
                 st.markdown("## 📊 Resumo da Sessão")
 
                 if resultados_por_periodo:
