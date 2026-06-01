@@ -2858,6 +2858,99 @@ def calcular_distancia_janelas_discretas_10s(sensor_points, window_minutes):
     return t_out, d_out
 
 
+def calcular_distancia_janelas_por_vel_posicao(vel_kmh_list, ts_list, window_minutes, hz=10.0):
+    """
+    Rolling window de Distância usando EXATAMENTE os mesmos dados de posição (vel GPS, km/h)
+    e o mesmo algoritmo do WCS — garante coerência total entre as duas abas.
+
+    Parâmetros:
+        vel_kmh_list  : velocidades em km/h (dados_posicao_por_periodo[p][a]['vel'])
+        ts_list       : timestamps Unix em segundos (dados_posicao_por_periodo[p][a]['ts_pos'])
+        window_minutes: tamanho da janela em minutos
+        hz            : frequência de amostragem detectada (padrão 10 Hz)
+
+    Retorna (tempos_em_min, valores_em_m_por_min).
+    """
+    if not vel_kmh_list or len(vel_kmh_list) < 20:
+        return [], []
+
+    # Mesma conversão do WCS: km/h ÷ 3.6 ÷ Hz = m/amostra (integração retangular)
+    sv = [float(v) / (3.6 * hz) for v in vel_kmh_list]
+
+    # Timestamps relativos em segundos
+    n = len(sv)
+    if ts_list and len(ts_list) >= n:
+        t0    = float(ts_list[0])
+        t_abs = [float(ts_list[i]) - t0 for i in range(n)]
+    else:
+        t_abs = [i / hz for i in range(n)]
+
+    n_window = int(round(window_minutes * 60.0 * hz))
+    step     = max(1, int(hz * 10))   # 10 s por passo
+
+    if n < n_window + 1:
+        return [], []
+
+    sv_arr = np.array(sv,    dtype=float)
+    t_arr  = np.array(t_abs, dtype=float)
+
+    # Sliding window sum — idêntico ao WCS
+    w_sum = float(sv_arr[:n_window].sum())
+    t_out = [t_arr[0] / 60.0]
+    d_out = [w_sum / window_minutes]
+
+    for i in range(1, n - n_window + 1):
+        w_sum += sv_arr[i + n_window - 1] - sv_arr[i - 1]
+        if i % step == 0:
+            t_out.append(t_arr[i] / 60.0)
+            d_out.append(w_sum / window_minutes)
+
+    return t_out, d_out
+
+
+def combinar_periodos_continuo_posicao(dados_posicao_por_periodo: dict, atleta: str):
+    """
+    Combina vel (km/h) + ts_pos de múltiplos períodos de dados_posicao_por_periodo
+    em uma linha do tempo contínua — espelha combinar_periodos_continuo() mas para
+    dados de posição GPS, garantindo que o cálculo de Distância use exatamente os
+    mesmos dados e filtros que o WCS.
+
+    Retorna (vel_kmh_list, ts_list) prontos para
+    calcular_distancia_janelas_por_vel_posicao().
+    """
+    vel_combined: list = []
+    ts_combined:  list = []
+    t_offset = 0.0
+
+    for _dados_per in dados_posicao_por_periodo.values():
+        da  = _dados_per.get(atleta, {})
+        vel = da.get('vel', [])
+        ts  = da.get('ts_pos', [])
+        if not vel:
+            continue
+
+        n = min(len(vel), len(ts)) if ts else len(vel)
+        if n == 0:
+            continue
+
+        if ts and len(ts) >= n:
+            t_ini = float(ts[0])
+            t_fim = float(ts[n - 1])
+            dur   = max(0.0, t_fim - t_ini)
+            for i in range(n):
+                ts_combined.append(t_offset + (float(ts[i]) - t_ini))
+                vel_combined.append(float(vel[i]))
+            t_offset += dur + 0.1
+        else:
+            hz_est = 10.0
+            for i in range(n):
+                ts_combined.append(t_offset + i / hz_est)
+                vel_combined.append(float(vel[i]))
+            t_offset += n / hz_est + 0.1
+
+    return vel_combined, ts_combined
+
+
 def combinar_periodos_continuo(dados_sensor_por_atleta_por_periodo: dict, atleta: str) -> list:
     """
     Combina sensor_points de múltiplos períodos em uma linha do tempo contínua.
@@ -8473,7 +8566,50 @@ Escolha um ou mais atletas para análise simultânea.
 
                             with st.spinner("Calculando janelas temporais..."):
                                 if tipo_metrica == 'Distância':
-                                    tempos_janela, valores_janela = calcular_distancia_janelas_discretas_10s(sensor_points, window_minutes)
+                                    # ── Usa dados de posição GPS (vel km/h) — MESMOS dados e filtros do WCS ──
+                                    # Isso garante que Janelas Temporais e WCS produzam resultados idênticos.
+                                    # A diferença anterior vinha de sensor_points incluir pontos fora do campo
+                                    # enquanto dados_posicao filtra apenas pontos dentro dos limites (x,y).
+                                    _hz_jan = 10.0
+                                    if dados_posicao_por_periodo:
+                                        # Detecta Hz real a partir dos ts_pos (igual ao WCS)
+                                        _diffs_jan = []
+                                        for _pn_j in list(dados_posicao_por_periodo.keys())[:3]:
+                                            _da_j = dados_posicao_por_periodo[_pn_j].get(atleta_janela, {})
+                                            _tss_j = _da_j.get('ts_pos', [])
+                                            if len(_tss_j) > 10:
+                                                _diffs_jan += [abs(_tss_j[_ii+1] - _tss_j[_ii])
+                                                               for _ii in range(1, min(20, len(_tss_j)-1))
+                                                               if abs(_tss_j[_ii+1] - _tss_j[_ii]) > 0]
+                                        if _diffs_jan:
+                                            import statistics as _stjan
+                                            _med_jan = _stjan.median(_diffs_jan)
+                                            if _med_jan > 0:
+                                                _hz_jan = round(1.0 / _med_jan, 1)
+
+                                        if _jan_modo_todos:
+                                            _vel_dist, _ts_dist = combinar_periodos_continuo_posicao(
+                                                dados_posicao_por_periodo, atleta_janela
+                                            )
+                                        else:
+                                            _da_dist = dados_posicao_por_periodo.get(periodo_janela, {}).get(atleta_janela, {})
+                                            _vel_dist = _da_dist.get('vel', [])
+                                            _ts_dist  = _da_dist.get('ts_pos', [])
+
+                                        if _vel_dist:
+                                            tempos_janela, valores_janela = calcular_distancia_janelas_por_vel_posicao(
+                                                _vel_dist, _ts_dist, window_minutes, _hz_jan
+                                            )
+                                        else:
+                                            # Fallback: sensor_points (fonte alternativa)
+                                            tempos_janela, valores_janela = calcular_distancia_janelas_discretas_10s(
+                                                sensor_points, window_minutes
+                                            )
+                                    else:
+                                        # Fallback se dados de posição não disponíveis
+                                        tempos_janela, valores_janela = calcular_distancia_janelas_discretas_10s(
+                                            sensor_points, window_minutes
+                                        )
                                     exibir_resultados_janela(tempos_janela, valores_janela, "Distância", atleta_janela, window_minutes, "m/min")
 
                                 elif tipo_metrica == 'PlayerLoad':
