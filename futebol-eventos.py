@@ -2724,184 +2724,195 @@ def calcular_metricas(sensor_points, athlete_name, min_dur_s=None, zones=None):
 
 
 def calcular_janelas_discretas_10s(sensor_points, window_minutes, metric_name, band_filter=None):
-    if not sensor_points or len(sensor_points) < 10:
+    """
+    Rolling window (janela deslizante) para métricas de velocidade, aceleração
+    e PlayerLoad. A janela desliza a cada 10 s sobre a série temporal completa,
+    produzindo um ponto por passo — mais fiel ao pico real do que janelas fixas.
+    """
+    if not sensor_points or len(sensor_points) < 20:
         return [], []
-    
-    tempos = []
+
+    # ── Extrair série temporal da métrica ─────────────────────────────────────
+    tempos  = []
     valores = []
-    tempo_inicial = None
-    
+    t_ini   = None
+
     for ponto in sensor_points:
-        if metric_name in ponto and ponto[metric_name] is not None:
-            ts = ponto.get('ts', 0)
-            cs = ponto.get('cs', 0)
-            tempo = ts + (cs / 100) if cs else ts
-            
-            if tempo_inicial is None:
-                tempo_inicial = tempo
-            
-            tempo_relativo = (tempo - tempo_inicial)
-            
-            if metric_name == 'v':
-                valor = ponto[metric_name] * 3.6
-            elif metric_name == 'a':
-                valor = ponto[metric_name]
-            elif metric_name == 'pl':
-                valor = ponto[metric_name]
-            else:
-                valor = ponto[metric_name]
-            
-            if band_filter is not None:
-                if 'velocity_bands' in band_filter and metric_name == 'v':
-                    vel_kmh = ponto['v'] * 3.6
-                    if vel_kmh < 10:
-                        banda_atual = 1
-                    elif vel_kmh < 15:
-                        banda_atual = 2
-                    elif vel_kmh < 20:
-                        banda_atual = 3
-                    elif vel_kmh < 25:
-                        banda_atual = 4
-                    elif vel_kmh < 30:
-                        banda_atual = 5
-                    elif vel_kmh < 35:
-                        banda_atual = 6
-                    else:
-                        banda_atual = 7
-                    
-                    if banda_atual not in band_filter['velocity_bands']:
-                        continue
-                
-                elif 'acceleration_bands' in band_filter and metric_name == 'a':
-                    acc = ponto['a']
-                    if acc > 2:
-                        banda_atual = 3
-                    elif acc > 1:
-                        banda_atual = 2
-                    elif acc > 0:
-                        banda_atual = 1
-                    elif acc == 0:
-                        banda_atual = 0
-                    elif acc > -1:
-                        banda_atual = -1
-                    elif acc > -2:
-                        banda_atual = -2
-                    else:
-                        banda_atual = -3
-                    
-                    if banda_atual not in band_filter['acceleration_bands']:
-                        continue
-            
-            tempos.append(tempo_relativo)
-            valores.append(valor)
-    
-    if len(tempos) == 0:
+        if metric_name not in ponto or ponto[metric_name] is None:
+            continue
+        ts = ponto.get('ts', 0)
+        cs = ponto.get('cs', 0)
+        t  = ts + (cs / 100) if cs else ts
+        if t_ini is None:
+            t_ini = t
+        t_rel = t - t_ini
+
+        if metric_name == 'v':
+            val = float(ponto[metric_name]) * 3.6
+        else:
+            val = float(ponto[metric_name])
+
+        # Filtro de bandas
+        if band_filter is not None:
+            if 'velocity_bands' in band_filter and metric_name == 'v':
+                vel_kmh = float(ponto['v']) * 3.6
+                if   vel_kmh < 10: band = 1
+                elif vel_kmh < 15: band = 2
+                elif vel_kmh < 20: band = 3
+                elif vel_kmh < 25: band = 4
+                elif vel_kmh < 30: band = 5
+                elif vel_kmh < 35: band = 6
+                else:              band = 7
+                if band not in band_filter['velocity_bands']:
+                    continue
+            elif 'acceleration_bands' in band_filter and metric_name == 'a':
+                acc = float(ponto['a'])
+                if   acc >  2: band =  3
+                elif acc >  1: band =  2
+                elif acc >  0: band =  1
+                elif acc == 0: band =  0
+                elif acc > -1: band = -1
+                elif acc > -2: band = -2
+                else:          band = -3
+                if band not in band_filter['acceleration_bands']:
+                    continue
+
+        tempos.append(t_rel)
+        valores.append(val)
+
+    if len(tempos) < 20:
         return [], []
-    
-    window_seconds = window_minutes * 60
-    pontos_por_bloco = 100
-    blocos_por_janela = int(window_seconds / 10)
-    
-    tempos_janela = []
-    valores_media = []
-    
-    for bloco_idx in range(0, len(valores) // pontos_por_bloco):
-        inicio_bloco = bloco_idx * pontos_por_bloco
-        fim_bloco = min(inicio_bloco + pontos_por_bloco, len(valores))
-        
-        if fim_bloco - inicio_bloco >= 10:
-            valores_bloco = valores[inicio_bloco:fim_bloco]
-            media_bloco = np.mean(valores_bloco)
-            
-            if inicio_bloco < len(tempos):
-                tempo_central = tempos[inicio_bloco + (fim_bloco - inicio_bloco)//2] / 60
-                janela_id = bloco_idx // blocos_por_janela
-                
-                if len(tempos_janela) <= janela_id:
-                    tempos_janela.append(0)
-                    valores_media.append([])
-                
-                valores_media[janela_id].append(media_bloco)
-                tempos_janela[janela_id] = tempo_central
-    
-    tempos_final = []
-    valores_final = []
-    for i in range(len(valores_media)):
-        if len(valores_media[i]) == blocos_por_janela:
-            tempos_final.append(tempos_janela[i])
-            valores_final.append(np.mean(valores_media[i]))
-    
-    return tempos_final, valores_final
+
+    t_arr = np.array(tempos,  dtype=float)
+    v_arr = np.array(valores, dtype=float)
+
+    # ── Rolling window ─────────────────────────────────────────────────────────
+    window_s     = window_minutes * 60.0
+    step_samples = 100          # desloca 10 s (100 amostras a 10 Hz) por passo
+    n            = len(t_arr)
+
+    t_out, d_out = [], []
+    i = 0
+    while i < n:
+        t_start = t_arr[i]
+        t_end   = t_start + window_s
+        j = int(np.searchsorted(t_arr, t_end, side='left'))
+        if j >= n:
+            break
+        janela_vals = v_arr[i:j]
+        if len(janela_vals) < 10:
+            i += step_samples
+            continue
+        t_out.append(t_start / 60.0)
+        d_out.append(float(np.mean(janela_vals)))
+        i += step_samples
+
+    return t_out, d_out
 
 def calcular_distancia_janelas_discretas_10s(sensor_points, window_minutes):
-    if not sensor_points or len(sensor_points) < 10:
+    """
+    Rolling window (janela deslizante) para distância em m/min.
+    A janela desliza 10 s por passo — captura o pico real sem depender de
+    blocos fixos que podem cortar esforços na borda.
+    """
+    if not sensor_points or len(sensor_points) < 20:
         return [], []
-    
+
+    # ── Construir série de distância acumulada ─────────────────────────────────
     tempos = []
-    distancias_acumuladas = []
-    tempo_inicial = None
-    distancia_acumulada = 0
-    vel_anterior = None
+    dist_cum = []
+    t_ini = None
+    d_acc = 0.0
+    v_ant = None
 
     for ponto in sensor_points:
-        if ponto.get('v') is not None:
-            ts = ponto.get('ts', 0)
-            cs = ponto.get('cs', 0)
-            tempo = ts + (cs / 100) if cs else ts
+        if ponto.get('v') is None:
+            continue
+        ts = ponto.get('ts', 0)
+        cs = ponto.get('cs', 0)
+        t  = ts + (cs / 100) if cs else ts
+        if t_ini is None:
+            t_ini = t
+        v_ms = float(ponto['v'])
+        if v_ant is not None:
+            d_acc += ((v_ant + v_ms) / 2) * 0.1   # intervalo fixo de 100 ms (10 Hz)
+        v_ant = v_ms
+        tempos.append(t - t_ini)
+        dist_cum.append(d_acc)
 
-            if tempo_inicial is None:
-                tempo_inicial = tempo
-
-            tempo_relativo = (tempo - tempo_inicial)
-            v_ms = float(ponto['v'])
-
-            if vel_anterior is not None:
-                distancia_intervalo = ((vel_anterior + v_ms) / 2) * 0.1
-                distancia_acumulada += distancia_intervalo
-            vel_anterior = v_ms
-            
-            tempos.append(tempo_relativo)
-            distancias_acumuladas.append(distancia_acumulada)
-    
-    if len(tempos) == 0:
+    if len(tempos) < 20:
         return [], []
-    
-    window_seconds = window_minutes * 60
-    pontos_por_bloco = 100
-    blocos_por_janela = int(window_seconds / 10)
-    
-    tempos_janela = []
-    distancias_janela = []
-    
-    for bloco_idx in range(0, len(distancias_acumuladas) // pontos_por_bloco):
-        inicio_bloco = bloco_idx * pontos_por_bloco
-        fim_bloco = min(inicio_bloco + pontos_por_bloco, len(distancias_acumuladas))
-        
-        if fim_bloco - inicio_bloco >= 10:
-            dist_inicio_bloco = distancias_acumuladas[inicio_bloco]
-            dist_fim_bloco = distancias_acumuladas[fim_bloco - 1]
-            dist_bloco = dist_fim_bloco - dist_inicio_bloco
-            
-            tempo_central = tempos[inicio_bloco + (fim_bloco - inicio_bloco)//2] / 60
-            janela_id = bloco_idx // blocos_por_janela
-            
-            if len(tempos_janela) <= janela_id:
-                tempos_janela.append(0)
-                distancias_janela.append([])
-            
-            tempos_janela[janela_id] = tempo_central
-            distancias_janela[janela_id].append(dist_bloco)
-    
-    tempos_final = []
-    valores_final = []
-    for i in range(len(distancias_janela)):
-        if len(distancias_janela[i]) == blocos_por_janela:
-            distancia_total_janela = sum(distancias_janela[i])
-            tempo_janela_min = window_seconds / 60
-            tempos_final.append(tempos_janela[i])
-            valores_final.append(distancia_total_janela / tempo_janela_min)
-    
-    return tempos_final, valores_final
+
+    t_arr = np.array(tempos,   dtype=float)
+    d_arr = np.array(dist_cum, dtype=float)
+
+    # ── Rolling window ─────────────────────────────────────────────────────────
+    window_s     = window_minutes * 60.0
+    step_samples = 100          # desloca 10 s por passo (10 Hz → 100 amostras)
+    n            = len(t_arr)
+
+    t_out, d_out = [], []
+    i = 0
+    while i < n:
+        t_start = t_arr[i]
+        t_end   = t_start + window_s
+        j = int(np.searchsorted(t_arr, t_end, side='left'))
+        if j >= n:
+            break
+        dist_janela = d_arr[j - 1] - (d_arr[i - 1] if i > 0 else 0.0)
+        t_out.append(t_start / 60.0)
+        d_out.append(dist_janela / window_minutes)   # m/min
+        i += step_samples
+
+    return t_out, d_out
+
+
+def combinar_periodos_continuo(dados_sensor_por_atleta_por_periodo: dict, atleta: str) -> list:
+    """
+    Combina sensor_points de múltiplos períodos em uma linha do tempo contínua.
+    Elimina o gap de intervalo/pausa: cada período começa imediatamente após
+    o fim do anterior, gerando um eixo X corrido sem buracos.
+
+    Retorna lista de sensor_points com 'ts' reescrito e 'cs'=0.
+    """
+    result   = []
+    t_offset = 0.0           # tempo acumulado em segundos
+
+    for _dados_per in dados_sensor_por_atleta_por_periodo.values():
+        pts = _dados_per.get(atleta, [])
+        if not pts:
+            continue
+
+        # Encontra t_inicio e t_fim do período
+        t_ini_per = None
+        t_fim_per = None
+        for p in pts:
+            _ts = p.get('ts', 0)
+            _cs = p.get('cs', 0)
+            _t  = _ts + (_cs / 100) if _cs else _ts
+            if t_ini_per is None or _t < t_ini_per:
+                t_ini_per = _t
+            if t_fim_per is None or _t > t_fim_per:
+                t_fim_per = _t
+
+        if t_ini_per is None:
+            continue
+
+        duracao_per = max(0.0, t_fim_per - t_ini_per)
+
+        for p in pts:
+            _ts = p.get('ts', 0)
+            _cs = p.get('cs', 0)
+            _t  = _ts + (_cs / 100) if _cs else _ts
+            p_cpy = dict(p)
+            p_cpy['ts'] = t_offset + (_t - t_ini_per)
+            p_cpy['cs'] = 0
+            result.append(p_cpy)
+
+        t_offset += duracao_per + 0.1   # 0.1 s de margem entre períodos
+
+    return result
+
 
 def processar_efforts_velocidade(efforts_data, historical_vmax_ms=None):
     """Processa esforços de velocidade.
@@ -3453,7 +3464,7 @@ def criar_grafico_intensidade(tempos, valores, cores, metric_name, athlete_name,
     ))
     
     fig.update_layout(
-        title=f"Intensidade de {metric_name} - {athlete_name} (Janela: {window_minutes} min | Blocos de 10s)",
+        title=f"Intensidade de {metric_name} - {athlete_name} (Rolling Window: {window_minutes} min | Passo: 10 s)",
         xaxis_title="Tempo (minutos)",
         yaxis_title=f"{metric_name} ({unidade})",
         height=500,
@@ -8202,12 +8213,15 @@ Escolha um ou mais atletas para análise simultânea.
 
             # ==================== ABA 3: JANELAS TEMPORAIS MÓVEIS ====================
             with abas[2]:
-                st.subheader("📊 Análise de Intensidade - Janelas Temporais Móveis")
+                st.subheader("📊 Análise de Intensidade - Janelas Temporais (Rolling Window)")
                 st.markdown("""
-                Esta análise calcula a **média da métrica** em janelas discretas de tempo. 
-                Cada janela é dividida em blocos de **10 segundos**, e o valor final é a média desses blocos.
+                Esta análise usa uma **janela deslizante** (*rolling window*): a janela avança **10 s por passo**
+                ao longo de toda a sessão, capturando o pico real de intensidade independentemente de onde ele
+                começa — sem o erro de corte das janelas discretas fixas.
+                No modo **combinado**, todos os períodos são encadeados em uma linha do tempo contínua
+                (sem o gap do intervalo).
                 """)
-                
+
                 if dados_sensor_por_atleta_por_periodo:
                     _JAN_TODOS = "🔀 Todos os períodos (combinado)"
                     _jan_opcoes = [_JAN_TODOS] + list(dados_sensor_por_atleta_por_periodo.keys())
@@ -8225,12 +8239,13 @@ Escolha um ou mais atletas para análise simultânea.
                     if _jan_atletas:
                         atleta_janela = st.selectbox("Selecione o atleta:", _jan_atletas, key="atleta_janela")
                         if _jan_modo_todos:
-                            sensor_points = []
-                            for _pv2 in dados_sensor_por_atleta_por_periodo.values():
-                                sensor_points += _pv2.get(atleta_janela, [])
+                            # ── Timeline contínua: elimina gap entre períodos ──────────
+                            sensor_points = combinar_periodos_continuo(
+                                dados_sensor_por_atleta_por_periodo, atleta_janela
+                            )
                             st.caption(
                                 f"📊 Combinando **{len(dados_sensor_por_atleta_por_periodo)} períodos** "
-                                f"→ {len(sensor_points):,} amostras para **{atleta_janela}**."
+                                f"em linha do tempo contínua → {len(sensor_points):,} amostras para **{atleta_janela}**."
                             )
                         else:
                             sensor_points = dados_sensor_por_atleta_por_periodo[periodo_janela].get(atleta_janela, [])
