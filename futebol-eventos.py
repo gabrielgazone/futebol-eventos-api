@@ -2798,7 +2798,7 @@ def calcular_janelas_discretas_10s(sensor_points, window_minutes, metric_name, b
     t_out, d_out = [], []
     for i in range(0, n - n_window + 1, step):
         janela_vals = v_arr[i:i + n_window]
-        t_out.append(t_arr[i + n_window // 2] / 60.0)
+        t_out.append(t_arr[i] / 60.0)          # início da janela (não o centro)
         d_out.append(float(np.mean(janela_vals)))
 
     return t_out, d_out
@@ -2846,13 +2846,13 @@ def calcular_distancia_janelas_discretas_10s(sensor_points, window_minutes):
 
     # ── Sliding window sum (soma acumulada — O(n), mesmo algoritmo do WCS) ────
     w_sum = float(sv_arr[:n_window].sum())
-    t_out = [t_arr[n_window // 2] / 60.0]
-    d_out = [w_sum / window_minutes]          # m/min
+    t_out = [t_arr[0] / 60.0]               # início da janela (não o centro)
+    d_out = [w_sum / window_minutes]         # m/min
 
     for i in range(1, n_total - n_window + 1):
         w_sum += sv_arr[i + n_window - 1] - sv_arr[i - 1]
         if i % step == 0:
-            t_out.append(t_arr[i + n_window // 2] / 60.0)
+            t_out.append(t_arr[i] / 60.0)   # início da janela
             d_out.append(w_sum / window_minutes)
 
     return t_out, d_out
@@ -2903,6 +2903,64 @@ def combinar_periodos_continuo(dados_sensor_por_atleta_por_periodo: dict, atleta
         t_offset += duracao_per + 0.1   # 0.1 s de margem entre períodos
 
     return result
+
+
+def encontrar_eventos_nao_sobrepostos(t_start_min, d_out, window_minutes, limiar_alta, limiar_media, max_val):
+    """
+    Encontra eventos distintos e não-sobrepostos acima dos limiares de intensidade.
+
+    Algoritmo (idêntico ao WCS):
+      1. Ordena todas as janelas por valor decrescente.
+      2. Seleciona a melhor janela.
+      3. Marca como 'usadas' todas as janelas que se sobrepõem a ela
+         (separação mínima = window_minutes).
+      4. Repete até não haver janelas acima do limiar.
+
+    Retorna (alta_events, media_alta_events) — listas de dicts ordenadas por valor.
+    """
+    if not d_out or max_val <= 0:
+        return [], []
+
+    n = len(d_out)
+    # Quantos passos (de 10 s cada) equivalem a 1 janela completa
+    step_min   = (t_start_min[1] - t_start_min[0]) if n > 1 else (10.0 / 60.0)
+    excl_steps = max(1, int(round(window_minutes / step_min)))
+
+    usado = [False] * n
+    alta_events, media_events = [], []
+
+    for idx in sorted(range(n), key=lambda k: d_out[k], reverse=True):
+        if usado[idx]:
+            continue
+        val = d_out[idx]
+        if val < limiar_media:
+            break                          # lista ordenada → nada abaixo será útil
+
+        # Marca a janela e todas sobrepostas (±1 window) como usadas
+        for j in range(max(0, idx - excl_steps + 1), min(n, idx + excl_steps)):
+            usado[j] = True
+
+        t_ini   = t_start_min[idx]
+        t_fim   = t_ini + window_minutes
+        mins_i  = int(t_ini);  segs_i = int((t_ini - mins_i) * 60)
+        mins_f  = int(t_fim);  segs_f = int((t_fim - mins_f) * 60)
+
+        event = dict(
+            inicio=f"{mins_i:02d}:{segs_i:02d}",
+            fim=f"{mins_f:02d}:{segs_f:02d}",
+            valor=round(val, 1),
+            pct_max=round(val / max_val * 100, 1),
+            intensidade='Alta Intensidade 🔴' if val >= limiar_alta
+                        else 'Média-Alta Intensidade 🟡',
+        )
+        if val >= limiar_alta:
+            alta_events.append(event)
+        else:
+            media_events.append(event)
+
+    alta_events.sort(key=lambda e: e['valor'], reverse=True)
+    media_events.sort(key=lambda e: e['valor'], reverse=True)
+    return alta_events, media_events
 
 
 def processar_efforts_velocidade(efforts_data, historical_vmax_ms=None):
@@ -3559,11 +3617,13 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
     if fig:
         st.plotly_chart(fig, use_container_width=True)
 
-    alta_count       = sum(1 for c in classificacoes if 'Alta' in c and 'Média' not in c)
-    media_alta_count = sum(1 for c in classificacoes if 'Média-Alta' in c)
-    _total           = len(classificacoes)
-    _pct_alta        = round(alta_count  / _total * 100) if _total else 0
-    _pct_media       = round(media_alta_count / _total * 100) if _total else 0
+    # ── Eventos distintos e não-sobrepostos (greedy, igual ao WCS) ───────────
+    _alta_ev, _media_ev = encontrar_eventos_nao_sobrepostos(
+        tempos_janela, valores_janela,
+        window_minutes, _limiar_alta, _limiar_media, _max_val,
+    )
+    alta_count       = len(_alta_ev)
+    media_alta_count = len(_media_ev)
 
     _card_alta = f"""
     <div style="
@@ -3583,8 +3643,8 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
       <div style="font-size:72px;font-weight:800;color:#f87171;line-height:1;
                   text-shadow:0 0 24px rgba(248,113,113,0.5);">{alta_count}</div>
       <div style="font-size:12px;color:rgba(255,255,255,0.38);margin-top:14px;line-height:1.6;">
-        janelas com <strong style="color:rgba(248,113,113,0.8);">{nome_metrica} ≥ {_limiar_alta} {unidade}</strong><br>
-        ≥ 75% do máximo ({_max_val:.1f} {unidade}) &nbsp;·&nbsp; {_pct_alta}% das janelas
+        janelas distintas com <strong style="color:rgba(248,113,113,0.8);">{nome_metrica} ≥ {_limiar_alta} {unidade}</strong><br>
+        ≥ 75% do máximo ({_max_val:.1f} {unidade})
       </div>
     </div>"""
 
@@ -3606,8 +3666,8 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
       <div style="font-size:72px;font-weight:800;color:#fbbf24;line-height:1;
                   text-shadow:0 0 24px rgba(251,191,36,0.5);">{media_alta_count}</div>
       <div style="font-size:12px;color:rgba(255,255,255,0.38);margin-top:14px;line-height:1.6;">
-        janelas com <strong style="color:rgba(251,191,36,0.8);">{_limiar_media} ≤ {nome_metrica} &lt; {_limiar_alta} {unidade}</strong><br>
-        50–75% do máximo ({_max_val:.1f} {unidade}) &nbsp;·&nbsp; {_pct_media}% das janelas
+        janelas distintas com <strong style="color:rgba(251,191,36,0.8);">{_limiar_media} ≤ {nome_metrica} &lt; {_limiar_alta} {unidade}</strong><br>
+        50–75% do máximo ({_max_val:.1f} {unidade})
       </div>
     </div>"""
 
@@ -3618,15 +3678,49 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
         st.markdown(_card_media, unsafe_allow_html=True)
     st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
 
+    # ── Tabela de eventos distintos (Alta + Média-Alta, ordenados por valor) ──
+    _todos_ev = (
+        [dict(e, _cat='alta')  for e in _alta_ev] +
+        [dict(e, _cat='media') for e in _media_ev]
+    )
+    _todos_ev.sort(key=lambda e: e['valor'], reverse=True)
+
     st.markdown("#### 📋 Eventos de Média-Alta e Alta Intensidade")
-    df_eventos = criar_tabela_intensidade(tempos_janela, valores_janela, classificacoes, nome_metrica, unidade)
-    if not df_eventos.empty:
-        st.dataframe(df_eventos, use_container_width=True, height=400)
-        csv_eventos = df_eventos.to_csv(index=False)
+    st.caption(
+        f"Cada linha é uma janela de **{window_minutes} min** distinta e não-sobreposta, "
+        f"selecionada pelo pico máximo. Separação mínima entre eventos: {window_minutes} min."
+    )
+
+    if _todos_ev:
+        _rows = []
+        for _rank, _ev in enumerate(_todos_ev, 1):
+            _rows.append({
+                '#': _rank,
+                'Início': _ev['inicio'],
+                'Fim':    _ev['fim'],
+                f'{nome_metrica} ({unidade})': _ev['valor'],
+                '% do Máximo': _ev['pct_max'],
+                'Intensidade': _ev['intensidade'],
+            })
+        _df_ev = pd.DataFrame(_rows)
+
+        def _style_row(row):
+            if 'Alta Intensidade' in str(row.get('Intensidade', '')) and 'Média' not in str(row.get('Intensidade', '')):
+                return ['background-color:rgba(239,68,68,0.12)'] * len(row)
+            elif 'Média-Alta' in str(row.get('Intensidade', '')):
+                return ['background-color:rgba(245,158,11,0.10)'] * len(row)
+            return [''] * len(row)
+
+        _styled = _df_ev.style.apply(_style_row, axis=1).format({
+            f'{nome_metrica} ({unidade})': '{:.1f}',
+            '% do Máximo': '{:.1f}%',
+        })
+        st.dataframe(_styled, use_container_width=True, height=min(600, 40 + len(_rows) * 36))
         st.download_button(
             f"📥 Exportar Eventos - {nome_metrica} (CSV)",
-            csv_eventos,
-            f"eventos_{nome_metrica}_{atleta_janela}_{window_minutes}min.csv"
+            _df_ev.to_csv(index=False).encode('utf-8'),
+            f"eventos_{nome_metrica}_{atleta_janela}_{window_minutes}min.csv",
+            mime='text/csv',
         )
     else:
         st.info("Nenhum evento de média-alta ou alta intensidade encontrado")
