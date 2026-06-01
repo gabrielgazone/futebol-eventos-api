@@ -3431,50 +3431,91 @@ def criar_grafico_aceleracao_tempo(sensor_points, athlete_name, window_size=31, 
     
     return fig
 
-def classificar_intensidade(valores, percentil_50, percentil_75):
+# ── Limiares absolutos por métrica (baseados na literatura) ───────────────────
+# Distância: Aughey (2011) IJSPP · PlayerLoad: Casamichana et al. (2013)
+# Velocidade: Bangsbo (1994) · Aceleração: Osgnach et al. (2010)
+_LIMIARES_JANELA = {
+    'Distância':  dict(alta=120.0, media=85.0,  ref='Aughey, 2011'),
+    'PlayerLoad': dict(alta=8.0,   media=5.0,   ref='Casamichana et al., 2013'),
+    'Velocidade': dict(alta=19.0,  media=14.0,  ref='Bangsbo, 1994'),
+    'Aceleração': dict(alta=3.0,   media=2.0,   ref='Osgnach et al., 2010'),
+}
+
+
+def classificar_intensidade(valores, limiar_alta, limiar_media):
+    """Classifica janelas por limiares absolutos da literatura (não percentis)."""
     cores = []
     classificacoes = []
-    
     for valor in valores:
-        if valor >= percentil_75:
-            cores.append('orange')
-            classificacoes.append('Alta Intensidade 🟠')
-        elif valor >= percentil_50:
-            cores.append('gold')
+        if valor >= limiar_alta:
+            cores.append('#ef4444')          # vermelho
+            classificacoes.append('Alta Intensidade 🔴')
+        elif valor >= limiar_media:
+            cores.append('#f59e0b')          # âmbar
             classificacoes.append('Média-Alta Intensidade 🟡')
         else:
-            cores.append('green')
+            cores.append('#22c55e')          # verde
             classificacoes.append('Baixa Intensidade 🟢')
-    
     return cores, classificacoes
 
-def criar_grafico_intensidade(tempos, valores, cores, metric_name, athlete_name, window_minutes, unidade):
+
+def criar_grafico_intensidade(tempos, valores, cores, metric_name, athlete_name,
+                              window_minutes, unidade, limiar_alta=None, limiar_media=None):
     if not tempos or not valores:
         return None
-    
+
     fig = go.Figure()
-    
+
     fig.add_trace(go.Scatter(
         x=tempos,
         y=valores,
         mode='lines+markers',
-        name=f'{metric_name} (janela {window_minutes} min)',
-        line=dict(color='lightgray', width=1),
-        marker=dict(size=8, color=cores, line=dict(width=1, color='black'))
+        name=f'{metric_name} (rolling {window_minutes} min)',
+        line=dict(color='rgba(180,180,180,0.35)', width=1.2),
+        marker=dict(size=7, color=cores, line=dict(width=0.8, color='rgba(0,0,0,0.4)')),
+        hovertemplate=f'%{{x:.1f}} min — %{{y:.1f}} {unidade}<extra></extra>',
     ))
-    
+
+    # ── Linhas de referência dos limiares ─────────────────────────────────────
+    if limiar_alta is not None:
+        fig.add_hline(
+            y=limiar_alta, line_dash='dash', line_color='rgba(239,68,68,0.55)',
+            line_width=1.5,
+            annotation_text=f'Alta ≥ {limiar_alta} {unidade}',
+            annotation_font_color='#ef4444', annotation_font_size=11,
+            annotation_position='top right',
+        )
+    if limiar_media is not None:
+        fig.add_hline(
+            y=limiar_media, line_dash='dot', line_color='rgba(245,158,11,0.55)',
+            line_width=1.5,
+            annotation_text=f'Média-Alta ≥ {limiar_media} {unidade}',
+            annotation_font_color='#f59e0b', annotation_font_size=11,
+            annotation_position='top right',
+        )
+
     fig.update_layout(
-        title=f"Intensidade de {metric_name} - {athlete_name} (Rolling Window: {window_minutes} min | Passo: 10 s)",
+        title=f"Intensidade de {metric_name} — {athlete_name}  "
+              f"(Rolling Window: {window_minutes} min | Passo: 10 s)",
         xaxis_title="Tempo (minutos)",
         yaxis_title=f"{metric_name} ({unidade})",
         height=500,
-        hovermode='closest'
+        hovermode='closest',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        font=dict(color='white'),
+        xaxis=dict(gridcolor='rgba(255,255,255,0.07)', zerolinecolor='rgba(255,255,255,0.1)'),
+        yaxis=dict(gridcolor='rgba(255,255,255,0.07)', zerolinecolor='rgba(255,255,255,0.1)'),
+        legend=dict(orientation='h', yanchor='bottom', y=1.01, xanchor='left', x=0),
     )
-    
-    fig.add_annotation(x=0.02, y=0.98, xref="paper", yref="paper",
-                       text="🟢 Baixa (<50%) | 🟡 Média-Alta (50-75%) | 🟠 Alta (>75%)",
-                       showarrow=False, font=dict(size=10))
-    
+
+    fig.add_annotation(
+        x=0.01, y=0.985, xref='paper', yref='paper', showarrow=False,
+        text='🟢 Baixa  |  🟡 Média-Alta  |  🔴 Alta',
+        font=dict(size=10, color='rgba(255,255,255,0.55)'),
+        align='left',
+    )
+
     return fig
 
 def criar_tabela_intensidade(tempos, valores, classificacoes, metric_name, unidade):
@@ -3509,21 +3550,27 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
         return
 
     valores_array = np.array(valores_janela)
-    percentil_50 = np.percentile(valores_array, 50)
-    percentil_75 = np.percentile(valores_array, 75)
 
-    cores, classificacoes = classificar_intensidade(valores_janela, percentil_50, percentil_75)
+    # ── Limiares absolutos por métrica (literatura) ───────────────────────────
+    _lim = _LIMIARES_JANELA.get(nome_metrica, dict(alta=float('inf'), media=float('inf'), ref='—'))
+    _limiar_alta  = _lim['alta']
+    _limiar_media = _lim['media']
+    _ref_lit      = _lim['ref']
 
-    fig = criar_grafico_intensidade(tempos_janela, valores_janela, cores, nome_metrica, atleta_janela, window_minutes, unidade)
+    cores, classificacoes = classificar_intensidade(valores_janela, _limiar_alta, _limiar_media)
+
+    fig = criar_grafico_intensidade(
+        tempos_janela, valores_janela, cores, nome_metrica, atleta_janela,
+        window_minutes, unidade, _limiar_alta, _limiar_media,
+    )
     if fig:
         st.plotly_chart(fig, use_container_width=True)
 
     alta_count       = sum(1 for c in classificacoes if 'Alta' in c and 'Média' not in c)
     media_alta_count = sum(1 for c in classificacoes if 'Média-Alta' in c)
-
-    _p50_fmt = f"{percentil_50:.1f} {unidade}"
-    _p75_fmt = f"{percentil_75:.1f} {unidade}"
-    _total   = len(classificacoes)
+    _total           = len(classificacoes)
+    _pct_alta        = round(alta_count  / _total * 100) if _total else 0
+    _pct_media       = round(media_alta_count / _total * 100) if _total else 0
 
     _card_alta = f"""
     <div style="
@@ -3543,9 +3590,9 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
       <div style="font-size:72px;font-weight:800;color:#f87171;line-height:1;
                   text-shadow:0 0 24px rgba(248,113,113,0.5);">{alta_count}</div>
       <div style="font-size:12px;color:rgba(255,255,255,0.38);margin-top:14px;line-height:1.6;">
-        janelas acima do <strong style="color:rgba(248,113,113,0.8);">percentil 75</strong><br>
-        corte &gt; <strong style="color:rgba(248,113,113,0.8);">{_p75_fmt}</strong>
-        &nbsp;·&nbsp; {round(alta_count/_total*100) if _total else 0}% das janelas
+        janelas com <strong style="color:rgba(248,113,113,0.8);">{nome_metrica} ≥ {_limiar_alta} {unidade}</strong><br>
+        {_pct_alta}% das janelas &nbsp;·&nbsp;
+        <span style="font-size:10px;opacity:0.6;">Ref: {_ref_lit}</span>
       </div>
     </div>"""
 
@@ -3567,10 +3614,9 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
       <div style="font-size:72px;font-weight:800;color:#fbbf24;line-height:1;
                   text-shadow:0 0 24px rgba(251,191,36,0.5);">{media_alta_count}</div>
       <div style="font-size:12px;color:rgba(255,255,255,0.38);margin-top:14px;line-height:1.6;">
-        janelas entre <strong style="color:rgba(251,191,36,0.8);">percentil 50–75</strong><br>
-        corte <strong style="color:rgba(251,191,36,0.8);">{_p50_fmt}</strong>
-        → <strong style="color:rgba(251,191,36,0.8);">{_p75_fmt}</strong>
-        &nbsp;·&nbsp; {round(media_alta_count/_total*100) if _total else 0}% das janelas
+        janelas com <strong style="color:rgba(251,191,36,0.8);">{_limiar_media} ≤ {nome_metrica} &lt; {_limiar_alta} {unidade}</strong><br>
+        {_pct_media}% das janelas &nbsp;·&nbsp;
+        <span style="font-size:10px;opacity:0.6;">Ref: {_ref_lit}</span>
       </div>
     </div>"""
 
