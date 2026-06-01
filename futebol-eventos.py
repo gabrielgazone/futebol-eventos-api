@@ -2786,83 +2786,74 @@ def calcular_janelas_discretas_10s(sensor_points, window_minutes, metric_name, b
     t_arr = np.array(tempos,  dtype=float)
     v_arr = np.array(valores, dtype=float)
 
-    # ── Rolling window ─────────────────────────────────────────────────────────
-    window_s     = window_minutes * 60.0
-    step_samples = 100          # desloca 10 s (100 amostras a 10 Hz) por passo
-    n            = len(t_arr)
+    # ── Rolling window por contagem de amostras (coerente com WCS) ────────────
+    _HZ      = 10.0
+    n_window = int(round(window_minutes * 60.0 * _HZ))   # amostras fixas na janela
+    step     = int(_HZ * 10)                              # passo de 10 s
+    n        = len(v_arr)
+
+    if n < n_window:
+        return [], []
 
     t_out, d_out = [], []
-    i = 0
-    while i < n:
-        t_start = t_arr[i]
-        t_end   = t_start + window_s
-        j = int(np.searchsorted(t_arr, t_end, side='left'))
-        if j >= n:
-            break
-        janela_vals = v_arr[i:j]
-        if len(janela_vals) < 10:
-            i += step_samples
-            continue
-        t_out.append(t_start / 60.0)
+    for i in range(0, n - n_window + 1, step):
+        janela_vals = v_arr[i:i + n_window]
+        t_out.append(t_arr[i + n_window // 2] / 60.0)
         d_out.append(float(np.mean(janela_vals)))
-        i += step_samples
 
     return t_out, d_out
 
 def calcular_distancia_janelas_discretas_10s(sensor_points, window_minutes):
     """
-    Rolling window (janela deslizante) para distância em m/min.
-    A janela desliza 10 s por passo — captura o pico real sem depender de
-    blocos fixos que podem cortar esforços na borda.
+    Rolling window para distância — algoritmo idêntico ao WCS para garantir
+    coerência entre abas:
+      • Integração retangular:  dist_amostra = v_ms / Hz  (mesmo que WCS)
+      • Janela por contagem:    n = window_minutes * 60 * Hz  (fixo, sem searchsorted)
+      • Desloca 10 s por passo (100 amostras a 10 Hz)
+    Retorna (tempos_em_min, valores_em_m_por_min).
     """
     if not sensor_points or len(sensor_points) < 20:
         return [], []
 
-    # ── Construir série de distância acumulada ─────────────────────────────────
-    tempos = []
-    dist_cum = []
-    t_ini = None
-    d_acc = 0.0
-    v_ant = None
+    _HZ = 10.0   # frequência nominal GPS Catapult
+
+    # ── Série temporal: distância por amostra (retangular = mesmo que WCS) ─────
+    sv     = []   # distância em metros por amostra
+    t_abs  = []   # tempo absoluto de cada amostra (s)
+    t_ini  = None
 
     for ponto in sensor_points:
-        if ponto.get('v') is None:
+        v = ponto.get('v')
+        if v is None:
             continue
         ts = ponto.get('ts', 0)
         cs = ponto.get('cs', 0)
         t  = ts + (cs / 100) if cs else ts
         if t_ini is None:
             t_ini = t
-        v_ms = float(ponto['v'])
-        if v_ant is not None:
-            d_acc += ((v_ant + v_ms) / 2) * 0.1   # intervalo fixo de 100 ms (10 Hz)
-        v_ant = v_ms
-        tempos.append(t - t_ini)
-        dist_cum.append(d_acc)
+        sv.append(float(v) / _HZ)      # m/amostra  (v em m/s ÷ Hz = m/sample)
+        t_abs.append(t - t_ini)
 
-    if len(tempos) < 20:
+    n_total  = len(sv)
+    n_window = int(round(window_minutes * 60.0 * _HZ))   # amostras na janela
+    step     = int(_HZ * 10)                              # passo de 10 s = 100 amostras
+
+    if n_total < n_window + 1:
         return [], []
 
-    t_arr = np.array(tempos,   dtype=float)
-    d_arr = np.array(dist_cum, dtype=float)
+    sv_arr = np.array(sv,    dtype=float)
+    t_arr  = np.array(t_abs, dtype=float)
 
-    # ── Rolling window ─────────────────────────────────────────────────────────
-    window_s     = window_minutes * 60.0
-    step_samples = 100          # desloca 10 s por passo (10 Hz → 100 amostras)
-    n            = len(t_arr)
+    # ── Sliding window sum (soma acumulada — O(n), mesmo algoritmo do WCS) ────
+    w_sum = float(sv_arr[:n_window].sum())
+    t_out = [t_arr[n_window // 2] / 60.0]
+    d_out = [w_sum / window_minutes]          # m/min
 
-    t_out, d_out = [], []
-    i = 0
-    while i < n:
-        t_start = t_arr[i]
-        t_end   = t_start + window_s
-        j = int(np.searchsorted(t_arr, t_end, side='left'))
-        if j >= n:
-            break
-        dist_janela = d_arr[j - 1] - (d_arr[i - 1] if i > 0 else 0.0)
-        t_out.append(t_start / 60.0)
-        d_out.append(dist_janela / window_minutes)   # m/min
-        i += step_samples
+    for i in range(1, n_total - n_window + 1):
+        w_sum += sv_arr[i + n_window - 1] - sv_arr[i - 1]
+        if i % step == 0:
+            t_out.append(t_arr[i + n_window // 2] / 60.0)
+            d_out.append(w_sum / window_minutes)
 
     return t_out, d_out
 
