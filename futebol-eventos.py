@@ -3551,11 +3551,13 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
 
     valores_array = np.array(valores_janela)
 
-    # ── Limiares absolutos por métrica (literatura) ───────────────────────────
-    _lim = _LIMIARES_JANELA.get(nome_metrica, dict(alta=float('inf'), media=float('inf'), ref='—'))
-    _limiar_alta  = _lim['alta']
-    _limiar_media = _lim['media']
-    _ref_lit      = _lim['ref']
+    # ── Limiares como % do valor máximo da sessão ─────────────────────────────
+    # Alta Intensidade  : ≥ 75 % do máximo
+    # Média-Alta        : ≥ 50 % e < 75 % do máximo
+    # Baixa             : < 50 % do máximo
+    _max_val      = float(valores_array.max()) if len(valores_array) > 0 else 1.0
+    _limiar_alta  = round(_max_val * 0.75, 1)
+    _limiar_media = round(_max_val * 0.50, 1)
 
     cores, classificacoes = classificar_intensidade(valores_janela, _limiar_alta, _limiar_media)
 
@@ -3591,8 +3593,7 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
                   text-shadow:0 0 24px rgba(248,113,113,0.5);">{alta_count}</div>
       <div style="font-size:12px;color:rgba(255,255,255,0.38);margin-top:14px;line-height:1.6;">
         janelas com <strong style="color:rgba(248,113,113,0.8);">{nome_metrica} ≥ {_limiar_alta} {unidade}</strong><br>
-        {_pct_alta}% das janelas &nbsp;·&nbsp;
-        <span style="font-size:10px;opacity:0.6;">Ref: {_ref_lit}</span>
+        ≥ 75% do máximo ({_max_val:.1f} {unidade}) &nbsp;·&nbsp; {_pct_alta}% das janelas
       </div>
     </div>"""
 
@@ -3615,8 +3616,7 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
                   text-shadow:0 0 24px rgba(251,191,36,0.5);">{media_alta_count}</div>
       <div style="font-size:12px;color:rgba(255,255,255,0.38);margin-top:14px;line-height:1.6;">
         janelas com <strong style="color:rgba(251,191,36,0.8);">{_limiar_media} ≤ {nome_metrica} &lt; {_limiar_alta} {unidade}</strong><br>
-        {_pct_media}% das janelas &nbsp;·&nbsp;
-        <span style="font-size:10px;opacity:0.6;">Ref: {_ref_lit}</span>
+        50–75% do máximo ({_max_val:.1f} {unidade}) &nbsp;·&nbsp; {_pct_media}% das janelas
       </div>
     </div>"""
 
