@@ -2983,6 +2983,40 @@ def combinar_periodos_continuo_posicao(dados_posicao_por_periodo: dict, atleta: 
     return vel_combined, ts_combined
 
 
+def obter_limites_periodos_posicao(dados_posicao_por_periodo: dict, atleta: str) -> list:
+    """
+    Retorna a lista de fronteiras de tempo de cada período no timeline contínuo
+    gerado por combinar_periodos_continuo_posicao().
+
+    Retorna [(t_start_min, t_end_min, nome_periodo), ...] ordenados pelo timeline.
+    Útil para identificar em qual período cai cada evento de Janelas Temporais.
+    """
+    boundaries = []
+    t_offset   = 0.0
+
+    for nome, _dados_per in dados_posicao_por_periodo.items():
+        da  = _dados_per.get(atleta, {})
+        vel = da.get('vel', [])
+        ts  = da.get('ts_pos', [])
+        if not vel:
+            continue
+        n = min(len(vel), len(ts)) if ts else len(vel)
+        if n == 0:
+            continue
+        if ts and len(ts) >= n:
+            t_ini = float(ts[0])
+            t_fim = float(ts[n - 1])
+            dur   = max(0.0, t_fim - t_ini)
+            boundaries.append((t_offset / 60.0, (t_offset + dur) / 60.0, nome))
+            t_offset += dur + 0.1
+        else:
+            hz_est = 10.0
+            boundaries.append((t_offset / 60.0, (t_offset + n / hz_est) / 60.0, nome))
+            t_offset += n / hz_est + 0.1
+
+    return boundaries
+
+
 def combinar_periodos_continuo(dados_sensor_por_atleta_por_periodo: dict, atleta: str) -> list:
     """
     Combina sensor_points de múltiplos períodos em uma linha do tempo contínua.
@@ -3073,6 +3107,7 @@ def encontrar_eventos_nao_sobrepostos(t_start_min, d_out, window_minutes, limiar
         event = dict(
             inicio=f"{mins_i:02d}:{segs_i:02d}",
             fim=f"{mins_f:02d}:{segs_f:02d}",
+            t_ini_min=t_ini,           # float → usado para lookup de período
             valor=round(val, 1),
             pct_max=round(val / max_val * 100, 1),
             intensidade='Alta Intensidade 🔴' if val >= limiar_alta
@@ -3718,7 +3753,8 @@ def criar_tabela_intensidade(tempos, valores, classificacoes, metric_name, unida
 
 # PARTE 5 - FUNÇÃO MAIN COMPLETA
 
-def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta_janela, window_minutes, unidade):
+def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta_janela, window_minutes, unidade,
+                             period_boundaries=None):
     if not tempos_janela or not valores_janela:
         st.warning("Dados insuficientes para calcular as janelas")
         return
@@ -3816,18 +3852,39 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
         f"selecionada pelo pico máximo. Separação mínima entre eventos: {window_minutes} min."
     )
 
+    # Helper: encontra o nome do período para um instante t_min (minutos)
+    def _periodo_para_t(t_min):
+        if not period_boundaries:
+            return None
+        for (t_s, t_e, nome) in period_boundaries:
+            if t_s <= t_min <= t_e + 0.1:   # +0.1 min de tolerância
+                return nome
+        # fallback: período mais próximo
+        return min(period_boundaries, key=lambda b: abs(b[0] - t_min))[2]
+
+    _mostrar_periodo = bool(period_boundaries)
+
     if _todos_ev:
         _rows = []
         for _rank, _ev in enumerate(_todos_ev, 1):
-            _rows.append({
+            row = {
                 '#': _rank,
                 'Início': _ev['inicio'],
                 'Fim':    _ev['fim'],
                 f'{nome_metrica} ({unidade})': _ev['valor'],
-                '% do Máximo': _ev['pct_max'],
+                '↓ % do Máximo': _ev['pct_max'],
                 'Intensidade': _ev['intensidade'],
-            })
+            }
+            if _mostrar_periodo:
+                row['Período'] = _periodo_para_t(_ev.get('t_ini_min', 0.0))
+            _rows.append(row)
         _df_ev = pd.DataFrame(_rows)
+
+        # Reordena colunas: Período logo após Fim (se presente)
+        if _mostrar_periodo and 'Período' in _df_ev.columns:
+            _cols = ['#', 'Início', 'Fim', 'Período',
+                     f'{nome_metrica} ({unidade})', '↓ % do Máximo', 'Intensidade']
+            _df_ev = _df_ev[[c for c in _cols if c in _df_ev.columns]]
 
         def _style_row(row):
             if 'Alta Intensidade' in str(row.get('Intensidade', '')) and 'Média' not in str(row.get('Intensidade', '')):
@@ -3836,10 +3893,8 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
                 return ['background-color:rgba(245,158,11,0.10)'] * len(row)
             return [''] * len(row)
 
-        _styled = _df_ev.style.apply(_style_row, axis=1).format({
-            f'{nome_metrica} ({unidade})': '{:.1f}',
-            '% do Máximo': '{:.1f}%',
-        })
+        _fmt = {f'{nome_metrica} ({unidade})': '{:.1f}', '↓ % do Máximo': '{:.1f}%'}
+        _styled = _df_ev.style.apply(_style_row, axis=1).format(_fmt)
         st.dataframe(_styled, use_container_width=True, height=min(600, 40 + len(_rows) * 36))
         st.download_button(
             f"📥 Exportar Eventos - {nome_metrica} (CSV)",
@@ -8596,12 +8651,20 @@ Escolha um ou mais atletas para análise simultânea.
                                         default=[1, 2, 3]
                                     )
 
+                            # ── Fronteiras de período para coluna "Período" na tabela ──
+                            if _jan_modo_todos and dados_posicao_por_periodo:
+                                _period_boundaries = obter_limites_periodos_posicao(
+                                    dados_posicao_por_periodo, atleta_janela
+                                )
+                            elif not _jan_modo_todos:
+                                # Período único: toda a timeline pertence a este período
+                                _period_boundaries = [(0.0, float('inf'), periodo_janela)]
+                            else:
+                                _period_boundaries = None
+
                             with st.spinner("Calculando janelas temporais..."):
                                 if tipo_metrica == 'Distância':
                                     # ── Usa dados de posição GPS (vel km/h) — MESMOS dados e filtros do WCS ──
-                                    # Isso garante que Janelas Temporais e WCS produzam resultados idênticos.
-                                    # A diferença anterior vinha de sensor_points incluir pontos fora do campo
-                                    # enquanto dados_posicao filtra apenas pontos dentro dos limites (x,y).
                                     _hz_jan = 10.0
                                     if dados_posicao_por_periodo:
                                         # Detecta Hz real a partir dos ts_pos (igual ao WCS)
@@ -8633,30 +8696,32 @@ Escolha um ou mais atletas para análise simultânea.
                                                 _vel_dist, _ts_dist, window_minutes, _hz_jan
                                             )
                                         else:
-                                            # Fallback: sensor_points (fonte alternativa)
                                             tempos_janela, valores_janela = calcular_distancia_janelas_discretas_10s(
                                                 sensor_points, window_minutes
                                             )
                                     else:
-                                        # Fallback se dados de posição não disponíveis
                                         tempos_janela, valores_janela = calcular_distancia_janelas_discretas_10s(
                                             sensor_points, window_minutes
                                         )
-                                    exibir_resultados_janela(tempos_janela, valores_janela, "Distância", atleta_janela, window_minutes, "m/min")
+                                    exibir_resultados_janela(tempos_janela, valores_janela, "Distância", atleta_janela,
+                                                             window_minutes, "m/min", _period_boundaries)
 
                                 elif tipo_metrica == 'PlayerLoad':
                                     tempos_janela, valores_janela = calcular_janelas_discretas_10s(sensor_points, window_minutes, 'pl', None)
-                                    exibir_resultados_janela(tempos_janela, valores_janela, "PlayerLoad", atleta_janela, window_minutes, "PL/min")
+                                    exibir_resultados_janela(tempos_janela, valores_janela, "PlayerLoad", atleta_janela,
+                                                             window_minutes, "PL/min", _period_boundaries)
 
                                 elif tipo_metrica == 'Velocidade':
                                     band_filter = {'velocity_bands': bandas_vel}
                                     tempos_janela, valores_janela = calcular_janelas_discretas_10s(sensor_points, window_minutes, 'v', band_filter)
-                                    exibir_resultados_janela(tempos_janela, valores_janela, "Velocidade", atleta_janela, window_minutes, "km/h")
+                                    exibir_resultados_janela(tempos_janela, valores_janela, "Velocidade", atleta_janela,
+                                                             window_minutes, "km/h", _period_boundaries)
 
                                 elif tipo_metrica == 'Aceleração':
                                     band_filter = {'acceleration_bands': bandas_acc}
                                     tempos_janela, valores_janela = calcular_janelas_discretas_10s(sensor_points, window_minutes, 'a', band_filter)
-                                    exibir_resultados_janela(tempos_janela, valores_janela, "Aceleração", atleta_janela, window_minutes, "m/s²")
+                                    exibir_resultados_janela(tempos_janela, valores_janela, "Aceleração", atleta_janela,
+                                                             window_minutes, "m/s²", _period_boundaries)
 
                             st.markdown(REFERENCIAS["janelas"])
                         else:
