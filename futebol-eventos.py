@@ -2805,11 +2805,9 @@ def calcular_janelas_discretas_10s(sensor_points, window_minutes, metric_name, b
 
 def calcular_distancia_janelas_discretas_10s(sensor_points, window_minutes):
     """
-    Rolling window para distância — algoritmo idêntico ao WCS para garantir
-    coerência entre abas:
-      • Integração retangular:  dist_amostra = v_ms / Hz  (mesmo que WCS)
-      • Janela por contagem:    n = window_minutes * 60 * Hz  (fixo, sem searchsorted)
-      • Desloca 10 s por passo (100 amostras a 10 Hz)
+    Rolling window para distância (fallback via sensor_points).
+    Slide de 1 amostra de cada vez → verdadeiro máximo global.
+    Grava para exibição a cada 1 s; injeta o pico real se necessário.
     Retorna (tempos_em_min, valores_em_m_por_min).
     """
     if not sensor_points or len(sensor_points) < 20:
@@ -2817,9 +2815,8 @@ def calcular_distancia_janelas_discretas_10s(sensor_points, window_minutes):
 
     _HZ = 10.0   # frequência nominal GPS Catapult
 
-    # ── Série temporal: distância por amostra (retangular = mesmo que WCS) ─────
-    sv     = []   # distância em metros por amostra
-    t_abs  = []   # tempo absoluto de cada amostra (s)
+    sv     = []
+    t_abs  = []
     t_ini  = None
 
     for ponto in sensor_points:
@@ -2831,12 +2828,12 @@ def calcular_distancia_janelas_discretas_10s(sensor_points, window_minutes):
         t  = ts + (cs / 100) if cs else ts
         if t_ini is None:
             t_ini = t
-        sv.append(float(v) / _HZ)      # m/amostra  (v em m/s ÷ Hz = m/sample)
+        sv.append(float(v) / _HZ)
         t_abs.append(t - t_ini)
 
-    n_total  = len(sv)
-    n_window = int(round(window_minutes * 60.0 * _HZ))   # amostras na janela
-    step     = int(_HZ * 10)                              # passo de 10 s = 100 amostras
+    n_total      = len(sv)
+    n_window     = int(round(window_minutes * 60.0 * _HZ))
+    step_display = max(1, int(_HZ))   # 1 s por ponto de exibição
 
     if n_total < n_window + 1:
         return [], []
@@ -2844,16 +2841,29 @@ def calcular_distancia_janelas_discretas_10s(sensor_points, window_minutes):
     sv_arr = np.array(sv,    dtype=float)
     t_arr  = np.array(t_abs, dtype=float)
 
-    # ── Sliding window sum (soma acumulada — O(n), mesmo algoritmo do WCS) ────
-    w_sum = float(sv_arr[:n_window].sum())
-    t_out = [t_arr[0] / 60.0]               # início da janela (não o centro)
-    d_out = [w_sum / window_minutes]         # m/min
+    w_sum    = float(sv_arr[:n_window].sum())
+    best_sum = w_sum
+    best_i   = 0
+
+    t_out = [t_arr[0] / 60.0]
+    d_out = [w_sum / window_minutes]
 
     for i in range(1, n_total - n_window + 1):
         w_sum += sv_arr[i + n_window - 1] - sv_arr[i - 1]
-        if i % step == 0:
-            t_out.append(t_arr[i] / 60.0)   # início da janela
+        if w_sum > best_sum:
+            best_sum = w_sum
+            best_i   = i
+        if i % step_display == 0:
+            t_out.append(t_arr[i] / 60.0)
             d_out.append(w_sum / window_minutes)
+
+    # Injeta o pico real se não caiu num ponto de exibição
+    if best_i % step_display != 0:
+        best_t = t_arr[best_i] / 60.0
+        best_d = best_sum / window_minutes
+        ins = next((k for k, t in enumerate(t_out) if t > best_t), len(t_out))
+        t_out.insert(ins, best_t)
+        d_out.insert(ins, best_d)
 
     return t_out, d_out
 
@@ -2870,6 +2880,12 @@ def calcular_distancia_janelas_por_vel_posicao(vel_kmh_list, ts_list, window_min
         hz            : frequência de amostragem detectada (padrão 10 Hz)
 
     Retorna (tempos_em_min, valores_em_m_por_min).
+
+    Algoritmo idêntico ao WCS:
+      - Slide de 1 amostra de cada vez → encontra o VERDADEIRO máximo global
+      - Registra para exibição a cada 1 s (hz amostras) para manter o gráfico fluido
+      - Se o pico real não cair num ponto de exibição, ele é inserido explicitamente
+        para que o evento reportado coincida exatamente com o WCS.
     """
     if not vel_kmh_list or len(vel_kmh_list) < 20:
         return [], []
@@ -2885,8 +2901,8 @@ def calcular_distancia_janelas_por_vel_posicao(vel_kmh_list, ts_list, window_min
     else:
         t_abs = [i / hz for i in range(n)]
 
-    n_window = int(round(window_minutes * 60.0 * hz))
-    step     = max(1, int(hz * 10))   # 10 s por passo
+    n_window     = int(round(window_minutes * 60.0 * hz))
+    step_display = max(1, int(hz))   # 1 s por ponto de exibição (hz amostras)
 
     if n < n_window + 1:
         return [], []
@@ -2894,16 +2910,32 @@ def calcular_distancia_janelas_por_vel_posicao(vel_kmh_list, ts_list, window_min
     sv_arr = np.array(sv,    dtype=float)
     t_arr  = np.array(t_abs, dtype=float)
 
-    # Sliding window sum — idêntico ao WCS
-    w_sum = float(sv_arr[:n_window].sum())
+    # ── Sliding window sum em resolução total (igual ao WCS) ────────────────
+    w_sum    = float(sv_arr[:n_window].sum())
+    best_sum = w_sum
+    best_i   = 0
+
     t_out = [t_arr[0] / 60.0]
     d_out = [w_sum / window_minutes]
 
     for i in range(1, n - n_window + 1):
         w_sum += sv_arr[i + n_window - 1] - sv_arr[i - 1]
-        if i % step == 0:
+        # Rastreia o pico real (toda amostra, como o WCS)
+        if w_sum > best_sum:
+            best_sum = w_sum
+            best_i   = i
+        # Grava para exibição a cada 1 s
+        if i % step_display == 0:
             t_out.append(t_arr[i] / 60.0)
             d_out.append(w_sum / window_minutes)
+
+    # ── Injeta o pico real se não caiu num ponto de exibição ────────────────
+    if best_i % step_display != 0:
+        best_t = t_arr[best_i] / 60.0
+        best_d = best_sum / window_minutes
+        ins = next((k for k, t in enumerate(t_out) if t > best_t), len(t_out))
+        t_out.insert(ins, best_t)
+        d_out.insert(ins, best_d)
 
     return t_out, d_out
 
