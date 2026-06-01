@@ -3518,13 +3518,68 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
     if fig:
         st.plotly_chart(fig, use_container_width=True)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        alta_count = sum(1 for c in classificacoes if 'Alta' in c and 'Média' not in c)
-        st.metric("🔴 Eventos de Alta Intensidade", alta_count)
-    with col2:
-        media_alta_count = sum(1 for c in classificacoes if 'Média-Alta' in c)
-        st.metric("🟡 Eventos de Média-Alta Intensidade", media_alta_count)
+    alta_count       = sum(1 for c in classificacoes if 'Alta' in c and 'Média' not in c)
+    media_alta_count = sum(1 for c in classificacoes if 'Média-Alta' in c)
+
+    _p50_fmt = f"{percentil_50:.1f} {unidade}"
+    _p75_fmt = f"{percentil_75:.1f} {unidade}"
+    _total   = len(classificacoes)
+
+    _card_alta = f"""
+    <div style="
+        background: linear-gradient(135deg, rgba(220,38,38,0.18) 0%, rgba(153,27,27,0.08) 100%);
+        border: 1px solid rgba(239,68,68,0.55);
+        border-radius: 18px;
+        padding: 32px 24px 26px;
+        text-align: center;
+        box-shadow: 0 0 32px rgba(220,38,38,0.22), 0 2px 8px rgba(0,0,0,0.4),
+                    inset 0 1px 0 rgba(255,255,255,0.07);
+        position: relative; overflow: hidden;
+    ">
+      <div style="position:absolute;top:-30px;right:-30px;width:120px;height:120px;
+                  border-radius:50%;background:rgba(220,38,38,0.10);pointer-events:none;"></div>
+      <div style="font-size:11px;font-weight:600;letter-spacing:2px;color:rgba(255,255,255,0.5);
+                  text-transform:uppercase;margin-bottom:10px;">Alta Intensidade</div>
+      <div style="font-size:72px;font-weight:800;color:#f87171;line-height:1;
+                  text-shadow:0 0 24px rgba(248,113,113,0.5);">{alta_count}</div>
+      <div style="font-size:12px;color:rgba(255,255,255,0.38);margin-top:14px;line-height:1.6;">
+        janelas acima do <strong style="color:rgba(248,113,113,0.8);">percentil 75</strong><br>
+        corte &gt; <strong style="color:rgba(248,113,113,0.8);">{_p75_fmt}</strong>
+        &nbsp;·&nbsp; {round(alta_count/_total*100) if _total else 0}% das janelas
+      </div>
+    </div>"""
+
+    _card_media = f"""
+    <div style="
+        background: linear-gradient(135deg, rgba(202,138,4,0.18) 0%, rgba(133,77,14,0.08) 100%);
+        border: 1px solid rgba(234,179,8,0.50);
+        border-radius: 18px;
+        padding: 32px 24px 26px;
+        text-align: center;
+        box-shadow: 0 0 32px rgba(202,138,4,0.22), 0 2px 8px rgba(0,0,0,0.4),
+                    inset 0 1px 0 rgba(255,255,255,0.07);
+        position: relative; overflow: hidden;
+    ">
+      <div style="position:absolute;top:-30px;right:-30px;width:120px;height:120px;
+                  border-radius:50%;background:rgba(202,138,4,0.10);pointer-events:none;"></div>
+      <div style="font-size:11px;font-weight:600;letter-spacing:2px;color:rgba(255,255,255,0.5);
+                  text-transform:uppercase;margin-bottom:10px;">Média-Alta Intensidade</div>
+      <div style="font-size:72px;font-weight:800;color:#fbbf24;line-height:1;
+                  text-shadow:0 0 24px rgba(251,191,36,0.5);">{media_alta_count}</div>
+      <div style="font-size:12px;color:rgba(255,255,255,0.38);margin-top:14px;line-height:1.6;">
+        janelas entre <strong style="color:rgba(251,191,36,0.8);">percentil 50–75</strong><br>
+        corte <strong style="color:rgba(251,191,36,0.8);">{_p50_fmt}</strong>
+        → <strong style="color:rgba(251,191,36,0.8);">{_p75_fmt}</strong>
+        &nbsp;·&nbsp; {round(media_alta_count/_total*100) if _total else 0}% das janelas
+      </div>
+    </div>"""
+
+    _c1, _c2 = st.columns(2)
+    with _c1:
+        st.markdown(_card_alta,  unsafe_allow_html=True)
+    with _c2:
+        st.markdown(_card_media, unsafe_allow_html=True)
+    st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
 
     st.markdown("#### 📋 Eventos de Média-Alta e Alta Intensidade")
     df_eventos = criar_tabela_intensidade(tempos_janela, valores_janela, classificacoes, nome_metrica, unidade)
