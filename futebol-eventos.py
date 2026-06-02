@@ -9219,53 +9219,184 @@ Escolha um ou mais atletas para análise simultânea.
                                         )
                                         st.plotly_chart(_fig_avg, use_container_width=True)
 
-                                    # ── Ranking de intensidade ──────────────────────
-                                    st.markdown("##### 🏆 Ranking de Intensidade — Time Completo")
-                                    _rank_rows: list = []
-                                    for _a in _atls_ord:
-                                        _ta, _va = _team_res[_a]
-                                        _va_arr = np.array(_va)
-                                        _vmx_a  = round(float(np.nanmax(_va_arr)), 1)
-                                        _vmn_a  = round(float(np.nanmean(_va_arr)), 1)
-                                        # Limiares coletivos (consistentes com o heatmap)
-                                        _la_a   = _col_max * 0.75
-                                        _lm_a   = _col_max * 0.50
-                                        # Tempo em zona (s → min, a resolução é ~1 s/ponto)
-                                        _t_alta = round(
-                                            sum(1 for v in _va_arr if v >= _la_a) / 60, 1)
-                                        _t_med  = round(
-                                            sum(1 for v in _va_arr if _lm_a <= v < _la_a) / 60, 1)
-                                        _dur_a  = round(
-                                            float(_ta[-1]) + window_minutes, 1)
-                                        _ent_a  = round(_offsets_tm.get(_a, 0.0), 1)
-                                        _rank_rows.append({
-                                            'Atleta':   _a,
-                                            'Posição':  _get_pos_atl(_a),
-                                            'Entrada (min)': _ent_a,
-                                            f'Pico ({_unidade_jan})':  _vmx_a,
-                                            f'Média ({_unidade_jan})': _vmn_a,
-                                            'Tempo Alta 🔴 (min)':       _t_alta,
-                                            'Tempo Média-Alta 🟡 (min)': _t_med,
-                                            'Duração Analisada (min)':   _dur_a,
-                                        })
-                                    _df_rank = (
-                                        pd.DataFrame(_rank_rows)
-                                        .sort_values(f'Pico ({_unidade_jan})',
-                                                     ascending=False)
-                                        .reset_index(drop=True)
-                                    )
-                                    _df_rank.index += 1
-                                    st.dataframe(
-                                        _df_rank,
-                                        use_container_width=True,
-                                        height=38 * len(_df_rank) + 60)
-                                    if not st.session_state.get('modo_apresentacao'):
-                                        st.download_button(
-                                            f"📥 Exportar Ranking (CSV)",
-                                            _df_rank.to_csv(index=True).encode('utf-8'),
-                                            f"ranking_{tipo_metrica}_{window_minutes}min.csv",
-                                            mime='text/csv', key="dl_rank_team"
+                                        # ── Cards de esforços coletivos ────────────
+                                        _tg_v   = _tg[~np.isnan(_tm_mean)]
+                                        _tmm_v  = _tm_mean[~np.isnan(_tm_mean)]
+                                        _alta_ev_tm, _media_ev_tm = (
+                                            encontrar_eventos_nao_sobrepostos(
+                                                list(_tg_v), list(_tmm_v),
+                                                window_minutes, _tla, _tlm, _tmx,
+                                            ) if len(_tg_v) > 1 else ([], [])
                                         )
+                                        _alta_cnt_tm  = len(_alta_ev_tm)
+                                        _media_cnt_tm = len(_media_ev_tm)
+
+                                        _card_alta_tm = f"""
+    <div style="
+        background: linear-gradient(135deg,rgba(220,38,38,0.18) 0%,rgba(153,27,27,0.08) 100%);
+        border: 1px solid rgba(239,68,68,0.55); border-radius: 18px;
+        padding: 32px 24px 26px; text-align: center;
+        box-shadow: 0 0 32px rgba(220,38,38,0.22),0 2px 8px rgba(0,0,0,0.4),
+                    inset 0 1px 0 rgba(255,255,255,0.07);
+        position: relative; overflow: hidden;">
+      <div style="position:absolute;top:-30px;right:-30px;width:120px;height:120px;
+                  border-radius:50%;background:rgba(220,38,38,0.10);pointer-events:none;"></div>
+      <div style="font-size:11px;font-weight:600;letter-spacing:2px;
+                  color:rgba(255,255,255,0.5);text-transform:uppercase;margin-bottom:10px;">
+        Alta Intensidade — Time</div>
+      <div style="font-size:72px;font-weight:800;color:#f87171;line-height:1;
+                  text-shadow:0 0 24px rgba(248,113,113,0.5);">{_alta_cnt_tm}</div>
+      <div style="font-size:12px;color:rgba(255,255,255,0.38);margin-top:14px;line-height:1.6;">
+        janelas coletivas com <strong style="color:rgba(248,113,113,0.8);">
+        {tipo_metrica} ≥ {_tla} {_unidade_jan}</strong><br>
+        ≥ 75% do pico coletivo ({_tmx:.1f} {_unidade_jan})
+      </div>
+    </div>"""
+
+                                        _card_media_tm = f"""
+    <div style="
+        background: linear-gradient(135deg,rgba(202,138,4,0.18) 0%,rgba(133,77,14,0.08) 100%);
+        border: 1px solid rgba(234,179,8,0.50); border-radius: 18px;
+        padding: 32px 24px 26px; text-align: center;
+        box-shadow: 0 0 32px rgba(202,138,4,0.22),0 2px 8px rgba(0,0,0,0.4),
+                    inset 0 1px 0 rgba(255,255,255,0.07);
+        position: relative; overflow: hidden;">
+      <div style="position:absolute;top:-30px;right:-30px;width:120px;height:120px;
+                  border-radius:50%;background:rgba(202,138,4,0.10);pointer-events:none;"></div>
+      <div style="font-size:11px;font-weight:600;letter-spacing:2px;
+                  color:rgba(255,255,255,0.5);text-transform:uppercase;margin-bottom:10px;">
+        Média-Alta Intensidade — Time</div>
+      <div style="font-size:72px;font-weight:800;color:#fbbf24;line-height:1;
+                  text-shadow:0 0 24px rgba(251,191,36,0.5);">{_media_cnt_tm}</div>
+      <div style="font-size:12px;color:rgba(255,255,255,0.38);margin-top:14px;line-height:1.6;">
+        janelas coletivas com <strong style="color:rgba(251,191,36,0.8);">
+        {_tlm} ≤ {tipo_metrica} &lt; {_tla} {_unidade_jan}</strong><br>
+        50–75% do pico coletivo ({_tmx:.1f} {_unidade_jan})
+      </div>
+    </div>"""
+
+                                        _ctm1, _ctm2 = st.columns(2)
+                                        with _ctm1:
+                                            st.markdown(_card_alta_tm,
+                                                        unsafe_allow_html=True)
+                                        with _ctm2:
+                                            st.markdown(_card_media_tm,
+                                                        unsafe_allow_html=True)
+
+                                        # ── Feedback coletivo ───────────────────────
+                                        _n_tot_tm  = _alta_cnt_tm + _media_cnt_tm
+                                        _s_tot_tm  = "s" if _n_tot_tm    != 1 else ""
+                                        _s_alt_tm  = "s" if _alta_cnt_tm != 1 else ""
+                                        _s_med_tm  = "s" if _media_cnt_tm!= 1 else ""
+                                        _dur_tot_tm = (
+                                            float(_tg_v[-1]) + window_minutes
+                                            if len(_tg_v) else 0.0)
+                                        _dh = int(_dur_tot_tm // 60)
+                                        _dm = int(_dur_tot_tm % 60)
+                                        _dur_str_tm = (
+                                            f"{_dh}h {_dm:02d}min" if _dh
+                                            else f"{_dm} min")
+                                        st.markdown(f"""
+<div style="background:linear-gradient(135deg,rgba(25,35,55,0.65) 0%,rgba(15,25,45,0.45) 100%);
+     border:1px solid rgba(255,255,255,0.09);
+     border-left:3px solid rgba(93,173,226,0.55);
+     border-radius:10px;padding:14px 20px;margin:20px 0 10px 0;
+     font-size:0.875rem;line-height:1.75;color:rgba(255,255,255,0.72);">
+  💬 &nbsp;<strong style="color:white">O time</strong> apresentou
+  <strong style="color:#f87171">{_alta_cnt_tm}</strong> período{_s_alt_tm}
+  de <span style="color:#f87171">alta intensidade coletiva</span> e
+  <strong style="color:#fbbf24">{_media_cnt_tm}</strong>
+  de <span style="color:#fbbf24">média-alta</span> —
+  totalizando <strong style="color:white">{_n_tot_tm} janela{_s_tot_tm}
+  distinta{_s_tot_tm}</strong> de {window_minutes} min com
+  <em>{tipo_metrica}</em> médio ≥
+  <strong>{_tlm:.1f} {_unidade_jan}</strong>,
+  ao longo de <strong style="color:#5dade2">{_dur_str_tm}</strong>
+  analisados. Pico coletivo máximo:
+  <strong style="color:white">{_tmx:.1f} {_unidade_jan}</strong>.
+</div>""", unsafe_allow_html=True)
+
+                                    # ── Tabela de esforços coletivos ────────────────
+                                    st.markdown(
+                                        "#### 📋 Esforços Coletivos — Média-Alta e Alta Intensidade")
+                                    st.caption(
+                                        f"Cada linha é uma janela de **{window_minutes} min** "
+                                        "distinta e não-sobreposta da **média do time**, "
+                                        "selecionada pelo pico máximo coletivo.")
+
+                                    def _periodo_para_t_tm(_t_m):
+                                        for (_nm_p, _ps_p, _pe_p) in _period_bands_tm:
+                                            if _ps_p <= _t_m <= _pe_p + 0.1:
+                                                return _nm_p
+                                        if _period_bands_tm:
+                                            return min(
+                                                _period_bands_tm,
+                                                key=lambda _b: abs(_b[1] - _t_m))[0]
+                                        return None
+
+                                    _todos_ev_tm = (
+                                        [dict(_e, _cat='alta')  for _e in _alta_ev_tm] +
+                                        [dict(_e, _cat='media') for _e in _media_ev_tm]
+                                    )
+                                    _todos_ev_tm.sort(
+                                        key=lambda _e: _e['valor'], reverse=True)
+
+                                    if _todos_ev_tm:
+                                        _rows_tm = []
+                                        for _rk_tm, _ev_tm in enumerate(_todos_ev_tm, 1):
+                                            _per_nm = _periodo_para_t_tm(
+                                                _ev_tm.get('t_ini_min', 0.0))
+                                            _row_tm = {
+                                                '#': _rk_tm,
+                                                'Início': _ev_tm['inicio'],
+                                                'Fim':    _ev_tm['fim'],
+                                            }
+                                            if _per_nm:
+                                                _row_tm['Período'] = _per_nm
+                                            _row_tm.update({
+                                                f'{tipo_metrica} Médio ({_unidade_jan})':
+                                                    _ev_tm['valor'],
+                                                '↓ % do Pico Coletivo':
+                                                    _ev_tm['pct_max'],
+                                                'Intensidade':
+                                                    _ev_tm['intensidade'],
+                                            })
+                                            _rows_tm.append(_row_tm)
+
+                                        _df_ev_tm = pd.DataFrame(_rows_tm)
+
+                                        def _style_ev_tm(row):
+                                            if ('Alta Intensidade' in str(
+                                                    row.get('Intensidade', ''))
+                                                    and 'Média' not in str(
+                                                    row.get('Intensidade', ''))):
+                                                return ['background-color:rgba(239,68,68,0.12)'] * len(row)
+                                            elif 'Média-Alta' in str(row.get('Intensidade', '')):
+                                                return ['background-color:rgba(245,158,11,0.10)'] * len(row)
+                                            return [''] * len(row)
+
+                                        _fmt_tm = {
+                                            f'{tipo_metrica} Médio ({_unidade_jan})': '{:.1f}',
+                                            '↓ % do Pico Coletivo': '{:.1f}%',
+                                        }
+                                        st.dataframe(
+                                            _df_ev_tm.style.apply(
+                                                _style_ev_tm, axis=1).format(_fmt_tm),
+                                            use_container_width=True,
+                                            height=min(600, 40 + len(_rows_tm) * 36))
+                                        if not st.session_state.get('modo_apresentacao'):
+                                            st.download_button(
+                                                "📥 Exportar Esforços Coletivos (CSV)",
+                                                _df_ev_tm.to_csv(index=False).encode('utf-8'),
+                                                f"esforcos_coletivos_{tipo_metrica}"
+                                                f"_{window_minutes}min.csv",
+                                                mime='text/csv',
+                                                key="dl_ef_team",
+                                            )
+                                    else:
+                                        st.info(
+                                            "Nenhum esforço coletivo de média-alta "
+                                            "ou alta intensidade encontrado.")
 
             # ==================== ABA 4: CARGA NEUROMUSCULAR ====================
             with abas[3]:
