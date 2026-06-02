@@ -9493,11 +9493,17 @@ Escolha um ou mais atletas para análise simultânea.
                                             f'{tipo_metrica} Médio ({_unidade_jan})': '{:.1f}',
                                             '↓ % do Pico Coletivo': '{:.1f}%',
                                         }
-                                        st.dataframe(
+                                        # ── Tabela com seleção de linha ────────────
+                                        # Clicar na linha aciona a animação abaixo.
+                                        _ev_tbl_ev = st.dataframe(
                                             _df_ev_tm.style.apply(
                                                 _style_ev_tm, axis=1).format(_fmt_tm),
                                             use_container_width=True,
-                                            height=min(600, 40 + len(_rows_tm) * 36))
+                                            height=min(600, 40 + len(_rows_tm) * 36),
+                                            on_select="rerun",
+                                            selection_mode="single-row",
+                                            key="ev_tm_table_sel",
+                                        )
                                         if not st.session_state.get('modo_apresentacao'):
                                             st.download_button(
                                                 "📥 Exportar Esforços Coletivos (CSV)",
@@ -9510,56 +9516,43 @@ Escolha um ou mais atletas para análise simultânea.
 
                                         # ── Animação do esforço selecionado ────────
                                         if dados_posicao_por_periodo:
+                                            # Índice da linha selecionada (padrão: 0)
+                                            _sel_ao_idx = (
+                                                _ev_tbl_ev.selection.rows[0]
+                                                if (hasattr(_ev_tbl_ev, 'selection')
+                                                    and _ev_tbl_ev.selection.rows)
+                                                else 0
+                                            )
+                                            _ev_anim = _todos_ev_tm[_sel_ao_idx]
+                                            _t_ini_ao = _ev_anim.get('t_ini_min', 0.0)
+                                            _per_ao_lbl = (
+                                                _periodo_para_t_tm(_t_ini_ao) or '?')
+
                                             st.markdown("---")
                                             st.markdown(
                                                 "#### 🎬 Animar Esforço Coletivo no Campo")
                                             st.caption(
-                                                "Selecione uma linha da tabela acima para "
-                                                "visualizar a movimentação coletiva do time "
-                                                "naquele intervalo de tempo.")
+                                                f"**Clique em uma linha** da tabela para "
+                                                f"selecionar o esforço. Exibindo: "
+                                                f"**{_ev_anim['inicio']}→"
+                                                f"{_ev_anim['fim']}** "
+                                                f"({_per_ao_lbl})")
 
-                                            # Opções do selectbox
-                                            _anim_opts = []
-                                            for _ev_ao in _todos_ev_tm:
-                                                _per_ao = _periodo_para_t_tm(
-                                                    _ev_ao.get('t_ini_min', 0.0)) or '?'
-                                                _anim_opts.append(
-                                                    f"{_ev_ao['inicio']}→{_ev_ao['fim']}"
-                                                    f"  |  {_per_ao}"
-                                                    f"  |  {_ev_ao['valor']:.1f} {_unidade_jan}"
-                                                    f"  |  {_ev_ao['intensidade'].split()[0]}"
-                                                )
-                                            _sel_ao = st.selectbox(
-                                                "🎯 Esforço para animar:",
-                                                range(len(_anim_opts)),
-                                                format_func=lambda i: _anim_opts[i],
-                                                key="jt_anim_sel",
-                                            )
-                                            _ev_anim = _todos_ev_tm[_sel_ao]
-                                            _t_ini_ao = _ev_anim.get('t_ini_min', 0.0)
-
-                                            # Hz GPS (inline, mesmo algoritmo de _detect_hz)
-                                            _ao_hz = 10.0
-                                            _ao_diffs = []
-                                            for _pnn_ao in list(
-                                                    dados_posicao_por_periodo.keys())[:3]:
-                                                for _adat_ao in list(
-                                                        dados_posicao_por_periodo.get(
-                                                            _pnn_ao, {}).values())[:2]:
-                                                    _tss_ao = _adat_ao.get('ts_pos', [])
-                                                    if len(_tss_ao) > 10:
-                                                        _ao_diffs += [
-                                                            abs(_tss_ao[_ii+1]-_tss_ao[_ii])
-                                                            for _ii in range(
-                                                                1, min(20, len(_tss_ao)-1))
-                                                            if abs(_tss_ao[_ii+1]-
-                                                                   _tss_ao[_ii]) > 0
-                                                        ]
-                                            if _ao_diffs:
-                                                _ao_med = sorted(_ao_diffs)[
-                                                    len(_ao_diffs)//2]
-                                                if _ao_med > 0:
-                                                    _ao_hz = round(1.0/_ao_med, 1)
+                                            # Config do campo (necessária antes do loop
+                                            # para o fallback lats/lons → xs/ys)
+                                            _anim_cfg_ao = None
+                                            for _hk_ao in list(st.session_state.keys()):
+                                                if (_hk_ao.startswith("campo_cfg__")
+                                                        and isinstance(
+                                                        st.session_state[_hk_ao], dict)):
+                                                    _anim_cfg_ao = st.session_state[_hk_ao]
+                                                    break
+                                            _fl_ao = float(
+                                                _anim_cfg_ao.get('fl', 105)
+                                                if _anim_cfg_ao else 105)
+                                            _fw_ao = float(
+                                                _anim_cfg_ao.get('fw', 68)
+                                                if _anim_cfg_ao else 68)
 
                                             # Fim de cada período em match-time
                                             _pend_ao = {
@@ -9570,8 +9563,6 @@ Escolha um ou mais atletas para análise simultânea.
                                                     / 60.0)
                                                 for _pn_ao2 in _period_order_tm
                                             }
-                                            _n_smp_ao = max(
-                                                2, int(window_minutes * 60 * _ao_hz))
 
                                             # Paleta de cores
                                             _pal_ao = [
@@ -9582,72 +9573,95 @@ Escolha um ou mais atletas para análise simultânea.
                                             ]
 
                                             # Para cada atleta: acha período que cobre
-                                            # t_ini_ao e extrai o segmento GPS correto
+                                            # t_ini_ao e extrai o segmento GPS correto.
+                                            # Hz calculado por len(xs)/dur_s — robusto
+                                            # mesmo com ts_pos = 0 (não confiável).
+                                            # Fallback: lats/lons → gps_para_campo_coords
                                             _anim_map = {}
+                                            _ao_hz_ref = 10.0  # Hz de ref para frames
                                             for _ci_ao, _atl_ao in enumerate(_jan_atletas):
                                                 for _pn_ao3 in _sorted_by_ts_tm:
                                                     _pos_ao = dados_posicao_por_periodo.get(
                                                         _pn_ao3, {}).get(_atl_ao, {})
-                                                    _xs_ao = _pos_ao.get('xs', [])
+                                                    _xs_ao = list(
+                                                        _pos_ao.get('xs', []))
+                                                    _ys_ao = list(
+                                                        _pos_ao.get('ys', []))
+
+                                                    # Fallback: coordenadas GPS → campo
+                                                    if not _xs_ao and _anim_cfg_ao:
+                                                        _lts_ao = _pos_ao.get('lats', [])
+                                                        _lns_ao = _pos_ao.get('lons', [])
+                                                        if _lts_ao and _lns_ao:
+                                                            try:
+                                                                _xs_ao, _ys_ao = (
+                                                                    gps_para_campo_coords(
+                                                                        _lts_ao, _lns_ao,
+                                                                        _anim_cfg_ao))
+                                                            except Exception:
+                                                                pass
+
                                                     if not _xs_ao:
                                                         continue
+
                                                     _ps_ao = _period_start_min_tm.get(
                                                         _pn_ao3, 0.0)
                                                     _pe_ao = _pend_ao.get(_pn_ao3, _ps_ao)
-                                                    if _ps_ao <= _t_ini_ao <= _pe_ao:
-                                                        _off_ao = (
-                                                            (_t_ini_ao - _ps_ao) * 60.0)
-                                                        _is_ao = int(_off_ao * _ao_hz)
-                                                        _ie_ao = min(
-                                                            _is_ao + _n_smp_ao,
-                                                            len(_xs_ao))
-                                                        if 0 <= _is_ao < len(_xs_ao):
-                                                            _ys_ao = _pos_ao.get('ys', [])
-                                                            _vs_ao = _pos_ao.get('vel', [])
-                                                            _anim_map[_atl_ao] = {
-                                                                'xs': list(
-                                                                    _xs_ao[_is_ao:_ie_ao]),
-                                                                'ys': (
-                                                                    list(_ys_ao[_is_ao:_ie_ao])
-                                                                    if _ys_ao
-                                                                    else [0]*(_ie_ao-_is_ao)),
-                                                                'vel': (
-                                                                    list(_vs_ao[_is_ao:_ie_ao])
-                                                                    if _vs_ao
-                                                                    else [0]*(_ie_ao-_is_ao)),
-                                                                'color': _pal_ao[
-                                                                    _ci_ao % len(_pal_ao)],
-                                                                'label': (
-                                                                    _atl_ao.split()[-1][:10]
-                                                                    if _atl_ao.split()
-                                                                    else _atl_ao[:10]),
-                                                            }
-                                                        break
+                                                    if not (_ps_ao <= _t_ini_ao <= _pe_ao):
+                                                        continue
+
+                                                    # Hz por comprimento do array
+                                                    _dur_s_ao = (
+                                                        (_period_abs_tm[_pn_ao3][1]
+                                                         - _period_abs_tm[_pn_ao3][0])
+                                                        if _period_abs_tm.get(_pn_ao3)
+                                                        else 0.0)
+                                                    _hz_ao = (
+                                                        len(_xs_ao) / _dur_s_ao
+                                                        if _dur_s_ao > 0
+                                                        else 10.0)
+                                                    _ao_hz_ref = _hz_ao
+
+                                                    _off_s_ao = (
+                                                        (_t_ini_ao - _ps_ao) * 60.0)
+                                                    _n_smp_ao = max(
+                                                        2,
+                                                        int(window_minutes * 60 * _hz_ao))
+                                                    _is_ao = int(_off_s_ao * _hz_ao)
+                                                    _ie_ao = min(
+                                                        _is_ao + _n_smp_ao,
+                                                        len(_xs_ao))
+
+                                                    if 0 <= _is_ao < len(_xs_ao):
+                                                        _vs_ao = list(
+                                                            _pos_ao.get('vel', []))
+                                                        _anim_map[_atl_ao] = {
+                                                            'xs': _xs_ao[_is_ao:_ie_ao],
+                                                            'ys': (
+                                                                _ys_ao[_is_ao:_ie_ao]
+                                                                if _ys_ao
+                                                                else [0]*(_ie_ao-_is_ao)),
+                                                            'vel': (
+                                                                _vs_ao[_is_ao:_ie_ao]
+                                                                if _vs_ao
+                                                                else [0]*(_ie_ao-_is_ao)),
+                                                            'color': _pal_ao[
+                                                                _ci_ao % len(_pal_ao)],
+                                                            'label': (
+                                                                _atl_ao.split()[-1][:10]
+                                                                if _atl_ao.split()
+                                                                else _atl_ao[:10]),
+                                                        }
+                                                    break
 
                                             if len(_anim_map) < 2:
                                                 st.info(
-                                                    "GPS insuficiente para este esforço. "
-                                                    "Tente outro intervalo ou verifique "
-                                                    "os dados de posição.")
+                                                    "GPS insuficiente para este esforço "
+                                                    f"({len(_anim_map)} atleta(s) com "
+                                                    "dados de posição). Verifique se o "
+                                                    "campo foi configurado e se os dados "
+                                                    "GPS foram importados.")
                                             else:
-                                                # Config do campo
-                                                _anim_cfg_ao = None
-                                                for _hk_ao in list(
-                                                        st.session_state.keys()):
-                                                    if (_hk_ao.startswith("campo_cfg__")
-                                                            and isinstance(
-                                                            st.session_state[_hk_ao],
-                                                            dict)):
-                                                        _anim_cfg_ao = (
-                                                            st.session_state[_hk_ao])
-                                                        break
-                                                _fl_ao = float(
-                                                    _anim_cfg_ao.get('fl', 105)
-                                                    if _anim_cfg_ao else 105)
-                                                _fw_ao = float(
-                                                    _anim_cfg_ao.get('fw', 68)
-                                                    if _anim_cfg_ao else 68)
-
                                                 _per_ao_lbl = _periodo_para_t_tm(
                                                     _t_ini_ao) or '?'
                                                 _fig_ao = desenhar_campo_futebol_bonito(
@@ -9698,7 +9712,7 @@ Escolha um ou mais atletas para análise simultânea.
 
                                                 _frames_ao = []
                                                 for _fi_ao in _fr_ao:
-                                                    _ts_ao = _fi_ao / _ao_hz
+                                                    _ts_ao = _fi_ao / _ao_hz_ref
                                                     _mm_ao = int(_ts_ao // 60)
                                                     _ss_ao = int(_ts_ao % 60)
                                                     _fd_ao = []
