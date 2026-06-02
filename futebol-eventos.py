@@ -8911,25 +8911,61 @@ Escolha um ou mais atletas para análise simultânea.
                                 if not _team_res:
                                     st.warning("Dados insuficientes.")
                                 else:
-                                    # Grade temporal comum (resolução 1 s)
-                                    _max_t_tm = max(
-                                        float(_t[-1]) + window_minutes
-                                        for _t, _ in _team_res.values())
-                                    _tg = np.arange(0, _max_t_tm + 1/60, 1/60)
+                                    # ── Offset absoluto por atleta ─────────────────
+                                    # ts_pos são timestamps absolutos → encontra o
+                                    # instante de entrada de cada atleta no jogo real
+                                    _src_per_tm = (
+                                        dados_posicao_por_periodo
+                                        if _jan_modo_todos
+                                        else {periodo_janela: dados_posicao_por_periodo.get(
+                                            periodo_janela, {})}
+                                    )
+                                    _match_t0_ts: float = 0.0
+                                    _found_t0 = False
+                                    for _pn_mt in _src_per_tm.values():
+                                        for _da_mt in _pn_mt.values():
+                                            _ts_mt = _da_mt.get('ts_pos', [])
+                                            if _ts_mt:
+                                                _t0_mt = float(_ts_mt[0])
+                                                if not _found_t0 or _t0_mt < _match_t0_ts:
+                                                    _match_t0_ts = _t0_mt
+                                                    _found_t0 = True
+
+                                    def _atl_offset_min(_atl_nm: str) -> float:
+                                        """Minutos desde o kick-off até a 1ª amostra GPS do atleta."""
+                                        for _pn_ao in _src_per_tm.values():
+                                            _ts_ao = _pn_ao.get(_atl_nm, {}).get('ts_pos', [])
+                                            if _ts_ao:
+                                                return max(0.0,
+                                                    (float(_ts_ao[0]) - _match_t0_ts) / 60.0)
+                                        return 0.0  # sem GPS → assume entrada no kick-off
 
                                     # Ordena atletas por posição → nome
                                     _atls_ord = sorted(
                                         _team_res.keys(),
                                         key=lambda _a: (_get_pos_atl(_a), _a))
 
+                                    # Pré-calcula offsets uma vez
+                                    _offsets_tm = {
+                                        _a: _atl_offset_min(_a) for _a in _atls_ord}
+
+                                    # Grade temporal comum no tempo absoluto do jogo
+                                    _max_t_tm = max(
+                                        float(_t[-1]) + _offsets_tm[_a] + window_minutes
+                                        for _a, (_t, _) in _team_res.items()
+                                        if _a in _offsets_tm)
+                                    _tg = np.arange(0, _max_t_tm + 1/60, 1/60)
+
                                     _z_mat:   list = []   # normalizado (% máx coletivo)
                                     _raw_mat: list = []   # bruto (para média)
                                     _y_lbl:   list = []
 
-                                    # 1ª passagem — séries brutas interpoladas
+                                    # 1ª passagem — séries brutas no tempo absoluto
                                     for _a in _atls_ord:
                                         _ta, _va = _team_res[_a]
-                                        _vr = np.interp(_tg, _ta, _va,
+                                        # ← desloca para a linha do tempo real do jogo
+                                        _ta_abs = _ta + _offsets_tm[_a]
+                                        _vr = np.interp(_tg, _ta_abs, _va,
                                                         left=np.nan, right=np.nan)
                                         _raw_mat.append(_vr)
                                         _y_lbl.append(
@@ -9072,9 +9108,11 @@ Escolha um ou mais atletas para análise simultânea.
                                             sum(1 for v in _va_arr if _lm_a <= v < _la_a) / 60, 1)
                                         _dur_a  = round(
                                             float(_ta[-1]) + window_minutes, 1)
+                                        _ent_a  = round(_offsets_tm.get(_a, 0.0), 1)
                                         _rank_rows.append({
                                             'Atleta':   _a,
                                             'Posição':  _get_pos_atl(_a),
+                                            'Entrada (min)': _ent_a,
                                             f'Pico ({_unidade_jan})':  _vmx_a,
                                             f'Média ({_unidade_jan})': _vmn_a,
                                             'Tempo Alta 🔴 (min)':       _t_alta,
