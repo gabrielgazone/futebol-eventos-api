@@ -6130,8 +6130,8 @@ Escolha um ou mais atletas para análise simultânea.
 
                         _OV_TD_COLS = [c for c in [
                             'Atleta', 'Posição',
-                            'M/min',                              # ← 3ª coluna (síntese de intensidade)
                             'Duração (min)', 'Distância (m)',
+                            'M/min',                              # ← 5ª coluna
                             'Dist. 19-24 km/h (m)', 'Dist. > 24 km/h (m)',
                             'Dist. > 19 km/h (m)', 'Sprints (>24 km/h)',
                             'Velocidade Máx (km/h)', '%Vmax',
@@ -6143,10 +6143,17 @@ Escolha um ou mais atletas para análise simultânea.
                         ] if c in _df_ov.columns]
 
                         if _OV_TD_COLS:
-                            _df_ov_show = _df_ov[_OV_TD_COLS].sort_values(
-                                'Distância (m)' if 'Distância (m)' in _OV_TD_COLS else _OV_TD_COLS[0],
-                                ascending=False
-                            ).reset_index(drop=True)
+                            _df_ov_show = (
+                                _df_ov[_OV_TD_COLS]
+                                # Remove linhas sem atleta ou inteiramente vazias
+                                .dropna(subset=['Atleta'])
+                                .loc[lambda d: d['Atleta'].astype(str).str.strip() != '']
+                                .sort_values(
+                                    'Distância (m)' if 'Distância (m)' in _OV_TD_COLS else _OV_TD_COLS[0],
+                                    ascending=False
+                                )
+                                .reset_index(drop=True)
+                            )
 
                             _OV_NUM = [c for c in _OV_TD_COLS if c not in ('Atleta', 'Posição')]
 
