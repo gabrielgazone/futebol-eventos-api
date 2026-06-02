@@ -8442,66 +8442,6 @@ Escolha um ou mais atletas para análise simultânea.
                 else:
                     st.info("Dados de sensor não disponíveis")
 
-                # ── FEATURE 10: Exportação em Lote (Async Export) ────────────
-                st.markdown("---")
-                with st.expander("📦 Exportação em Lote (sessões longas)", expanded=False):
-                    st.info(
-                        "Para sessões > 90 min, use exportação assíncrona para evitar timeout. "
-                        "A API Catapult processará o arquivo em background."
-                    )
-                    _exp_api = st.session_state.get('api')
-                    _exp_act_id = st.session_state.get('activity_id')
-
-                    if _exp_api and _exp_act_id:
-                        if st.button("📤 Solicitar exportação", key="btn_submit_export"):
-                            try:
-                                _exp_payload = {
-                                    "activity_id": _exp_act_id,
-                                    "format": "csv",
-                                    "parameters": ["ts", "v", "a", "hr", "pl", "mp"],
-                                }
-                                _exp_resp = _exp_api.submit_export(_exp_payload)
-                                if _exp_resp:
-                                    _job_id = (
-                                        _exp_resp.get('id') or
-                                        _exp_resp.get('job_id') or
-                                        str(_exp_resp)
-                                    )
-                                    st.session_state['export_job_id'] = _job_id
-                                    st.success(f"Job submetido! ID: {_job_id}")
-                                else:
-                                    st.warning("Nenhuma resposta do servidor de exportação.")
-                            except Exception as _ee:
-                                st.error(f"Erro: {_ee}")
-
-                        _job_id = st.session_state.get('export_job_id')
-                        if _job_id:
-                            st.caption(f"Job ID: `{_job_id}`")
-                            if st.button("🔄 Verificar status", key="btn_check_export"):
-                                try:
-                                    _status_resp = _exp_api.get_export_status(_job_id)
-                                    if _status_resp:
-                                        _status = (_status_resp.get('status') or
-                                                   _status_resp.get('state', 'DESCONHECIDO'))
-                                        st.info(f"Status: **{_status}**")
-                                        if str(_status).upper() in ('COMPLETE', 'COMPLETED', 'DONE'):
-                                            if st.button("⬇️ Download", key="btn_dl_export"):
-                                                try:
-                                                    _dl = _exp_api.download_export(_job_id)
-                                                    if _dl:
-                                                        st.download_button(
-                                                            "📥 Baixar arquivo exportado",
-                                                            _dl,
-                                                            file_name=f"export_{_job_id}.csv",
-                                                        )
-                                                except Exception as _de:
-                                                    st.error(f"Erro no download: {_de}")
-                                    else:
-                                        st.warning("Sem resposta de status.")
-                                except Exception as _se:
-                                    st.error(f"Erro ao verificar status: {_se}")
-                    else:
-                        st.info("Carregue dados de uma atividade primeiro.")
 
                 # ── FEATURE 8: PDF Export ────────────────────────────────────
                 st.markdown("---")
