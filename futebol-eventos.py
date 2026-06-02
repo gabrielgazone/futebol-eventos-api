@@ -9044,14 +9044,37 @@ Escolha um ou mais atletas para análise simultânea.
 
                                     # ── Pré-calcula bandas de período ──────────────
                                     _period_bands_tm = []
-                                    for _i_pb, _pn_pb in enumerate(_period_order_tm):
-                                        _ps_pb = _period_start_min_tm[_pn_pb]
-                                        _pe_pb = (
-                                            _period_start_min_tm[_period_order_tm[_i_pb + 1]]
-                                            if _i_pb + 1 < len(_period_order_tm)
-                                            else _cum_min_tm
-                                        )
-                                        _period_bands_tm.append((_pn_pb, _ps_pb, _pe_pb))
+                                    if _use_abs_ts:
+                                        # Método A: posiciona cada banda pelos timestamps
+                                        # reais do período (pode haver sobreposição — ok)
+                                        for _pn_pb in _period_order_tm:
+                                            _per_ts_pb = []
+                                            for _spl_pb in dados_sensor_por_atleta_por_periodo.get(
+                                                    _pn_pb, {}).values():
+                                                if _spl_pb:
+                                                    _t0_pb = (float(_spl_pb[0].get('ts') or 0)
+                                                              + float(_spl_pb[0].get('cs') or 0) / 100)
+                                                    _t1_pb = (float(_spl_pb[-1].get('ts') or 0)
+                                                              + float(_spl_pb[-1].get('cs') or 0) / 100)
+                                                    if _t0_pb > 0:
+                                                        _per_ts_pb.extend([_t0_pb, _t1_pb])
+                                            if _per_ts_pb:
+                                                _ps_pb = max(0.0,
+                                                    (min(_per_ts_pb) - _match_t0_abs) / 60.0)
+                                                _pe_pb = (
+                                                    (max(_per_ts_pb) - _match_t0_abs) / 60.0)
+                                                _period_bands_tm.append(
+                                                    (_pn_pb, _ps_pb, _pe_pb))
+                                    else:
+                                        # Método B: usa durações acumuladas
+                                        for _i_pb, _pn_pb in enumerate(_period_order_tm):
+                                            _ps_pb = _period_start_min_tm[_pn_pb]
+                                            _pe_pb = (
+                                                _period_start_min_tm[_period_order_tm[_i_pb + 1]]
+                                                if _i_pb + 1 < len(_period_order_tm)
+                                                else _cum_min_tm
+                                            )
+                                            _period_bands_tm.append((_pn_pb, _ps_pb, _pe_pb))
 
                                     def _add_period_bands_tm(_fig, show_labels: bool = True):
                                         """Adiciona bandas alternadas + linhas divisórias + rótulos de período."""
