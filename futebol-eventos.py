@@ -6246,11 +6246,12 @@ Escolha um ou mais atletas para análise simultânea.
 
                         _OV_TD_COLS = [c for c in [
                             'Atleta', 'Posição',
+                            'M/min',                              # ← 3ª coluna (síntese de intensidade)
                             'Duração (min)', 'Distância (m)',
                             'Dist. 19-24 km/h (m)', 'Dist. > 24 km/h (m)',
                             'Dist. > 19 km/h (m)', 'Sprints (>24 km/h)',
-                            'Velocidade Máx (km/h)', '%Vmax', 'M/min',
-                            'Acc 2-3 (m/s²)', 'Dcc 2-3 (m/s²)',
+                            'Velocidade Máx (km/h)', '%Vmax',
+                            # 'Acc 2-3 (m/s²)' e 'Dcc 2-3 (m/s²)' removidos a pedido
                             'Acelerações (>3 m/s²)', 'Desacelerações (<-3 m/s²)',
                             'Acc Max (m/s²)', 'Dcc Max (m/s²)',
                             'PlayerLoad', 'RHIE Blocos',
@@ -6310,6 +6311,9 @@ Escolha um ou mais atletas para análise simultânea.
                                 "</style>",
                                 unsafe_allow_html=True,
                             )
+                            # Altura dinâmica: mostra todos os atletas sem scroll vertical
+                            # ~38 px por linha + 60 px de header/padding
+                            _ov_height = max(200, 38 * len(_df_ov_show) + 60)
                             st.dataframe(
                                 _df_ov_show.style
                                 .apply(_ov_style_pct, axis=0)
@@ -6324,6 +6328,7 @@ Escolha um ou mais atletas para análise simultânea.
                                 ]),
                                 use_container_width=True,
                                 hide_index=True,
+                                height=_ov_height,
                             )
                             st.download_button(
                                 "📥 Exportar Tabela (CSV)",
