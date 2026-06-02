@@ -3837,7 +3837,46 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
         st.markdown(_card_alta,  unsafe_allow_html=True)
     with _c2:
         st.markdown(_card_media, unsafe_allow_html=True)
-    st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
+
+    # ── Feedback interpretativo automático ───────────────────────────────────
+    _t_total_min = (max(tempos_janela) + window_minutes) if tempos_janela else 0
+    _t_total_h   = int(_t_total_min // 60)
+    _t_total_m   = int(_t_total_min % 60)
+    _t_total_s   = int(round((_t_total_min - int(_t_total_min)) * 60))
+    if _t_total_h > 0:
+        _t_total_str = f"{_t_total_h}h {_t_total_m:02d}min"
+    elif _t_total_s > 0:
+        _t_total_str = f"{_t_total_m}min {_t_total_s:02d}s"
+    else:
+        _t_total_str = f"{_t_total_m} min"
+
+    _n_total_ev  = alta_count + media_alta_count
+    _s_ev        = "s" if _n_total_ev != 1 else ""
+    _s_alta      = "s" if alta_count   != 1 else ""
+    _s_media     = "s" if media_alta_count != 1 else ""
+
+    _feedback_html = f"""
+<div style="
+    background: linear-gradient(135deg, rgba(25,35,55,0.65) 0%, rgba(15,25,45,0.45) 100%);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-left: 3px solid rgba(93,173,226,0.55);
+    border-radius: 10px;
+    padding: 14px 20px;
+    margin: 20px 0 10px 0;
+    font-size: 0.875rem;
+    line-height: 1.75;
+    color: rgba(255,255,255,0.72);
+">
+  💬 &nbsp;<strong style="color:white">{atleta_janela}</strong> teve
+  <strong style="color:#f87171">{alta_count}</strong> período{_s_alta} de <span style="color:#f87171">alta intensidade</span> e
+  <strong style="color:#fbbf24">{media_alta_count}</strong> de <span style="color:#fbbf24">média-alta</span> —
+  totalizando <strong style="color:white">{_n_total_ev} período{_s_ev} distinto{_s_ev} de {window_minutes} min</strong>
+  com <em>{nome_metrica}</em> ≥ <strong>{_limiar_media:.1f} {unidade}</strong>,
+  ao longo de <strong style="color:#5dade2">{_t_total_str}</strong> de atividade analisada.
+  Pico máximo registrado: <strong style="color:white">{_max_val:.1f} {unidade}</strong>
+  <span style="color:rgba(255,255,255,0.38)">(100% do máximo individual)</span>.
+</div>"""
+    st.markdown(_feedback_html, unsafe_allow_html=True)
 
     # ── Tabela de eventos distintos (Alta + Média-Alta, ordenados por valor) ──
     _todos_ev = (
