@@ -8537,6 +8537,19 @@ Escolha um ou mais atletas para análise simultânea.
                 """)
 
                 if dados_sensor_por_atleta_por_periodo:
+
+                    # ── Seletor de modo ────────────────────────────────────────────
+                    _jan_modo = st.radio(
+                        "Modo de análise:",
+                        ["🔵 Individual", "🟡 Por Posição", "🔴 Time Completo"],
+                        horizontal=True, key="jan_modo_analise",
+                        help="Individual: análise detalhada de um atleta · "
+                             "Por Posição: curva média por grupo tático · "
+                             "Time Completo: heatmap de intensidade de todos os atletas"
+                    )
+                    st.divider()
+
+                    # ── Controles comuns: período + janela + métrica ───────────────
                     _JAN_TODOS = "🔀 Todos os períodos (combinado)"
                     _jan_opcoes = [_JAN_TODOS] + list(dados_sensor_por_atleta_por_periodo.keys())
                     periodo_janela = st.selectbox("Selecione o período:", _jan_opcoes, key="periodo_janela")
@@ -8550,133 +8563,510 @@ Escolha um ou mais atletas para análise simultânea.
                     else:
                         _jan_atletas = list(dados_sensor_por_atleta_por_periodo.get(periodo_janela, {}).keys())
 
-                    if _jan_atletas:
-                        atleta_janela = st.selectbox("Selecione o atleta:", _jan_atletas, key="atleta_janela")
-                        if _jan_modo_todos:
-                            # ── Timeline contínua: elimina gap entre períodos ──────────
-                            sensor_points = combinar_periodos_continuo(
-                                dados_sensor_por_atleta_por_periodo, atleta_janela
+                    bandas_vel = [3, 4, 5, 6, 7, 8]
+                    bandas_acc = [1, 2, 3]
+                    _col_w, _col_m, _col_extra = st.columns(3)
+                    with _col_w:
+                        window_minutes = st.slider(
+                            "Janela temporal (minutos):",
+                            min_value=0.5, max_value=10.0, value=1.0, step=0.5,
+                            key="jan_window"
+                        )
+                    with _col_m:
+                        tipo_metrica = st.selectbox(
+                            "Métrica:",
+                            ['Distância', 'PlayerLoad', 'Velocidade', 'Aceleração'],
+                            key="jan_metrica"
+                        )
+                    with _col_extra:
+                        if tipo_metrica == 'Velocidade':
+                            bandas_vel = st.multiselect(
+                                "Bandas de Velocidade:",
+                                options=[1, 2, 3, 4, 5, 6, 7, 8],
+                                default=[3, 4, 5, 6, 7, 8], key="jan_bv"
                             )
-                            st.caption(
-                                f"📊 Combinando **{len(dados_sensor_por_atleta_por_periodo)} períodos** "
-                                f"em linha do tempo contínua → {len(sensor_points):,} amostras para **{atleta_janela}**."
+                        elif tipo_metrica == 'Aceleração':
+                            bandas_acc = st.multiselect(
+                                "Bandas de Aceleração:",
+                                options=[-3, -2, -1, 0, 1, 2, 3],
+                                default=[1, 2, 3], key="jan_ba"
                             )
-                        else:
-                            sensor_points = dados_sensor_por_atleta_por_periodo[periodo_janela].get(atleta_janela, [])
-                        
-                        if sensor_points:
-                            _dur_s_aba4 = get_min_dur_s()
-                            st.caption(
-                                f"⚙️ Duração mínima de acc/dec: **{_dur_s_aba4:.1f} s** "
-                                f"({max(1, round(_dur_s_aba4 * _SENSOR_HZ))} frames) — "
-                                "ajuste na sidebar."
-                            )
-                            bandas_vel = [3, 4, 5, 6, 7, 8]
-                            bandas_acc = [1, 2, 3]
 
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                window_minutes = st.slider(
-                                    "Tamanho da janela temporal (minutos):",
-                                    min_value=0.5, max_value=10.0, value=1.0, step=0.5
-                                )
-                            with col2:
-                                tipo_metrica = st.selectbox(
-                                    "Selecione a métrica:",
-                                    ['Distância', 'PlayerLoad', 'Velocidade', 'Aceleração']
-                                )
-                            with col3:
-                                if tipo_metrica == 'Velocidade':
-                                    bandas_vel = st.multiselect(
-                                        "Bandas de Velocidade:",
-                                        options=[1, 2, 3, 4, 5, 6, 7, 8],
-                                        default=[3, 4, 5, 6, 7, 8]
-                                    )
-                                elif tipo_metrica == 'Aceleração':
-                                    bandas_acc = st.multiselect(
-                                        "Bandas de Aceleração:",
-                                        options=[-3, -2, -1, 0, 1, 2, 3],
-                                        default=[1, 2, 3]
-                                    )
+                    _unidade_jan = {
+                        'Distância': 'm/min', 'PlayerLoad': 'PL/min',
+                        'Velocidade': 'km/h', 'Aceleração': 'm/s²',
+                    }.get(tipo_metrica, '')
 
-                            # ── Fronteiras de período para coluna "Período" na tabela ──
-                            if _jan_modo_todos and dados_posicao_por_periodo:
-                                _period_boundaries = obter_limites_periodos_posicao(
-                                    dados_posicao_por_periodo, atleta_janela
-                                )
-                            elif not _jan_modo_todos:
-                                # Período único: toda a timeline pertence a este período
-                                _period_boundaries = [(0.0, float('inf'), periodo_janela)]
+                    # Detecta Hz GPS uma vez (usado por todos os modos)
+                    _hz_jan = 10.0
+                    if dados_posicao_por_periodo:
+                        _diffs_hz = []
+                        for _pn_hz in list(dados_posicao_por_periodo.keys())[:3]:
+                            for _an_hz in list(dados_posicao_por_periodo[_pn_hz].values())[:2]:
+                                _tss_hz = _an_hz.get('ts_pos', [])
+                                if len(_tss_hz) > 10:
+                                    _diffs_hz += [
+                                        abs(_tss_hz[_i+1] - _tss_hz[_i])
+                                        for _i in range(1, min(20, len(_tss_hz)-1))
+                                        if abs(_tss_hz[_i+1] - _tss_hz[_i]) > 0
+                                    ]
+                        if _diffs_hz:
+                            import statistics as _sthz
+                            _med_hz = _sthz.median(_diffs_hz)
+                            if _med_hz > 0:
+                                _hz_jan = round(1.0 / _med_hz, 1)
+
+                    # ── Helper: rolling window para um atleta ──────────────────────
+                    def _calc_rolling(_atl):
+                        """Retorna (tempos_min, valores) para o atleta e configuração atual."""
+                        if tipo_metrica == 'Distância' and dados_posicao_por_periodo:
+                            if _jan_modo_todos:
+                                _vj, _tj = combinar_periodos_continuo_posicao(
+                                    dados_posicao_por_periodo, _atl)
                             else:
-                                _period_boundaries = None
-
-                            with st.spinner("Calculando janelas temporais..."):
-                                if tipo_metrica == 'Distância':
-                                    # ── Usa dados de posição GPS (vel km/h) — MESMOS dados e filtros do WCS ──
-                                    _hz_jan = 10.0
-                                    if dados_posicao_por_periodo:
-                                        # Detecta Hz real a partir dos ts_pos (igual ao WCS)
-                                        _diffs_jan = []
-                                        for _pn_j in list(dados_posicao_por_periodo.keys())[:3]:
-                                            _da_j = dados_posicao_por_periodo[_pn_j].get(atleta_janela, {})
-                                            _tss_j = _da_j.get('ts_pos', [])
-                                            if len(_tss_j) > 10:
-                                                _diffs_jan += [abs(_tss_j[_ii+1] - _tss_j[_ii])
-                                                               for _ii in range(1, min(20, len(_tss_j)-1))
-                                                               if abs(_tss_j[_ii+1] - _tss_j[_ii]) > 0]
-                                        if _diffs_jan:
-                                            import statistics as _stjan
-                                            _med_jan = _stjan.median(_diffs_jan)
-                                            if _med_jan > 0:
-                                                _hz_jan = round(1.0 / _med_jan, 1)
-
-                                        if _jan_modo_todos:
-                                            _vel_dist, _ts_dist = combinar_periodos_continuo_posicao(
-                                                dados_posicao_por_periodo, atleta_janela
-                                            )
-                                        else:
-                                            _da_dist = dados_posicao_por_periodo.get(periodo_janela, {}).get(atleta_janela, {})
-                                            _vel_dist = _da_dist.get('vel', [])
-                                            _ts_dist  = _da_dist.get('ts_pos', [])
-
-                                        if _vel_dist:
-                                            tempos_janela, valores_janela = calcular_distancia_janelas_por_vel_posicao(
-                                                _vel_dist, _ts_dist, window_minutes, _hz_jan
-                                            )
-                                        else:
-                                            tempos_janela, valores_janela = calcular_distancia_janelas_discretas_10s(
-                                                sensor_points, window_minutes
-                                            )
-                                    else:
-                                        tempos_janela, valores_janela = calcular_distancia_janelas_discretas_10s(
-                                            sensor_points, window_minutes
-                                        )
-                                    exibir_resultados_janela(tempos_janela, valores_janela, "Distância", atleta_janela,
-                                                             window_minutes, "m/min", _period_boundaries)
-
-                                elif tipo_metrica == 'PlayerLoad':
-                                    tempos_janela, valores_janela = calcular_janelas_discretas_10s(sensor_points, window_minutes, 'pl', None)
-                                    exibir_resultados_janela(tempos_janela, valores_janela, "PlayerLoad", atleta_janela,
-                                                             window_minutes, "PL/min", _period_boundaries)
-
-                                elif tipo_metrica == 'Velocidade':
-                                    band_filter = {'velocity_bands': bandas_vel}
-                                    tempos_janela, valores_janela = calcular_janelas_discretas_10s(sensor_points, window_minutes, 'v', band_filter)
-                                    exibir_resultados_janela(tempos_janela, valores_janela, "Velocidade", atleta_janela,
-                                                             window_minutes, "km/h", _period_boundaries)
-
-                                elif tipo_metrica == 'Aceleração':
-                                    band_filter = {'acceleration_bands': bandas_acc}
-                                    tempos_janela, valores_janela = calcular_janelas_discretas_10s(sensor_points, window_minutes, 'a', band_filter)
-                                    exibir_resultados_janela(tempos_janela, valores_janela, "Aceleração", atleta_janela,
-                                                             window_minutes, "m/s²", _period_boundaries)
-
-                            if not st.session_state.get('modo_apresentacao'):
-                                st.markdown(REFERENCIAS["janelas"])
+                                _daj = dados_posicao_por_periodo.get(
+                                    periodo_janela, {}).get(_atl, {})
+                                _vj = _daj.get('vel', [])
+                                _tj = _daj.get('ts_pos', [])
+                            if _vj:
+                                return calcular_distancia_janelas_por_vel_posicao(
+                                    _vj, _tj, window_minutes, _hz_jan)
+                        # Métricas baseadas em sensor
+                        if _jan_modo_todos:
+                            _sp = combinar_periodos_continuo(
+                                dados_sensor_por_atleta_por_periodo, _atl)
                         else:
-                            st.info("Dados de sensor não disponíveis")
-                else:
-                    st.info("Selecione um atleta para análise")
+                            _sp = dados_sensor_por_atleta_por_periodo.get(
+                                periodo_janela, {}).get(_atl, [])
+                        if not _sp:
+                            return [], []
+                        if tipo_metrica == 'PlayerLoad':
+                            return calcular_janelas_discretas_10s(_sp, window_minutes, 'pl', None)
+                        if tipo_metrica == 'Velocidade':
+                            return calcular_janelas_discretas_10s(
+                                _sp, window_minutes, 'v', {'velocity_bands': bandas_vel})
+                        if tipo_metrica == 'Aceleração':
+                            return calcular_janelas_discretas_10s(
+                                _sp, window_minutes, 'a', {'acceleration_bands': bandas_acc})
+                        return [], []
+
+                    # ── Helper: posição do atleta ──────────────────────────────────
+                    def _get_pos_atl(_atl):
+                        for _pd in dados_posicao_por_periodo.values():
+                            if _atl in _pd:
+                                return _pd[_atl].get('posicao') or 'Outro'
+                        return 'Outro'
+
+                    # ── Paleta por posição ─────────────────────────────────────────
+                    _POS_COR = {
+                        'Goleiro': '#5dade2',      'Zagueiro': '#2ecc71',
+                        'Lateral': '#1abc9c',      'Volante': '#f39c12',
+                        'Meia': '#e67e22',         'Meia-atacante': '#d4ac0d',
+                        'Atacante': '#e74c3c',     'Extremo': '#c0392b',
+                        'Centroavante': '#9b59b6', 'Outro': '#95a5a6',
+                    }
+                    _POS_RGBA_FILL = {
+                        k: f"rgba({int(v[1:3],16)},{int(v[3:5],16)},{int(v[5:7],16)},0.13)"
+                        for k, v in _POS_COR.items()
+                    }
+
+                    # ══════════════════════════════════════════════════════════════
+                    # MODO 1 — INDIVIDUAL
+                    # ══════════════════════════════════════════════════════════════
+                    if _jan_modo == "🔵 Individual":
+                        if _jan_atletas:
+                            atleta_janela = st.selectbox(
+                                "Selecione o atleta:", _jan_atletas, key="atleta_janela")
+
+                            if _jan_modo_todos:
+                                sensor_points = combinar_periodos_continuo(
+                                    dados_sensor_por_atleta_por_periodo, atleta_janela)
+                                st.caption(
+                                    f"📊 Combinando **{len(dados_sensor_por_atleta_por_periodo)} períodos** "
+                                    f"em linha do tempo contínua → {len(sensor_points):,} amostras "
+                                    f"para **{atleta_janela}**.")
+                            else:
+                                sensor_points = dados_sensor_por_atleta_por_periodo[
+                                    periodo_janela].get(atleta_janela, [])
+
+                            if sensor_points:
+                                _dur_s_aba4 = get_min_dur_s()
+                                st.caption(
+                                    f"⚙️ Duração mínima de acc/dec: **{_dur_s_aba4:.1f} s** "
+                                    f"({max(1, round(_dur_s_aba4 * _SENSOR_HZ))} frames) — "
+                                    "ajuste na sidebar.")
+
+                                if _jan_modo_todos and dados_posicao_por_periodo:
+                                    _period_boundaries = obter_limites_periodos_posicao(
+                                        dados_posicao_por_periodo, atleta_janela)
+                                elif not _jan_modo_todos:
+                                    _period_boundaries = [(0.0, float('inf'), periodo_janela)]
+                                else:
+                                    _period_boundaries = None
+
+                                with st.spinner("Calculando janelas temporais..."):
+                                    _tj, _vj = _calc_rolling(atleta_janela)
+                                    if _tj:
+                                        exibir_resultados_janela(
+                                            _tj, _vj, tipo_metrica, atleta_janela,
+                                            window_minutes, _unidade_jan, _period_boundaries)
+                                    else:
+                                        st.warning("Dados insuficientes para calcular janelas.")
+
+                                if not st.session_state.get('modo_apresentacao'):
+                                    st.markdown(REFERENCIAS["janelas"])
+                            else:
+                                st.info("Dados de sensor não disponíveis")
+                        else:
+                            st.info("Selecione um atleta para análise")
+
+                    # ══════════════════════════════════════════════════════════════
+                    # MODO 2 — POR POSIÇÃO
+                    # ══════════════════════════════════════════════════════════════
+                    elif _jan_modo == "🟡 Por Posição":
+                        if not _jan_atletas:
+                            st.info("Sem atletas disponíveis.")
+                        else:
+                            # Agrupa atletas por posição
+                            _pos_atls: dict = {}
+                            for _a in _jan_atletas:
+                                _p = _get_pos_atl(_a)
+                                _pos_atls.setdefault(_p, []).append(_a)
+
+                            _pos_sel = st.multiselect(
+                                "Posições a comparar:",
+                                options=sorted(_pos_atls.keys()),
+                                default=sorted(_pos_atls.keys()),
+                                key="jan_pos_sel"
+                            )
+                            if not _pos_sel:
+                                st.info("Selecione ao menos uma posição.")
+                            else:
+                                with st.spinner("Calculando por posição..."):
+                                    import plotly.graph_objects as _go_pos
+
+                                    # Rolling window para cada atleta das posições selecionadas
+                                    _atl_res: dict = {}
+                                    for _ps in _pos_sel:
+                                        for _a in _pos_atls.get(_ps, []):
+                                            if _a not in _atl_res:
+                                                _t_a, _v_a = _calc_rolling(_a)
+                                                if _t_a and _v_a:
+                                                    _atl_res[_a] = (
+                                                        np.array(_t_a), np.array(_v_a))
+
+                                    if not _atl_res:
+                                        st.warning(
+                                            "Sem dados suficientes para as posições selecionadas.")
+                                    else:
+                                        _max_t_pos = max(
+                                            float(_t[-1]) + window_minutes
+                                            for _t, _ in _atl_res.values())
+                                        _t_grid_pos = np.arange(0, _max_t_pos + 1/60, 1/60)
+
+                                        fig_pos = _go_pos.Figure()
+                                        _pos_summ: list = []
+
+                                        for _ps in _pos_sel:
+                                            _atls_ps = [
+                                                _a for _a in _pos_atls.get(_ps, [])
+                                                if _a in _atl_res]
+                                            if not _atls_ps:
+                                                continue
+
+                                            _v_mat = np.array([
+                                                np.interp(_t_grid_pos,
+                                                          _atl_res[_a][0],
+                                                          _atl_res[_a][1],
+                                                          left=np.nan, right=np.nan)
+                                                for _a in _atls_ps
+                                            ])
+                                            _v_mean = np.nanmean(_v_mat, axis=0)
+                                            _cor = _POS_COR.get(_ps, '#95a5a6')
+                                            _fil = _POS_RGBA_FILL.get(_ps,
+                                                                       'rgba(149,165,166,0.13)')
+
+                                            # Área ± std (se mais de 1 atleta)
+                                            if len(_atls_ps) > 1:
+                                                _v_std = np.nanstd(_v_mat, axis=0)
+                                                _yu = _v_mean + _v_std
+                                                _yd = _v_mean - _v_std
+                                                fig_pos.add_trace(_go_pos.Scatter(
+                                                    x=np.concatenate(
+                                                        [_t_grid_pos, _t_grid_pos[::-1]]),
+                                                    y=np.concatenate([_yu, _yd[::-1]]),
+                                                    fill='toself', fillcolor=_fil,
+                                                    line=dict(color='rgba(0,0,0,0)'),
+                                                    showlegend=False, hoverinfo='skip',
+                                                ))
+
+                                            fig_pos.add_trace(_go_pos.Scatter(
+                                                x=_t_grid_pos, y=_v_mean,
+                                                name=f"{_ps} (n={len(_atls_ps)})",
+                                                line=dict(color=_cor, width=2.5),
+                                                mode='lines',
+                                                hovertemplate=(
+                                                    f"<b>{_ps}</b><br>"
+                                                    "Tempo: %{x:.1f} min<br>"
+                                                    f"{tipo_metrica}: %{{y:.1f}} {_unidade_jan}"
+                                                    "<extra></extra>"
+                                                ),
+                                            ))
+
+                                            _pk = round(float(np.nanmax(_v_mean)), 1)
+                                            _av = round(float(np.nanmean(_v_mean)), 1)
+                                            _pos_summ.append({
+                                                'Posição': _ps,
+                                                'N Atletas': len(_atls_ps),
+                                                f'Pico Médio ({_unidade_jan})': _pk,
+                                                f'Média Geral ({_unidade_jan})': _av,
+                                            })
+
+                                        # Limiares globais
+                                        _all_v_pos = np.concatenate(
+                                            [v for _, v in _atl_res.values()])
+                                        _gmax_pos = float(np.nanmax(_all_v_pos))
+                                        _la_pos = round(_gmax_pos * 0.75, 1)
+                                        _lm_pos = round(_gmax_pos * 0.50, 1)
+                                        fig_pos.add_hline(
+                                            y=_la_pos, line_dash='dash',
+                                            line_color='rgba(239,68,68,0.50)',
+                                            annotation_text=f"Alta ≥{_la_pos} {_unidade_jan}",
+                                            annotation_position="right")
+                                        fig_pos.add_hline(
+                                            y=_lm_pos, line_dash='dot',
+                                            line_color='rgba(245,158,11,0.50)',
+                                            annotation_text=f"Média-Alta ≥{_lm_pos} {_unidade_jan}",
+                                            annotation_position="right")
+
+                                        fig_pos.update_layout(
+                                            title=dict(
+                                                text=(f"Intensidade de {tipo_metrica} por Posição"
+                                                      f" — Rolling Window {window_minutes} min"),
+                                                font=dict(color='white', size=14)),
+                                            xaxis=dict(
+                                                title='Tempo (minutos)',
+                                                color='rgba(255,255,255,0.6)',
+                                                gridcolor='rgba(255,255,255,0.07)'),
+                                            yaxis=dict(
+                                                title=f'{tipo_metrica} ({_unidade_jan})',
+                                                color='rgba(255,255,255,0.6)',
+                                                gridcolor='rgba(255,255,255,0.07)'),
+                                            paper_bgcolor='rgba(0,0,0,0)',
+                                            plot_bgcolor='rgba(0,0,0,0)',
+                                            legend=dict(
+                                                font=dict(color='white'),
+                                                bgcolor='rgba(0,0,0,0)'),
+                                            hovermode='x unified',
+                                            height=440,
+                                        )
+                                        st.plotly_chart(fig_pos, use_container_width=True)
+
+                                        if _pos_summ:
+                                            st.markdown("##### 📊 Resumo por Posição")
+                                            _df_pos = (
+                                                pd.DataFrame(_pos_summ)
+                                                .sort_values(f'Pico Médio ({_unidade_jan})',
+                                                             ascending=False)
+                                                .reset_index(drop=True)
+                                            )
+                                            st.dataframe(
+                                                _df_pos, use_container_width=True,
+                                                hide_index=True,
+                                                height=38 * len(_df_pos) + 60)
+
+                    # ══════════════════════════════════════════════════════════════
+                    # MODO 3 — TIME COMPLETO
+                    # ══════════════════════════════════════════════════════════════
+                    elif _jan_modo == "🔴 Time Completo":
+                        if not _jan_atletas:
+                            st.info("Sem atletas disponíveis.")
+                        else:
+                            with st.spinner(
+                                    f"Calculando rolling window para {len(_jan_atletas)} atletas..."):
+                                import plotly.graph_objects as _go_tm
+
+                                # Rolling window para cada atleta
+                                _team_res: dict = {}
+                                for _a in _jan_atletas:
+                                    _ta, _va = _calc_rolling(_a)
+                                    if _ta and _va:
+                                        _team_res[_a] = (
+                                            np.array(_ta), np.array(_va))
+
+                                if not _team_res:
+                                    st.warning("Dados insuficientes.")
+                                else:
+                                    # Grade temporal comum (resolução 1 s)
+                                    _max_t_tm = max(
+                                        float(_t[-1]) + window_minutes
+                                        for _t, _ in _team_res.values())
+                                    _tg = np.arange(0, _max_t_tm + 1/60, 1/60)
+
+                                    # Ordena atletas por posição → nome
+                                    _atls_ord = sorted(
+                                        _team_res.keys(),
+                                        key=lambda _a: (_get_pos_atl(_a), _a))
+
+                                    _z_mat:   list = []   # normalizado (%)
+                                    _raw_mat: list = []   # bruto (para média)
+                                    _y_lbl:   list = []
+
+                                    for _a in _atls_ord:
+                                        _ta, _va = _team_res[_a]
+                                        _vr = np.interp(_tg, _ta, _va,
+                                                        left=np.nan, right=np.nan)
+                                        _raw_mat.append(_vr)
+                                        _vmx = float(np.nanmax(_vr)) if not np.all(
+                                            np.isnan(_vr)) else 1.0
+                                        _vn = (_vr / _vmx * 100
+                                               if _vmx > 0 else np.zeros_like(_vr))
+                                        _z_mat.append(_vn)
+                                        _y_lbl.append(
+                                            f"{_a}  [{_get_pos_atl(_a)}]")
+
+                                    # ── Heatmap (% do máx individual) ──────────────
+                                    _fig_ht = _go_tm.Figure(_go_tm.Heatmap(
+                                        z=_z_mat,
+                                        x=_tg,
+                                        y=_y_lbl,
+                                        colorscale=[
+                                            [0.00, 'rgba(10,30,10,1)'],
+                                            [0.50, 'rgba(202,138,4,1)'],
+                                            [0.75, 'rgba(234,88,12,1)'],
+                                            [1.00, 'rgba(220,38,38,1)'],
+                                        ],
+                                        zmin=0, zmax=100,
+                                        colorbar=dict(
+                                            title='% do Máx<br>Individual',
+                                            titlefont=dict(color='white'),
+                                            tickfont=dict(color='white'),
+                                            tickvals=[0, 50, 75, 100],
+                                            ticktext=['0%', '50%', '75%', '100%'],
+                                        ),
+                                        hovertemplate=(
+                                            "<b>%{y}</b><br>"
+                                            "Tempo: %{x:.1f} min<br>"
+                                            "Intensidade: %{z:.0f}%"
+                                            "<extra></extra>"
+                                        ),
+                                    ))
+                                    _fig_ht.update_layout(
+                                        title=dict(
+                                            text=(f"Heatmap de Intensidade — {tipo_metrica}"
+                                                  f" (% do Máx Individual)"
+                                                  f" | Janela {window_minutes} min"),
+                                            font=dict(color='white', size=13)),
+                                        xaxis=dict(
+                                            title='Tempo (minutos)',
+                                            color='rgba(255,255,255,0.6)',
+                                            gridcolor='rgba(255,255,255,0.05)'),
+                                        yaxis=dict(
+                                            color='rgba(255,255,255,0.75)',
+                                            tickfont=dict(size=10)),
+                                        paper_bgcolor='rgba(0,0,0,0)',
+                                        plot_bgcolor='rgba(0,0,0,0)',
+                                        height=max(300, 36 * len(_atls_ord) + 120),
+                                        margin=dict(l=200, r=100),
+                                    )
+                                    st.plotly_chart(_fig_ht, use_container_width=True)
+
+                                    # ── Média do time (valores brutos, colorida) ────
+                                    _tm_mean = np.nanmean(_raw_mat, axis=0)
+                                    if not np.all(np.isnan(_tm_mean)):
+                                        _tmx = float(np.nanmax(_tm_mean))
+                                        _tla = round(_tmx * 0.75, 1)
+                                        _tlm = round(_tmx * 0.50, 1)
+                                        _tm_cores = [
+                                            '#ef4444' if v >= _tla
+                                            else '#f59e0b' if v >= _tlm
+                                            else '#22c55e'
+                                            for v in _tm_mean
+                                        ]
+                                        _fig_avg = _go_tm.Figure()
+                                        _fig_avg.add_trace(_go_tm.Scatter(
+                                            x=_tg, y=_tm_mean,
+                                            mode='markers',
+                                            marker=dict(color=_tm_cores, size=3),
+                                            name='Média do Time',
+                                            hovertemplate=(
+                                                "Tempo: %{x:.1f} min<br>"
+                                                f"Média Time: %{{y:.1f}} {_unidade_jan}"
+                                                "<extra></extra>"
+                                            ),
+                                        ))
+                                        _fig_avg.add_hline(
+                                            y=_tla, line_dash='dash',
+                                            line_color='rgba(239,68,68,0.50)',
+                                            annotation_text=f"Alta ≥{_tla}")
+                                        _fig_avg.add_hline(
+                                            y=_tlm, line_dash='dot',
+                                            line_color='rgba(245,158,11,0.50)',
+                                            annotation_text=f"Média-Alta ≥{_tlm}")
+                                        _fig_avg.update_layout(
+                                            title=dict(
+                                                text=(f"Intensidade Média do Time — "
+                                                      f"{tipo_metrica} ({_unidade_jan})"
+                                                      f" | Rolling {window_minutes} min"),
+                                                font=dict(color='white', size=13)),
+                                            xaxis=dict(
+                                                title='Tempo (minutos)',
+                                                color='rgba(255,255,255,0.6)',
+                                                gridcolor='rgba(255,255,255,0.07)'),
+                                            yaxis=dict(
+                                                title=f'{tipo_metrica} ({_unidade_jan})',
+                                                color='rgba(255,255,255,0.6)',
+                                                gridcolor='rgba(255,255,255,0.07)'),
+                                            paper_bgcolor='rgba(0,0,0,0)',
+                                            plot_bgcolor='rgba(0,0,0,0)',
+                                            height=300,
+                                        )
+                                        st.plotly_chart(_fig_avg, use_container_width=True)
+
+                                    # ── Ranking de intensidade ──────────────────────
+                                    st.markdown("##### 🏆 Ranking de Intensidade — Time Completo")
+                                    _rank_rows: list = []
+                                    for _a in _atls_ord:
+                                        _ta, _va = _team_res[_a]
+                                        _va_arr = np.array(_va)
+                                        _vmx_a  = round(float(np.nanmax(_va_arr)), 1)
+                                        _vmn_a  = round(float(np.nanmean(_va_arr)), 1)
+                                        _la_a   = _vmx_a * 0.75
+                                        _lm_a   = _vmx_a * 0.50
+                                        # Tempo em zona (s → min, a resolução é ~1 s/ponto)
+                                        _t_alta = round(
+                                            sum(1 for v in _va_arr if v >= _la_a) / 60, 1)
+                                        _t_med  = round(
+                                            sum(1 for v in _va_arr if _lm_a <= v < _la_a) / 60, 1)
+                                        _dur_a  = round(
+                                            float(_ta[-1]) + window_minutes, 1)
+                                        _rank_rows.append({
+                                            'Atleta':   _a,
+                                            'Posição':  _get_pos_atl(_a),
+                                            f'Pico ({_unidade_jan})':  _vmx_a,
+                                            f'Média ({_unidade_jan})': _vmn_a,
+                                            'Tempo Alta 🔴 (min)':       _t_alta,
+                                            'Tempo Média-Alta 🟡 (min)': _t_med,
+                                            'Duração Analisada (min)':   _dur_a,
+                                        })
+                                    _df_rank = (
+                                        pd.DataFrame(_rank_rows)
+                                        .sort_values(f'Pico ({_unidade_jan})',
+                                                     ascending=False)
+                                        .reset_index(drop=True)
+                                    )
+                                    _df_rank.index += 1
+                                    st.dataframe(
+                                        _df_rank,
+                                        use_container_width=True,
+                                        height=38 * len(_df_rank) + 60)
+                                    if not st.session_state.get('modo_apresentacao'):
+                                        st.download_button(
+                                            f"📥 Exportar Ranking (CSV)",
+                                            _df_rank.to_csv(index=True).encode('utf-8'),
+                                            f"ranking_{tipo_metrica}_{window_minutes}min.csv",
+                                            mime='text/csv', key="dl_rank_team"
+                                        )
 
             # ==================== ABA 4: CARGA NEUROMUSCULAR ====================
             with abas[3]:
