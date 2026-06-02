@@ -8967,8 +8967,10 @@ Escolha um ou mais atletas para análise simultânea.
                                         ],
                                         zmin=0, zmax=100,
                                         colorbar=dict(
-                                            title='% do Máx<br>Coletivo',
-                                            titlefont=dict(color='white'),
+                                            title=dict(
+                                                text='% do Máx<br>Coletivo',
+                                                font=dict(color='white'),
+                                            ),
                                             tickfont=dict(color='white'),
                                             tickvals=[0, 50, 75, 100],
                                             ticktext=['0%', '50%', '75%', '100%'],
