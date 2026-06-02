@@ -8932,34 +8932,88 @@ Escolha um ou mais atletas para análise simultânea.
                                         else [periodo_janela]
                                     )
 
-                                    def _period_dur_min_tm(_pnm: str) -> float:
-                                        """Duração em minutos: ts_last − ts_first máx entre atletas."""
-                                        _per_s = dados_sensor_por_atleta_por_periodo.get(_pnm, {})
-                                        _mx = 0.0
-                                        for _spl in _per_s.values():
-                                            if not _spl:
-                                                continue
-                                            _t0_s = _t1_s = None
+                                    # ── Timestamps absolutos de cada período ──────────
+                                    # Sensor IMU (ts + cs/100) usa Unix absoluto →
+                                    # períodos sobrepostos têm ts que se intersectam.
+                                    def _period_abs_ts_tm(_pnm: str):
+                                        """(first_ts, last_ts) em segundos Unix via sensor IMU."""
+                                        _mn, _mx = None, None
+                                        for _spl in dados_sensor_por_atleta_por_periodo.get(
+                                                _pnm, {}).values():
                                             for _pp in _spl:
                                                 _tt = (float(_pp.get('ts') or 0)
                                                        + float(_pp.get('cs') or 0) / 100.0)
-                                                if _t0_s is None or _tt < _t0_s: _t0_s = _tt
-                                                if _t1_s is None or _tt > _t1_s: _t1_s = _tt
-                                            if _t0_s is not None and _t1_s is not None:
-                                                _d = abs(_t1_s - _t0_s)
-                                                if _d > _mx: _mx = _d
-                                        return _mx / 60.0
+                                                if _tt <= 0:
+                                                    continue
+                                                if _mn is None or _tt < _mn: _mn = _tt
+                                                if _mx is None or _tt > _mx: _mx = _tt
+                                        return (_mn or 0.0, _mx or 0.0)
 
-                                    # Minuto de início acumulado de cada período
+                                    _period_abs_tm = {
+                                        _pn: _period_abs_ts_tm(_pn)
+                                        for _pn in _period_order_tm}
+
+                                    # ── Posição de cada período no tempo de jogo ───────
+                                    # Lógica de sobreposição:
+                                    #   "2tempo" registra os 10 atletas que continuam
+                                    #   por TODO o 2º tempo (ex: 45-95 min).
+                                    #   "2tempo1" registra apenas o substituto, que
+                                    #   COMEÇA DENTRO do "2tempo" (ex: 65-95 min).
+                                    #   → "2tempo1" é sub-período de "2tempo", não
+                                    #   um período sequencial após ele.
+                                    #
+                                    # Detecção: se first_ts(P) está ENTRE first_ts(Q) e
+                                    # last_ts(Q) de outro período Q já ativo → P é
+                                    # sub-período de Q.
+                                    # Offset de P = match_start(Q) + (first_ts(P) - first_ts(Q)) / 60
+                                    #
+                                    # Períodos principais (sem sobreposição) acumulam
+                                    # _cum_min_tm normalmente.
+                                    _sorted_by_ts_tm = sorted(
+                                        _period_order_tm,
+                                        key=lambda _p: _period_abs_tm[_p][0])
+
                                     _period_start_min_tm: dict = {}
-                                    _cum_min_tm = 0.0
-                                    for _pn_tm in _period_order_tm:
-                                        _period_start_min_tm[_pn_tm] = _cum_min_tm
-                                        _cum_min_tm += _period_dur_min_tm(_pn_tm)
+                                    _cum_min_tm = 0.0        # só cresce em períodos principais
+                                    _active_mains_tm: list = []  # (nm, ft, lt, match_start)
+
+                                    for _pn_s in _sorted_by_ts_tm:
+                                        _ft_s, _lt_s = _period_abs_tm[_pn_s]
+                                        _dur_s = (
+                                            (_lt_s - _ft_s) / 60.0
+                                            if _lt_s > _ft_s else 0.0)
+
+                                        # Descarta períodos principais já encerrados
+                                        _active_mains_tm = [
+                                            _m for _m in _active_mains_tm
+                                            if _m[2] > _ft_s]
+
+                                        # Este período começa DENTRO de algum ativo?
+                                        _par_tm = next(
+                                            (_m for _m in _active_mains_tm
+                                             if _ft_s > _m[1] and _ft_s < _m[2]),
+                                            None)
+
+                                        if _par_tm is None:
+                                            # Período principal — sem sobreposição
+                                            _period_start_min_tm[_pn_s] = _cum_min_tm
+                                            _active_mains_tm.append(
+                                                (_pn_s, _ft_s, _lt_s, _cum_min_tm))
+                                            _cum_min_tm += _dur_s
+                                        else:
+                                            # Sub-período — entra no meio do pai
+                                            _, _par_ft, _, _par_ms = _par_tm
+                                            _period_start_min_tm[_pn_s] = (
+                                                _par_ms + (_ft_s - _par_ft) / 60.0)
+
+                                    # Ordem cronológica de períodos (por match-time start)
+                                    _sorted_period_order_tm = sorted(
+                                        _period_order_tm,
+                                        key=lambda _p: _period_start_min_tm.get(_p, 0.0))
 
                                     def _atl_offset_min(_atl_nm: str) -> float:
-                                        """Offset = início do 1º período em que o atleta tem dados."""
-                                        for _pn_ao in _period_order_tm:
+                                        """Offset = match-time do 1º período (ordem ts) com dados do atleta."""
+                                        for _pn_ao in _sorted_by_ts_tm:
                                             if (dados_posicao_por_periodo.get(
                                                     _pn_ao, {}).get(_atl_nm, {}).get('vel')
                                                     or dados_sensor_por_atleta_por_periodo.get(
@@ -9018,15 +9072,17 @@ Escolha um ou mais atletas para análise simultânea.
                                         _z_mat.append(_vn)
 
                                     # ── Pré-calcula bandas de período ──────────────
-                                    # Método B: durações acumuladas via sensor IMU —
-                                    # mesma lógica de _period_start_min_tm, garantindo
-                                    # que bandas e dados dos atletas se alinhem.
+                                    # Usa _sorted_period_order_tm (ordem por match-time)
+                                    # para que as bandas sejam sempre sequenciais.
+                                    # Cada banda vai do início do período até o início
+                                    # do próximo período (ou até o fim do jogo).
                                     _period_bands_tm = []
-                                    for _i_pb, _pn_pb in enumerate(_period_order_tm):
+                                    for _i_pb, _pn_pb in enumerate(_sorted_period_order_tm):
                                         _ps_pb = _period_start_min_tm[_pn_pb]
                                         _pe_pb = (
-                                            _period_start_min_tm[_period_order_tm[_i_pb + 1]]
-                                            if _i_pb + 1 < len(_period_order_tm)
+                                            _period_start_min_tm[
+                                                _sorted_period_order_tm[_i_pb + 1]]
+                                            if _i_pb + 1 < len(_sorted_period_order_tm)
                                             else _cum_min_tm
                                         )
                                         _period_bands_tm.append((_pn_pb, _ps_pb, _pe_pb))
