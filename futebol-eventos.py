@@ -8908,22 +8908,37 @@ Escolha um ou mais atletas para análise simultânea.
                                         _team_res.keys(),
                                         key=lambda _a: (_get_pos_atl(_a), _a))
 
-                                    _z_mat:   list = []   # normalizado (%)
+                                    _z_mat:   list = []   # normalizado (% máx coletivo)
                                     _raw_mat: list = []   # bruto (para média)
                                     _y_lbl:   list = []
 
+                                    # 1ª passagem — séries brutas interpoladas
                                     for _a in _atls_ord:
                                         _ta, _va = _team_res[_a]
                                         _vr = np.interp(_tg, _ta, _va,
                                                         left=np.nan, right=np.nan)
                                         _raw_mat.append(_vr)
-                                        _vmx = float(np.nanmax(_vr)) if not np.all(
-                                            np.isnan(_vr)) else 1.0
-                                        _vn = (_vr / _vmx * 100
-                                               if _vmx > 0 else np.zeros_like(_vr))
-                                        _z_mat.append(_vn)
                                         _y_lbl.append(
                                             f"{_a}  [{_get_pos_atl(_a)}]")
+
+                                    # Máximo coletivo — referência única de todo o time
+                                    _col_max = max(
+                                        (float(np.nanmax(_vr))
+                                         for _vr in _raw_mat
+                                         if not np.all(np.isnan(_vr))),
+                                        default=1.0,
+                                    )
+                                    if _col_max <= 0:
+                                        _col_max = 1.0
+
+                                    # 2ª passagem — normaliza pelo máximo coletivo
+                                    for _vr in _raw_mat:
+                                        _vn = (
+                                            _vr / _col_max * 100
+                                            if not np.all(np.isnan(_vr))
+                                            else np.zeros_like(_vr)
+                                        )
+                                        _z_mat.append(_vn)
 
                                     # ── Heatmap (% do máx individual) ──────────────
                                     _fig_ht = _go_tm.Figure(_go_tm.Heatmap(
@@ -8938,7 +8953,7 @@ Escolha um ou mais atletas para análise simultânea.
                                         ],
                                         zmin=0, zmax=100,
                                         colorbar=dict(
-                                            title='% do Máx<br>Individual',
+                                            title='% do Máx<br>Coletivo',
                                             titlefont=dict(color='white'),
                                             tickfont=dict(color='white'),
                                             tickvals=[0, 50, 75, 100],
@@ -8947,14 +8962,14 @@ Escolha um ou mais atletas para análise simultânea.
                                         hovertemplate=(
                                             "<b>%{y}</b><br>"
                                             "Tempo: %{x:.1f} min<br>"
-                                            "Intensidade: %{z:.0f}%"
+                                            "Intensidade: %{z:.0f}% do máx coletivo"
                                             "<extra></extra>"
                                         ),
                                     ))
                                     _fig_ht.update_layout(
                                         title=dict(
                                             text=(f"Heatmap de Intensidade — {tipo_metrica}"
-                                                  f" (% do Máx Individual)"
+                                                  f" (% do Máx Coletivo)"
                                                   f" | Janela {window_minutes} min"),
                                             font=dict(color='white', size=13)),
                                         xaxis=dict(
@@ -9031,8 +9046,9 @@ Escolha um ou mais atletas para análise simultânea.
                                         _va_arr = np.array(_va)
                                         _vmx_a  = round(float(np.nanmax(_va_arr)), 1)
                                         _vmn_a  = round(float(np.nanmean(_va_arr)), 1)
-                                        _la_a   = _vmx_a * 0.75
-                                        _lm_a   = _vmx_a * 0.50
+                                        # Limiares coletivos (consistentes com o heatmap)
+                                        _la_a   = _col_max * 0.75
+                                        _lm_a   = _col_max * 0.50
                                         # Tempo em zona (s → min, a resolução é ~1 s/ponto)
                                         _t_alta = round(
                                             sum(1 for v in _va_arr if v >= _la_a) / 60, 1)
