@@ -8912,32 +8912,43 @@ Escolha um ou mais atletas para análise simultânea.
                                     st.warning("Dados insuficientes.")
                                 else:
                                     # ── Offset absoluto por atleta ─────────────────
-                                    # ts_pos são timestamps absolutos → encontra o
-                                    # instante de entrada de cada atleta no jogo real
-                                    _src_per_tm = (
-                                        dados_posicao_por_periodo
+                                    # ts_pos é relativo ao início de cada período
+                                    # (Catapult reseta por atividade, não é Unix time).
+                                    # Solução: acumular a DURAÇÃO de cada período em
+                                    # ordem cronológica para calcular o minuto de
+                                    # entrada real de cada atleta no jogo.
+                                    _period_order_tm = (
+                                        list(dados_posicao_por_periodo.keys())
                                         if _jan_modo_todos
-                                        else {periodo_janela: dados_posicao_por_periodo.get(
-                                            periodo_janela, {})}
+                                        else [periodo_janela]
                                     )
-                                    _match_t0_ts: float = 0.0
-                                    _found_t0 = False
-                                    for _pn_mt in _src_per_tm.values():
-                                        for _da_mt in _pn_mt.values():
-                                            _ts_mt = _da_mt.get('ts_pos', [])
-                                            if _ts_mt:
-                                                _t0_mt = float(_ts_mt[0])
-                                                if not _found_t0 or _t0_mt < _match_t0_ts:
-                                                    _match_t0_ts = _t0_mt
-                                                    _found_t0 = True
+
+                                    def _period_dur_min_tm(_pnm: str) -> float:
+                                        """Duração do período em min (ts[-1]-ts[0] máx entre atletas)."""
+                                        _per = dados_posicao_por_periodo.get(_pnm, {})
+                                        _mx = 0.0
+                                        for _da in _per.values():
+                                            _ts = _da.get('ts_pos', [])
+                                            if len(_ts) >= 2:
+                                                _d = abs(float(_ts[-1]) - float(_ts[0]))
+                                                if _d > _mx:
+                                                    _mx = _d
+                                        return _mx / 60.0
+
+                                    # Minuto acumulado de início de cada período
+                                    _period_start_min_tm: dict = {}
+                                    _cum_min_tm = 0.0
+                                    for _pn_tm in _period_order_tm:
+                                        _period_start_min_tm[_pn_tm] = _cum_min_tm
+                                        _cum_min_tm += _period_dur_min_tm(_pn_tm)
 
                                     def _atl_offset_min(_atl_nm: str) -> float:
-                                        """Minutos desde o kick-off até a 1ª amostra GPS do atleta."""
-                                        for _pn_ao in _src_per_tm.values():
-                                            _ts_ao = _pn_ao.get(_atl_nm, {}).get('ts_pos', [])
-                                            if _ts_ao:
-                                                return max(0.0,
-                                                    (float(_ts_ao[0]) - _match_t0_ts) / 60.0)
+                                        """Minuto de entrada = início do 1º período com dados GPS do atleta."""
+                                        for _pn_ao in _period_order_tm:
+                                            _da_ao = dados_posicao_por_periodo.get(
+                                                _pn_ao, {}).get(_atl_nm, {})
+                                            if _da_ao.get('vel'):
+                                                return _period_start_min_tm.get(_pn_ao, 0.0)
                                         return 0.0  # sem GPS → assume entrada no kick-off
 
                                     # Ordena atletas por posição → nome
