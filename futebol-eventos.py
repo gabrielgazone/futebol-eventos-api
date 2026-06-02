@@ -9507,6 +9507,300 @@ Escolha um ou mais atletas para análise simultânea.
                                                 mime='text/csv',
                                                 key="dl_ef_team",
                                             )
+
+                                        # ── Animação do esforço selecionado ────────
+                                        if dados_posicao_por_periodo:
+                                            st.markdown("---")
+                                            st.markdown(
+                                                "#### 🎬 Animar Esforço Coletivo no Campo")
+                                            st.caption(
+                                                "Selecione uma linha da tabela acima para "
+                                                "visualizar a movimentação coletiva do time "
+                                                "naquele intervalo de tempo.")
+
+                                            # Opções do selectbox
+                                            _anim_opts = []
+                                            for _ev_ao in _todos_ev_tm:
+                                                _per_ao = _periodo_para_t_tm(
+                                                    _ev_ao.get('t_ini_min', 0.0)) or '?'
+                                                _anim_opts.append(
+                                                    f"{_ev_ao['inicio']}→{_ev_ao['fim']}"
+                                                    f"  |  {_per_ao}"
+                                                    f"  |  {_ev_ao['valor']:.1f} {_unidade_jan}"
+                                                    f"  |  {_ev_ao['intensidade'].split()[0]}"
+                                                )
+                                            _sel_ao = st.selectbox(
+                                                "🎯 Esforço para animar:",
+                                                range(len(_anim_opts)),
+                                                format_func=lambda i: _anim_opts[i],
+                                                key="jt_anim_sel",
+                                            )
+                                            _ev_anim = _todos_ev_tm[_sel_ao]
+                                            _t_ini_ao = _ev_anim.get('t_ini_min', 0.0)
+
+                                            # Hz GPS (inline, mesmo algoritmo de _detect_hz)
+                                            _ao_hz = 10.0
+                                            _ao_diffs = []
+                                            for _pnn_ao in list(
+                                                    dados_posicao_por_periodo.keys())[:3]:
+                                                for _adat_ao in list(
+                                                        dados_posicao_por_periodo.get(
+                                                            _pnn_ao, {}).values())[:2]:
+                                                    _tss_ao = _adat_ao.get('ts_pos', [])
+                                                    if len(_tss_ao) > 10:
+                                                        _ao_diffs += [
+                                                            abs(_tss_ao[_ii+1]-_tss_ao[_ii])
+                                                            for _ii in range(
+                                                                1, min(20, len(_tss_ao)-1))
+                                                            if abs(_tss_ao[_ii+1]-
+                                                                   _tss_ao[_ii]) > 0
+                                                        ]
+                                            if _ao_diffs:
+                                                _ao_med = sorted(_ao_diffs)[
+                                                    len(_ao_diffs)//2]
+                                                if _ao_med > 0:
+                                                    _ao_hz = round(1.0/_ao_med, 1)
+
+                                            # Fim de cada período em match-time
+                                            _pend_ao = {
+                                                _pn_ao2: (
+                                                    _period_start_min_tm[_pn_ao2]
+                                                    + (_period_abs_tm[_pn_ao2][1]
+                                                       - _period_abs_tm[_pn_ao2][0])
+                                                    / 60.0)
+                                                for _pn_ao2 in _period_order_tm
+                                            }
+                                            _n_smp_ao = max(
+                                                2, int(window_minutes * 60 * _ao_hz))
+
+                                            # Paleta de cores
+                                            _pal_ao = [
+                                                '#FF6B6B','#4ECDC4','#45B7D1','#96CEB4',
+                                                '#FFEAA7','#DDA0DD','#98D8C8','#F7DC6F',
+                                                '#BB8FCE','#76D7C4','#F1948A','#85C1E9',
+                                                '#82E0AA','#F8C471','#AED6F1',
+                                            ]
+
+                                            # Para cada atleta: acha período que cobre
+                                            # t_ini_ao e extrai o segmento GPS correto
+                                            _anim_map = {}
+                                            for _ci_ao, _atl_ao in enumerate(_jan_atletas):
+                                                for _pn_ao3 in _sorted_by_ts_tm:
+                                                    _pos_ao = dados_posicao_por_periodo.get(
+                                                        _pn_ao3, {}).get(_atl_ao, {})
+                                                    _xs_ao = _pos_ao.get('xs', [])
+                                                    if not _xs_ao:
+                                                        continue
+                                                    _ps_ao = _period_start_min_tm.get(
+                                                        _pn_ao3, 0.0)
+                                                    _pe_ao = _pend_ao.get(_pn_ao3, _ps_ao)
+                                                    if _ps_ao <= _t_ini_ao <= _pe_ao:
+                                                        _off_ao = (
+                                                            (_t_ini_ao - _ps_ao) * 60.0)
+                                                        _is_ao = int(_off_ao * _ao_hz)
+                                                        _ie_ao = min(
+                                                            _is_ao + _n_smp_ao,
+                                                            len(_xs_ao))
+                                                        if 0 <= _is_ao < len(_xs_ao):
+                                                            _ys_ao = _pos_ao.get('ys', [])
+                                                            _vs_ao = _pos_ao.get('vel', [])
+                                                            _anim_map[_atl_ao] = {
+                                                                'xs': list(
+                                                                    _xs_ao[_is_ao:_ie_ao]),
+                                                                'ys': (
+                                                                    list(_ys_ao[_is_ao:_ie_ao])
+                                                                    if _ys_ao
+                                                                    else [0]*(_ie_ao-_is_ao)),
+                                                                'vel': (
+                                                                    list(_vs_ao[_is_ao:_ie_ao])
+                                                                    if _vs_ao
+                                                                    else [0]*(_ie_ao-_is_ao)),
+                                                                'color': _pal_ao[
+                                                                    _ci_ao % len(_pal_ao)],
+                                                                'label': (
+                                                                    _atl_ao.split()[-1][:10]
+                                                                    if _atl_ao.split()
+                                                                    else _atl_ao[:10]),
+                                                            }
+                                                        break
+
+                                            if len(_anim_map) < 2:
+                                                st.info(
+                                                    "GPS insuficiente para este esforço. "
+                                                    "Tente outro intervalo ou verifique "
+                                                    "os dados de posição.")
+                                            else:
+                                                # Config do campo
+                                                _anim_cfg_ao = None
+                                                for _hk_ao in list(
+                                                        st.session_state.keys()):
+                                                    if (_hk_ao.startswith("campo_cfg__")
+                                                            and isinstance(
+                                                            st.session_state[_hk_ao],
+                                                            dict)):
+                                                        _anim_cfg_ao = (
+                                                            st.session_state[_hk_ao])
+                                                        break
+                                                _fl_ao = float(
+                                                    _anim_cfg_ao.get('fl', 105)
+                                                    if _anim_cfg_ao else 105)
+                                                _fw_ao = float(
+                                                    _anim_cfg_ao.get('fw', 68)
+                                                    if _anim_cfg_ao else 68)
+
+                                                _per_ao_lbl = _periodo_para_t_tm(
+                                                    _t_ini_ao) or '?'
+                                                _fig_ao = desenhar_campo_futebol_bonito(
+                                                    field_length=_fl_ao,
+                                                    field_width=_fw_ao,
+                                                    title=(
+                                                        f"🎬 {_ev_anim['inicio']}"
+                                                        f"→{_ev_anim['fim']}"
+                                                        f" | {_per_ao_lbl}"
+                                                        f" | {_ev_anim['valor']:.1f}"
+                                                        f" {_unidade_jan}"),
+                                                )
+
+                                                _atls_ao = list(_anim_map.keys())
+                                                _tidxs_ao = []
+                                                for _pa_ao in _atls_ao:
+                                                    _wd_ao = _anim_map[_pa_ao]
+                                                    _fig_ao.add_trace(go.Scatter(
+                                                        x=[_wd_ao['xs'][0]]
+                                                            if _wd_ao['xs'] else [0],
+                                                        y=[_wd_ao['ys'][0]]
+                                                            if _wd_ao['ys'] else [0],
+                                                        mode='markers+text',
+                                                        marker=dict(
+                                                            size=20,
+                                                            color=_wd_ao['color'],
+                                                            symbol='circle',
+                                                            line=dict(color='white',
+                                                                       width=2)),
+                                                        text=[_wd_ao['label']],
+                                                        textposition='top center',
+                                                        textfont=dict(color='white',
+                                                                       size=8),
+                                                        name=_pa_ao, showlegend=True,
+                                                    ))
+                                                    _tidxs_ao.append(
+                                                        len(_fig_ao.data) - 1)
+
+                                                _wl_ao = max(
+                                                    len(_anim_map[a]['xs'])
+                                                    for a in _atls_ao)
+                                                _step_ao = max(1, _wl_ao // 80)
+                                                _fr_ao = list(
+                                                    range(0, _wl_ao, _step_ao))
+                                                if (_fr_ao and
+                                                        _fr_ao[-1] != _wl_ao - 1):
+                                                    _fr_ao.append(_wl_ao - 1)
+
+                                                _frames_ao = []
+                                                for _fi_ao in _fr_ao:
+                                                    _ts_ao = _fi_ao / _ao_hz
+                                                    _mm_ao = int(_ts_ao // 60)
+                                                    _ss_ao = int(_ts_ao % 60)
+                                                    _fd_ao = []
+                                                    for _pa_ao in _atls_ao:
+                                                        _wd_ao = _anim_map[_pa_ao]
+                                                        _xi_ao = (
+                                                            _wd_ao['xs'][_fi_ao]
+                                                            if _fi_ao < len(_wd_ao['xs'])
+                                                            else (_wd_ao['xs'][-1]
+                                                                  if _wd_ao['xs'] else 0))
+                                                        _yi_ao = (
+                                                            _wd_ao['ys'][_fi_ao]
+                                                            if _fi_ao < len(_wd_ao['ys'])
+                                                            else (_wd_ao['ys'][-1]
+                                                                  if _wd_ao['ys'] else 0))
+                                                        _fd_ao.append(go.Scatter(
+                                                            x=[_xi_ao], y=[_yi_ao],
+                                                            mode='markers+text',
+                                                            marker=dict(
+                                                                size=20,
+                                                                color=_wd_ao['color'],
+                                                                symbol='circle',
+                                                                line=dict(color='white',
+                                                                           width=2)),
+                                                            text=[_wd_ao['label']],
+                                                            textposition='top center',
+                                                            textfont=dict(color='white',
+                                                                           size=8),
+                                                        ))
+                                                    _frames_ao.append(go.Frame(
+                                                        data=_fd_ao,
+                                                        traces=_tidxs_ao,
+                                                        name=str(_fi_ao),
+                                                        layout=go.Layout(title=dict(
+                                                            text=(
+                                                                f"🎬 "
+                                                                f"{_ev_anim['inicio']}"
+                                                                f"→{_ev_anim['fim']}"
+                                                                f" | ⏱️ +"
+                                                                f"{_mm_ao}:{_ss_ao:02d}"
+                                                                f" min"
+                                                            ),
+                                                            font=dict(color='white',
+                                                                       size=12),
+                                                        )),
+                                                    ))
+
+                                                _fig_ao.frames = _frames_ao
+                                                _fig_ao.update_layout(
+                                                    height=580,
+                                                    updatemenus=[dict(
+                                                        type='buttons',
+                                                        showactive=False,
+                                                        y=0, x=0.5,
+                                                        xanchor='center',
+                                                        buttons=[
+                                                            dict(
+                                                                label='▶ Play',
+                                                                method='animate',
+                                                                args=[None, dict(
+                                                                    frame=dict(
+                                                                        duration=100,
+                                                                        redraw=True),
+                                                                    fromcurrent=True,
+                                                                    mode='immediate')]),
+                                                            dict(
+                                                                label='⏸ Pause',
+                                                                method='animate',
+                                                                args=[[None], dict(
+                                                                    frame=dict(
+                                                                        duration=0,
+                                                                        redraw=False),
+                                                                    mode='immediate')]),
+                                                        ],
+                                                    )],
+                                                    sliders=[dict(
+                                                        steps=[
+                                                            dict(
+                                                                args=[[f.name],
+                                                                      dict(
+                                                                          frame=dict(
+                                                                              duration=0,
+                                                                              redraw=True),
+                                                                          mode='immediate')],
+                                                                method='animate',
+                                                                label='',
+                                                            )
+                                                            for f in _frames_ao
+                                                        ],
+                                                        x=0.0, y=-0.05, len=1.0,
+                                                        currentvalue=dict(visible=False),
+                                                    )],
+                                                    legend=dict(
+                                                        orientation='h',
+                                                        yanchor='bottom', y=-0.30,
+                                                        xanchor='center', x=0.5,
+                                                        font=dict(color='white', size=8),
+                                                    ),
+                                                )
+                                                st.plotly_chart(
+                                                    _fig_ao,
+                                                    use_container_width=True)
                                     else:
                                         st.info(
                                             "Nenhum esforço coletivo de média-alta "
@@ -12690,305 +12984,6 @@ Escolha um ou mais atletas para análise simultânea.
                                 st.plotly_chart(_fig_wcs2, use_container_width=True)
                             else:
                                 st.info("Dados GPS insuficientes para animação deste atleta.")
-
-                        # ── Pior Momento Coletivo (WCS Coletivo por Variável Catapult) ─
-                        st.markdown("---")
-                        with st.expander("⚡ Pior Momento Coletivo", expanded=False):
-                            st.caption(
-                                "Identifica a **janela temporal** em que a demanda física **coletiva** "
-                                "do grupo foi máxima — somando a variável de todos os atletas na janela. "
-                                "Exibe animação do grupo se movendo naquele pior momento."
-                            )
-                            if not _wcs2_periodos:
-                                st.info("Nenhum período disponível.")
-                            else:
-                                _pmc_c1, _pmc_c2, _pmc_c3 = st.columns([2, 2, 1])
-                                with _pmc_c1:
-                                    _pmc_per = st.selectbox(
-                                        "📅 Período", _wcs2_periodos, key="pmc_per_sel"
-                                    )
-                                with _pmc_c2:
-                                    _pmc_metric_opts = [
-                                        "📏 Distância Total (m)",
-                                        "⚡ Dist. >14 km/h  — Alta Intensidade (m)",
-                                        "🚀 Dist. >19 km/h  — Sprint (m)",
-                                        "🏋️ PlayerLoad",
-                                        "↗️ Acelerações >2 m/s²  (n)",
-                                        "↗️ Acelerações >3 m/s²  (n)",
-                                        "↘️ Desacelerações <-2 m/s²  (n)",
-                                        "↘️ Desacelerações <-3 m/s²  (n)",
-                                    ]
-                                    _pmc_metric = st.selectbox(
-                                        "📊 Variável Coletiva", _pmc_metric_opts,
-                                        key="pmc_metric_sel"
-                                    )
-                                with _pmc_c3:
-                                    _pmc_win = st.selectbox(
-                                        "⏱️ Janela",
-                                        [1, 3, 5], format_func=lambda x: f"{x} min",
-                                        key="pmc_win_sel"
-                                    )
-
-                                # ── Montar dados do período ─────────────────────────
-                                _pmc_period_data = dados_posicao_por_periodo.get(_pmc_per, {})
-                                _pmc_athl_map = {}
-                                for _ca, _cad in _pmc_period_data.items():
-                                    _cxs = list(_cad.get('xs', []))
-                                    _cys = list(_cad.get('ys', []))
-                                    _cvs = list(_cad.get('vel', []))
-                                    _cac = list(_cad.get('acc', []))
-                                    _cts = list(_cad.get('ts_pos', []))
-                                    _nn_p = min(len(_cxs), len(_cys))
-                                    # GPS fallback
-                                    if _nn_p == 0 and _wcs2_cfg:
-                                        _lp_p = _cad.get('lats', [])
-                                        _lo_p = _cad.get('lons', [])
-                                        if _lp_p and _lo_p:
-                                            try:
-                                                _gxp, _gyp = gps_para_campo_coords(
-                                                    _lp_p, _lo_p, _wcs2_cfg
-                                                )
-                                                _cxs = _gxp;  _cys = _gyp
-                                                _cvs = _cad.get('vels_gps', [0.0]*len(_gxp))
-                                                _nn_p = min(len(_cxs), len(_cys))
-                                            except Exception:
-                                                _nn_p = 0
-                                    if _nn_p > 1:
-                                        _cvs_p = list(_cvs[:_nn_p]) + [0.0]*max(0, _nn_p-len(_cvs))
-                                        _cac_p = list(_cac[:_nn_p]) + [0.0]*max(0, _nn_p-len(_cac))
-                                        _cts_p = list(_cts[:_nn_p]) + [0.0]*max(0, _nn_p-len(_cts))
-                                        # PlayerLoad from sensor data
-                                        _pl_raw_p = dados_sensor_por_atleta_por_periodo.get(
-                                            _pmc_per, {}
-                                        ).get(_ca, [])
-                                        _pl_p = (
-                                            [float(pt.get('pl') or 0) for pt in _pl_raw_p[:_nn_p]]
-                                            + [0.0] * max(0, _nn_p - len(_pl_raw_p))
-                                        )
-                                        _pmc_athl_map[_ca] = {
-                                            'xs':  list(_cxs[:_nn_p]),
-                                            'ys':  list(_cys[:_nn_p]),
-                                            'vel': _cvs_p,
-                                            'acc': _cac_p,
-                                            'ts':  _cts_p,
-                                            'pl':  _pl_p,
-                                            'pos': str(_cad.get('posicao', '—')),
-                                        }
-
-                                if len(_pmc_athl_map) < 2:
-                                    st.info("Poucos atletas com GPS neste período para análise coletiva.")
-                                else:
-                                    _pmc_hz2 = _wcs2_hz
-                                    _pmc_n2  = max(2, int(_pmc_win * 60 * _pmc_hz2))
-                                    _pmc_athl_list = list(_pmc_athl_map.keys())
-                                    _pmc_len = min(
-                                        len(_pmc_athl_map[a]['xs']) for a in _pmc_athl_list
-                                    )
-
-                                    if _pmc_len < _pmc_n2:
-                                        st.warning(
-                                            f"Dados insuficientes: {_pmc_len} amostras disponíveis, "
-                                            f"necessário {_pmc_n2} para janela de {_pmc_win} min."
-                                        )
-                                    else:
-                                        # ── Série por atleta ───────────────────────
-                                        _pmc_sv_map = {}
-                                        _pmc_m2 = _pmc_metric
-                                        for _pa2 in _pmc_athl_list:
-                                            _pad2 = _pmc_athl_map[_pa2]
-                                            _pv2  = _pad2['vel'][:_pmc_len]
-                                            _pac2 = _pad2['acc'][:_pmc_len]
-                                            _ppl2 = _pad2['pl'][:_pmc_len]
-                                            if "Distância Total" in _pmc_m2:
-                                                _sv2 = [v/(3.6*_pmc_hz2) for v in _pv2]
-                                            elif ">14" in _pmc_m2:
-                                                _sv2 = [v/(3.6*_pmc_hz2) if v>14 else 0.0 for v in _pv2]
-                                            elif ">19" in _pmc_m2:
-                                                _sv2 = [v/(3.6*_pmc_hz2) if v>19 else 0.0 for v in _pv2]
-                                            elif "PlayerLoad" in _pmc_m2:
-                                                _sv2 = _ppl2
-                                            elif ">2" in _pmc_m2 and "cel" in _pmc_m2:
-                                                _sv2 = [1.0 if a>2 else 0.0 for a in _pac2]
-                                            elif ">3" in _pmc_m2 and "cel" in _pmc_m2:
-                                                _sv2 = [1.0 if a>3 else 0.0 for a in _pac2]
-                                            elif "<-2" in _pmc_m2:
-                                                _sv2 = [1.0 if a<-2 else 0.0 for a in _pac2]
-                                            elif "<-3" in _pmc_m2:
-                                                _sv2 = [1.0 if a<-3 else 0.0 for a in _pac2]
-                                            else:
-                                                _sv2 = [v/(3.6*_pmc_hz2) for v in _pv2]
-                                            _pmc_sv_map[_pa2] = _sv2
-
-                                        # ── Rolling window coletivo via numpy ───────
-                                        _col_score2 = np.zeros(_pmc_len - _pmc_n2 + 1)
-                                        for _pa2 in _pmc_athl_list:
-                                            _arr2  = np.array(_pmc_sv_map[_pa2])
-                                            _roll2 = np.convolve(_arr2, np.ones(_pmc_n2), 'valid')
-                                            _col_score2 += _roll2
-
-                                        _pmc_bi2  = int(np.argmax(_col_score2))
-                                        _pmc_bval2 = float(_col_score2[_pmc_bi2])
-                                        _pmc_bei2  = _pmc_bi2 + _pmc_n2
-
-                                        # Início em tempo
-                                        _pmc_ts_ref = _pmc_athl_map[_pmc_athl_list[0]]['ts'][_pmc_bi2]
-                                        try:
-                                            from datetime import datetime as _dtpmc
-                                            _pmc_tstart = (
-                                                _dtpmc.fromtimestamp(float(_pmc_ts_ref)).strftime('%H:%M:%S')
-                                                if float(_pmc_ts_ref) > 1e6
-                                                else f"{int(_pmc_bi2/_pmc_hz2//60):02d}:{int(_pmc_bi2/_pmc_hz2%60):02d}"
-                                            )
-                                        except Exception:
-                                            _pmc_tstart = f"{int(_pmc_bi2/_pmc_hz2//60):02d}:{int(_pmc_bi2/_pmc_hz2%60):02d}"
-
-                                        _pmc_tend  = f"{int(_pmc_bei2/_pmc_hz2//60):02d}:{int(_pmc_bei2/_pmc_hz2%60):02d}"
-                                        _pmc_unit2 = ("m" if "Dist" in _pmc_m2
-                                                      else ("PL" if "Player" in _pmc_m2 else "n"))
-
-                                        # ── KPIs ────────────────────────────────────
-                                        _km1, _km2, _km3, _km4 = st.columns(4)
-                                        _km1.metric("🏋️ WCS Coletivo",
-                                                    f"{_pmc_bval2:.1f} {_pmc_unit2}")
-                                        _km2.metric("📊 Média/Atleta",
-                                                    f"{_pmc_bval2/len(_pmc_athl_list):.1f} {_pmc_unit2}")
-                                        _km3.metric("⏰ Início", _pmc_tstart)
-                                        _km4.metric("🏁 Fim", _pmc_tend)
-
-                                        # ── Campo ───────────────────────────────────
-                                        _pmc_fl2 = float(_wcs2_cfg.get('fl', 105)) if _wcs2_cfg else 105.0
-                                        _pmc_fw2 = float(_wcs2_cfg.get('fw', 68))  if _wcs2_cfg else 68.0
-                                        _fig_pmc = desenhar_campo_futebol_bonito(
-                                            field_length=_pmc_fl2,
-                                            field_width=_pmc_fw2,
-                                            title=(
-                                                f"⚡ Pior Momento Coletivo — "
-                                                f"{_pmc_m2.split('(')[0].strip()} | "
-                                                f"{_pmc_per} | {_pmc_tstart} → {_pmc_tend}"
-                                            ),
-                                        )
-                                        _n_base_pmc = len(_fig_pmc.data)
-
-                                        _pmc_palette = [
-                                            '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
-                                            '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#76D7C4',
-                                            '#F1948A', '#85C1E9', '#82E0AA', '#F8C471', '#AED6F1',
-                                        ]
-
-                                        # Fatia de dados do pior janela por atleta
-                                        _pmc_win_segs = {}
-                                        for _ci4, _pa4 in enumerate(_pmc_athl_list):
-                                            _pad4 = _pmc_athl_map[_pa4]
-                                            _pmc_win_segs[_pa4] = {
-                                                'xs':    _pad4['xs'][_pmc_bi2:_pmc_bei2],
-                                                'ys':    _pad4['ys'][_pmc_bi2:_pmc_bei2],
-                                                'vel':   _pad4['vel'][_pmc_bi2:_pmc_bei2],
-                                                'color': _pmc_palette[_ci4 % len(_pmc_palette)],
-                                                'label': (_pa4.split()[-1][:10]
-                                                          if _pa4.split() else _pa4[:10]),
-                                            }
-
-                                        # Traces iniciais (frame 0) — um por atleta
-                                        _pmc_tidxs = []
-                                        for _pa4 in _pmc_athl_list:
-                                            _wd4 = _pmc_win_segs[_pa4]
-                                            _fig_pmc.add_trace(go.Scatter(
-                                                x=[_wd4['xs'][0]] if _wd4['xs'] else [0],
-                                                y=[_wd4['ys'][0]] if _wd4['ys'] else [0],
-                                                mode='markers+text',
-                                                marker=dict(size=20, color=_wd4['color'],
-                                                            symbol='circle',
-                                                            line=dict(color='white', width=2)),
-                                                text=[_wd4['label']],
-                                                textposition='top center',
-                                                textfont=dict(color='white', size=8),
-                                                name=_pa4, showlegend=True,
-                                            ))
-                                            _pmc_tidxs.append(len(_fig_pmc.data) - 1)
-
-                                        # Frames da animação
-                                        _win_len2 = _pmc_bei2 - _pmc_bi2
-                                        _step_pmc = max(1, _win_len2 // 80)
-                                        _fr_pmc   = list(range(0, _win_len2, _step_pmc))
-                                        if _fr_pmc and _fr_pmc[-1] != _win_len2 - 1:
-                                            _fr_pmc.append(_win_len2 - 1)
-
-                                        _frames_pmc = []
-                                        for _fi_p in _fr_pmc:
-                                            _t_s = _fi_p / _pmc_hz2
-                                            _mm_p = int(_t_s // 60)
-                                            _ss_p = int(_t_s % 60)
-                                            _fd = []
-                                            for _pa4 in _pmc_athl_list:
-                                                _wd4 = _pmc_win_segs[_pa4]
-                                                _xi4 = (_wd4['xs'][_fi_p]
-                                                        if _fi_p < len(_wd4['xs'])
-                                                        else (_wd4['xs'][-1] if _wd4['xs'] else 0))
-                                                _yi4 = (_wd4['ys'][_fi_p]
-                                                        if _fi_p < len(_wd4['ys'])
-                                                        else (_wd4['ys'][-1] if _wd4['ys'] else 0))
-                                                _fd.append(go.Scatter(
-                                                    x=[_xi4], y=[_yi4],
-                                                    mode='markers+text',
-                                                    marker=dict(size=20, color=_wd4['color'],
-                                                                symbol='circle',
-                                                                line=dict(color='white', width=2)),
-                                                    text=[_wd4['label']],
-                                                    textposition='top center',
-                                                    textfont=dict(color='white', size=8),
-                                                ))
-                                            _frames_pmc.append(go.Frame(
-                                                data=_fd,
-                                                traces=_pmc_tidxs,
-                                                name=str(_fi_p),
-                                                layout=go.Layout(title=dict(
-                                                    text=(
-                                                        f"⚡ Pior Momento Coletivo | "
-                                                        f"⏱️ {_mm_p}:{_ss_p:02d} / "
-                                                        f"{_pmc_win}:00 min"
-                                                    ),
-                                                    font=dict(color='white', size=12),
-                                                )),
-                                            ))
-
-                                        _fig_pmc.frames = _frames_pmc
-                                        _fig_pmc.update_layout(
-                                            height=580,
-                                            updatemenus=[dict(
-                                                type='buttons', showactive=False,
-                                                y=0, x=0.5, xanchor='center',
-                                                buttons=[
-                                                    dict(label='▶ Play', method='animate',
-                                                         args=[None, dict(
-                                                             frame=dict(duration=100, redraw=True),
-                                                             fromcurrent=True, mode='immediate')]),
-                                                    dict(label='⏸ Pause', method='animate',
-                                                         args=[[None], dict(
-                                                             frame=dict(duration=0, redraw=False),
-                                                             mode='immediate')]),
-                                                ],
-                                            )],
-                                            sliders=[dict(
-                                                steps=[
-                                                    dict(
-                                                        args=[[f.name],
-                                                              dict(frame=dict(duration=0, redraw=True),
-                                                                   mode='immediate')],
-                                                        method='animate', label='',
-                                                    )
-                                                    for f in _frames_pmc
-                                                ],
-                                                x=0.0, y=-0.05, len=1.0,
-                                                currentvalue=dict(visible=False),
-                                            )],
-                                            legend=dict(
-                                                orientation='h',
-                                                yanchor='bottom', y=-0.30,
-                                                xanchor='center', x=0.5,
-                                                font=dict(color='white', size=8),
-                                            ),
-                                        )
-                                        st.plotly_chart(_fig_pmc, use_container_width=True)
 
             # ==================== ABA 8: MONITORAMENTO AO VIVO ====================
             with abas[8]:
