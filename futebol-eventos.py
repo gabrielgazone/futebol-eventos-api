@@ -8912,41 +8912,65 @@ Escolha um ou mais atletas para análise simultânea.
                                     st.warning("Dados insuficientes.")
                                 else:
                                     # ── Offset absoluto por atleta ─────────────────
-                                    # ts_pos do GPS vem a zero no Catapult (campo 'ts'
-                                    # ausente nos pontos de posição). Fonte confiável:
-                                    # sensor IMU → ts + cs/100 (em segundos, relativo
-                                    # ao início da atividade de cada período).
-                                    # Estratégia: acumular DURAÇÃO de cada período
-                                    # via sensor para mapear o cronograma do jogo.
+                                    # Duas estratégias (auto-detectadas):
+                                    #   A) ts Unix (relógio real): o primeiro ts de
+                                    #      cada atleta já encoda o minuto de entrada.
+                                    #      Detectado quando spread dos primeiros ts
+                                    #      entre atletas > 60 s.
+                                    #   B) ts relativo (0-based por atividade):
+                                    #      acumula duração de cada período via sensor.
                                     _period_order_tm = (
                                         list(dados_sensor_por_atleta_por_periodo.keys())
                                         if _jan_modo_todos
                                         else [periodo_janela]
                                     )
 
+                                    # Coleta primeiro ts de cada atleta em cada período
+                                    _atl_ts_first: dict = {}   # atleta → menor ts global
+                                    _all_ts_first_vals: list = []
+                                    for _pn_col in _period_order_tm:
+                                        for _anm, _spl in dados_sensor_por_atleta_por_periodo.get(
+                                                _pn_col, {}).items():
+                                            if _spl:
+                                                _tts = float(_spl[0].get('ts') or 0)
+                                                _ccs = float(_spl[0].get('cs') or 0)
+                                                _tt  = _tts + _ccs / 100.0
+                                                if _tt > 0:
+                                                    _all_ts_first_vals.append(_tt)
+                                                    if _anm not in _atl_ts_first:
+                                                        _atl_ts_first[_anm] = _tt
+                                                    else:
+                                                        _atl_ts_first[_anm] = min(
+                                                            _atl_ts_first[_anm], _tt)
+
+                                    # Auto-detecção: spread > 60 s → timestamps Unix
+                                    _ts_spread = (
+                                        max(_all_ts_first_vals) - min(_all_ts_first_vals)
+                                        if len(_all_ts_first_vals) >= 2 else 0.0
+                                    )
+                                    _use_abs_ts = _ts_spread > 60.0
+                                    _match_t0_abs = (
+                                        min(_all_ts_first_vals)
+                                        if _all_ts_first_vals else 0.0)
+
+                                    # Método B: acumular duração via sensor (fallback)
                                     def _period_dur_min_tm(_pnm: str) -> float:
-                                        """Duração do período em min via timestamps do sensor IMU."""
                                         _per_s = dados_sensor_por_atleta_por_periodo.get(_pnm, {})
                                         _mx = 0.0
-                                        for _sp_list in _per_s.values():
-                                            if not _sp_list:
+                                        for _spl in _per_s.values():
+                                            if not _spl:
                                                 continue
-                                            _t0_s, _t1_s = None, None
-                                            for _pp in _sp_list:
-                                                _tts = float(_pp.get('ts') or 0)
-                                                _ccs = float(_pp.get('cs') or 0)
-                                                _tt  = _tts + _ccs / 100.0
-                                                if _t0_s is None or _tt < _t0_s:
-                                                    _t0_s = _tt
-                                                if _t1_s is None or _tt > _t1_s:
-                                                    _t1_s = _tt
-                                            if _t0_s is not None and _t1_s is not None:
+                                            _t0_s = _t1_s = None
+                                            for _pp in _spl:
+                                                _tt = (float(_pp.get('ts') or 0)
+                                                       + float(_pp.get('cs') or 0) / 100.0)
+                                                if _t0_s is None or _tt < _t0_s: _t0_s = _tt
+                                                if _t1_s is None or _tt > _t1_s: _t1_s = _tt
+                                            if _t0_s is not None:
                                                 _d = abs(_t1_s - _t0_s)
-                                                if _d > _mx:
-                                                    _mx = _d
+                                                if _d > _mx: _mx = _d
                                         return _mx / 60.0
 
-                                    # Minuto acumulado de início de cada período
                                     _period_start_min_tm: dict = {}
                                     _cum_min_tm = 0.0
                                     for _pn_tm in _period_order_tm:
@@ -8954,17 +8978,17 @@ Escolha um ou mais atletas para análise simultânea.
                                         _cum_min_tm += _period_dur_min_tm(_pn_tm)
 
                                     def _atl_offset_min(_atl_nm: str) -> float:
-                                        """Minuto de entrada = início do 1º período com dados do atleta."""
-                                        # 1ª opção: GPS vel
+                                        if _use_abs_ts:
+                                            # Método A: ts Unix → offset direto
+                                            _t_atl = _atl_ts_first.get(_atl_nm, 0.0)
+                                            return max(0.0,
+                                                (_t_atl - _match_t0_abs) / 60.0)
+                                        # Método B: primeiro período com dados
                                         for _pn_ao in _period_order_tm:
-                                            _da_ao = dados_posicao_por_periodo.get(
-                                                _pn_ao, {}).get(_atl_nm, {})
-                                            if _da_ao.get('vel'):
-                                                return _period_start_min_tm.get(_pn_ao, 0.0)
-                                        # 2ª opção: sensor IMU (cobre atletas sem GPS)
-                                        for _pn_ao in _period_order_tm:
-                                            if dados_sensor_por_atleta_por_periodo.get(
-                                                    _pn_ao, {}).get(_atl_nm):
+                                            if (dados_posicao_por_periodo.get(
+                                                    _pn_ao, {}).get(_atl_nm, {}).get('vel')
+                                                    or dados_sensor_por_atleta_por_periodo.get(
+                                                    _pn_ao, {}).get(_atl_nm)):
                                                 return _period_start_min_tm.get(_pn_ao, 0.0)
                                         return 0.0
 
