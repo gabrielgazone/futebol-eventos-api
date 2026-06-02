@@ -8912,25 +8912,36 @@ Escolha um ou mais atletas para análise simultânea.
                                     st.warning("Dados insuficientes.")
                                 else:
                                     # ── Offset absoluto por atleta ─────────────────
-                                    # ts_pos é relativo ao início de cada período
-                                    # (Catapult reseta por atividade, não é Unix time).
-                                    # Solução: acumular a DURAÇÃO de cada período em
-                                    # ordem cronológica para calcular o minuto de
-                                    # entrada real de cada atleta no jogo.
+                                    # ts_pos do GPS vem a zero no Catapult (campo 'ts'
+                                    # ausente nos pontos de posição). Fonte confiável:
+                                    # sensor IMU → ts + cs/100 (em segundos, relativo
+                                    # ao início da atividade de cada período).
+                                    # Estratégia: acumular DURAÇÃO de cada período
+                                    # via sensor para mapear o cronograma do jogo.
                                     _period_order_tm = (
-                                        list(dados_posicao_por_periodo.keys())
+                                        list(dados_sensor_por_atleta_por_periodo.keys())
                                         if _jan_modo_todos
                                         else [periodo_janela]
                                     )
 
                                     def _period_dur_min_tm(_pnm: str) -> float:
-                                        """Duração do período em min (ts[-1]-ts[0] máx entre atletas)."""
-                                        _per = dados_posicao_por_periodo.get(_pnm, {})
+                                        """Duração do período em min via timestamps do sensor IMU."""
+                                        _per_s = dados_sensor_por_atleta_por_periodo.get(_pnm, {})
                                         _mx = 0.0
-                                        for _da in _per.values():
-                                            _ts = _da.get('ts_pos', [])
-                                            if len(_ts) >= 2:
-                                                _d = abs(float(_ts[-1]) - float(_ts[0]))
+                                        for _sp_list in _per_s.values():
+                                            if not _sp_list:
+                                                continue
+                                            _t0_s, _t1_s = None, None
+                                            for _pp in _sp_list:
+                                                _tts = float(_pp.get('ts') or 0)
+                                                _ccs = float(_pp.get('cs') or 0)
+                                                _tt  = _tts + _ccs / 100.0
+                                                if _t0_s is None or _tt < _t0_s:
+                                                    _t0_s = _tt
+                                                if _t1_s is None or _tt > _t1_s:
+                                                    _t1_s = _tt
+                                            if _t0_s is not None and _t1_s is not None:
+                                                _d = abs(_t1_s - _t0_s)
                                                 if _d > _mx:
                                                     _mx = _d
                                         return _mx / 60.0
@@ -8943,13 +8954,19 @@ Escolha um ou mais atletas para análise simultânea.
                                         _cum_min_tm += _period_dur_min_tm(_pn_tm)
 
                                     def _atl_offset_min(_atl_nm: str) -> float:
-                                        """Minuto de entrada = início do 1º período com dados GPS do atleta."""
+                                        """Minuto de entrada = início do 1º período com dados do atleta."""
+                                        # 1ª opção: GPS vel
                                         for _pn_ao in _period_order_tm:
                                             _da_ao = dados_posicao_por_periodo.get(
                                                 _pn_ao, {}).get(_atl_nm, {})
                                             if _da_ao.get('vel'):
                                                 return _period_start_min_tm.get(_pn_ao, 0.0)
-                                        return 0.0  # sem GPS → assume entrada no kick-off
+                                        # 2ª opção: sensor IMU (cobre atletas sem GPS)
+                                        for _pn_ao in _period_order_tm:
+                                            if dados_sensor_por_atleta_por_periodo.get(
+                                                    _pn_ao, {}).get(_atl_nm):
+                                                return _period_start_min_tm.get(_pn_ao, 0.0)
+                                        return 0.0
 
                                     # Ordena atletas por posição → nome
                                     _atls_ord = sorted(
