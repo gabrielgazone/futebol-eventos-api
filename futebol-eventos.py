@@ -8912,49 +8912,28 @@ Escolha um ou mais atletas para análise simultânea.
                                     st.warning("Dados insuficientes.")
                                 else:
                                     # ── Offset absoluto por atleta ─────────────────
-                                    # Duas estratégias (auto-detectadas):
-                                    #   A) ts Unix (relógio real): o primeiro ts de
-                                    #      cada atleta já encoda o minuto de entrada.
-                                    #      Detectado quando spread dos primeiros ts
-                                    #      entre atletas > 60 s.
-                                    #   B) ts relativo (0-based por atividade):
-                                    #      acumula duração de cada período via sensor.
+                                    # Lógica: cada "período" é uma actividade gravada
+                                    # separadamente. Atletas que continuam no jogo
+                                    # aparecem em múltiplos períodos consecutivos.
+                                    # O substituto entra apenas a partir do período
+                                    # em que foi inserido.
+                                    #
+                                    # Usamos SEMPRE duração acumulada via sensor IMU
+                                    # (ts_last − ts_first dentro do mesmo período),
+                                    # que funciona tanto para ts relativo (0-based)
+                                    # quanto Unix — porque o intervalo interno cancela
+                                    # qualquer origem absoluta.
+                                    # NÃO usamos Unix ts direto: combinar_periodos_
+                                    # continuo remove os intervalos entre períodos,
+                                    # enquanto Unix ts os inclui → dessincronização.
                                     _period_order_tm = (
                                         list(dados_sensor_por_atleta_por_periodo.keys())
                                         if _jan_modo_todos
                                         else [periodo_janela]
                                     )
 
-                                    # Coleta primeiro ts de cada atleta em cada período
-                                    _atl_ts_first: dict = {}   # atleta → menor ts global
-                                    _all_ts_first_vals: list = []
-                                    for _pn_col in _period_order_tm:
-                                        for _anm, _spl in dados_sensor_por_atleta_por_periodo.get(
-                                                _pn_col, {}).items():
-                                            if _spl:
-                                                _tts = float(_spl[0].get('ts') or 0)
-                                                _ccs = float(_spl[0].get('cs') or 0)
-                                                _tt  = _tts + _ccs / 100.0
-                                                if _tt > 0:
-                                                    _all_ts_first_vals.append(_tt)
-                                                    if _anm not in _atl_ts_first:
-                                                        _atl_ts_first[_anm] = _tt
-                                                    else:
-                                                        _atl_ts_first[_anm] = min(
-                                                            _atl_ts_first[_anm], _tt)
-
-                                    # Auto-detecção: spread > 60 s → timestamps Unix
-                                    _ts_spread = (
-                                        max(_all_ts_first_vals) - min(_all_ts_first_vals)
-                                        if len(_all_ts_first_vals) >= 2 else 0.0
-                                    )
-                                    _use_abs_ts = _ts_spread > 60.0
-                                    _match_t0_abs = (
-                                        min(_all_ts_first_vals)
-                                        if _all_ts_first_vals else 0.0)
-
-                                    # Método B: acumular duração via sensor (fallback)
                                     def _period_dur_min_tm(_pnm: str) -> float:
+                                        """Duração em minutos: ts_last − ts_first máx entre atletas."""
                                         _per_s = dados_sensor_por_atleta_por_periodo.get(_pnm, {})
                                         _mx = 0.0
                                         for _spl in _per_s.values():
@@ -8966,11 +8945,12 @@ Escolha um ou mais atletas para análise simultânea.
                                                        + float(_pp.get('cs') or 0) / 100.0)
                                                 if _t0_s is None or _tt < _t0_s: _t0_s = _tt
                                                 if _t1_s is None or _tt > _t1_s: _t1_s = _tt
-                                            if _t0_s is not None:
+                                            if _t0_s is not None and _t1_s is not None:
                                                 _d = abs(_t1_s - _t0_s)
                                                 if _d > _mx: _mx = _d
                                         return _mx / 60.0
 
+                                    # Minuto de início acumulado de cada período
                                     _period_start_min_tm: dict = {}
                                     _cum_min_tm = 0.0
                                     for _pn_tm in _period_order_tm:
@@ -8978,12 +8958,7 @@ Escolha um ou mais atletas para análise simultânea.
                                         _cum_min_tm += _period_dur_min_tm(_pn_tm)
 
                                     def _atl_offset_min(_atl_nm: str) -> float:
-                                        if _use_abs_ts:
-                                            # Método A: ts Unix → offset direto
-                                            _t_atl = _atl_ts_first.get(_atl_nm, 0.0)
-                                            return max(0.0,
-                                                (_t_atl - _match_t0_abs) / 60.0)
-                                        # Método B: primeiro período com dados
+                                        """Offset = início do 1º período em que o atleta tem dados."""
                                         for _pn_ao in _period_order_tm:
                                             if (dados_posicao_por_periodo.get(
                                                     _pn_ao, {}).get(_atl_nm, {}).get('vel')
@@ -9043,38 +9018,18 @@ Escolha um ou mais atletas para análise simultânea.
                                         _z_mat.append(_vn)
 
                                     # ── Pré-calcula bandas de período ──────────────
+                                    # Método B: durações acumuladas via sensor IMU —
+                                    # mesma lógica de _period_start_min_tm, garantindo
+                                    # que bandas e dados dos atletas se alinhem.
                                     _period_bands_tm = []
-                                    if _use_abs_ts:
-                                        # Método A: posiciona cada banda pelos timestamps
-                                        # reais do período (pode haver sobreposição — ok)
-                                        for _pn_pb in _period_order_tm:
-                                            _per_ts_pb = []
-                                            for _spl_pb in dados_sensor_por_atleta_por_periodo.get(
-                                                    _pn_pb, {}).values():
-                                                if _spl_pb:
-                                                    _t0_pb = (float(_spl_pb[0].get('ts') or 0)
-                                                              + float(_spl_pb[0].get('cs') or 0) / 100)
-                                                    _t1_pb = (float(_spl_pb[-1].get('ts') or 0)
-                                                              + float(_spl_pb[-1].get('cs') or 0) / 100)
-                                                    if _t0_pb > 0:
-                                                        _per_ts_pb.extend([_t0_pb, _t1_pb])
-                                            if _per_ts_pb:
-                                                _ps_pb = max(0.0,
-                                                    (min(_per_ts_pb) - _match_t0_abs) / 60.0)
-                                                _pe_pb = (
-                                                    (max(_per_ts_pb) - _match_t0_abs) / 60.0)
-                                                _period_bands_tm.append(
-                                                    (_pn_pb, _ps_pb, _pe_pb))
-                                    else:
-                                        # Método B: usa durações acumuladas
-                                        for _i_pb, _pn_pb in enumerate(_period_order_tm):
-                                            _ps_pb = _period_start_min_tm[_pn_pb]
-                                            _pe_pb = (
-                                                _period_start_min_tm[_period_order_tm[_i_pb + 1]]
-                                                if _i_pb + 1 < len(_period_order_tm)
-                                                else _cum_min_tm
-                                            )
-                                            _period_bands_tm.append((_pn_pb, _ps_pb, _pe_pb))
+                                    for _i_pb, _pn_pb in enumerate(_period_order_tm):
+                                        _ps_pb = _period_start_min_tm[_pn_pb]
+                                        _pe_pb = (
+                                            _period_start_min_tm[_period_order_tm[_i_pb + 1]]
+                                            if _i_pb + 1 < len(_period_order_tm)
+                                            else _cum_min_tm
+                                        )
+                                        _period_bands_tm.append((_pn_pb, _ps_pb, _pe_pb))
 
                                     def _add_period_bands_tm(_fig, show_labels: bool = True):
                                         """Adiciona bandas alternadas + linhas divisórias + rótulos de período."""
