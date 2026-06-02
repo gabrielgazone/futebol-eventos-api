@@ -9063,12 +9063,20 @@ Escolha um ou mais atletas para análise simultânea.
                                         _col_max = 1.0
 
                                     # 2ª passagem — normaliza pelo máximo coletivo
+                                    # Linhas inteiramente NaN → mantém NaN (não zeros),
+                                    # assim "fora de campo" fica transparente no heatmap
+                                    # e distingue-se visualmente de 0% de intensidade.
                                     for _vr in _raw_mat:
-                                        _vn = (
-                                            _vr / _col_max * 100
-                                            if not np.all(np.isnan(_vr))
-                                            else np.zeros_like(_vr)
-                                        )
+                                        if not np.all(np.isnan(_vr)):
+                                            # Posições NaN dentro da linha ficam NaN;
+                                            # posições ativas → 0–100 % do máx coletivo
+                                            _vn = np.where(
+                                                np.isnan(_vr),
+                                                np.nan,
+                                                _vr / _col_max * 100,
+                                            )
+                                        else:
+                                            _vn = np.full_like(_vr, np.nan)
                                         _z_mat.append(_vn)
 
                                     # ── Pré-calcula bandas de período ──────────────
@@ -9117,17 +9125,30 @@ Escolha um ou mais atletas para análise simultânea.
                                                     yanchor='bottom',
                                                 )
 
+                                    # ── Paleta compartilhada heatmap / swimlane ─────
+                                    # NaN = transparente → mostra o plot_bgcolor (cinza)
+                                    # 0 %  = azul-marinho escuro  (ativo, baixa intensidade)
+                                    # 50 % = verde médio
+                                    # 75 % = âmbar
+                                    # 87 % = laranja
+                                    # 100% = vermelho
+                                    _HT_CS = [
+                                        [0.000, 'rgba(15,25,90,1)'],
+                                        [0.250, 'rgba(12,90,45,1)'],
+                                        [0.500, 'rgba(22,163,74,1)'],
+                                        [0.750, 'rgba(234,179,8,1)'],
+                                        [0.875, 'rgba(234,88,12,1)'],
+                                        [1.000, 'rgba(220,38,38,1)'],
+                                    ]
+                                    # Fundo cinza-índigo: NaN (transparente) destacado
+                                    _HT_BG  = 'rgba(28,28,44,1)'
+
                                     # ── Heatmap (% do máx coletivo) ────────────────
                                     _fig_ht = _go_tm.Figure(_go_tm.Heatmap(
                                         z=_z_mat,
                                         x=_tg,
                                         y=_y_lbl,
-                                        colorscale=[
-                                            [0.00, 'rgba(10,30,10,1)'],
-                                            [0.50, 'rgba(202,138,4,1)'],
-                                            [0.75, 'rgba(234,88,12,1)'],
-                                            [1.00, 'rgba(220,38,38,1)'],
-                                        ],
+                                        colorscale=_HT_CS,
                                         zmin=0, zmax=100,
                                         colorbar=dict(
                                             title=dict(
@@ -9135,8 +9156,8 @@ Escolha um ou mais atletas para análise simultânea.
                                                 font=dict(color='white'),
                                             ),
                                             tickfont=dict(color='white'),
-                                            tickvals=[0, 50, 75, 100],
-                                            ticktext=['0%', '50%', '75%', '100%'],
+                                            tickvals=[0, 25, 50, 75, 100],
+                                            ticktext=['0%', '25%', '50%', '75%', '100%'],
                                         ),
                                         hovertemplate=(
                                             "<b>%{y}</b><br>"
@@ -9159,12 +9180,105 @@ Escolha um ou mais atletas para análise simultânea.
                                             color='rgba(255,255,255,0.75)',
                                             tickfont=dict(size=10)),
                                         paper_bgcolor='rgba(0,0,0,0)',
-                                        plot_bgcolor='rgba(0,0,0,0)',
+                                        plot_bgcolor=_HT_BG,
                                         height=max(300, 36 * len(_atls_ord) + 120),
                                         margin=dict(l=200, r=100, t=40),
                                     )
                                     _add_period_bands_tm(_fig_ht)
                                     st.plotly_chart(_fig_ht, use_container_width=True)
+
+                                    # ── Swimlane (visualização alternativa opcional) ─
+                                    with st.expander(
+                                            "🔀 Visualização alternativa — Swimlane por Atleta",
+                                            expanded=False):
+                                        st.caption(
+                                            "Cada faixa horizontal representa um atleta. "
+                                            "A cor indica a intensidade relativa ao pico coletivo. "
+                                            "Cinza = fora de campo.")
+
+                                        # Reamostrar em bins de 1 min para visual "tile"
+                                        _sw_bin   = 1.0
+                                        _sw_edges = np.arange(
+                                            0, _cum_min_tm + _sw_bin, _sw_bin)
+                                        _sw_ctrs  = (_sw_edges[:-1] + _sw_edges[1:]) / 2
+
+                                        # Para cada atleta, média de intensidade por bin.
+                                        # Bins sem dado → sentinel -10 (cinza explícito).
+                                        _sw_z = []
+                                        for _vr_sw in _raw_mat:
+                                            _row_sw = []
+                                            for _bi in range(len(_sw_ctrs)):
+                                                _m = ((_tg >= _sw_edges[_bi]) &
+                                                      (_tg <  _sw_edges[_bi + 1]))
+                                                _vals = _vr_sw[_m]
+                                                _ok   = _vals[~np.isnan(_vals)]
+                                                _row_sw.append(
+                                                    float(np.mean(_ok))
+                                                    if len(_ok) > 0
+                                                    else -10.0)
+                                            _sw_z.append(_row_sw)
+
+                                        # Colorscale com cinza explícito para -10
+                                        # Normalizado: (v+10)/110
+                                        # -10 → 0.000  |  0 → 0.091  |  50 → 0.545
+                                        # 75  → 0.773  |  100→ 1.000
+                                        _sw_cs = [
+                                            [0.000, 'rgba(45,45,65,1)'],   # -10: fora
+                                            [0.090, 'rgba(45,45,65,1)'],   # limite cinza
+                                            [0.091, 'rgba(15,25,90,1)'],   # 0%: azul
+                                            [0.364, 'rgba(12,90,45,1)'],   # 30%: verde
+                                            [0.545, 'rgba(22,163,74,1)'],  # 50%: verde
+                                            [0.773, 'rgba(234,179,8,1)'],  # 75%: âmbar
+                                            [0.864, 'rgba(234,88,12,1)'],  # 87%: laranja
+                                            [1.000, 'rgba(220,38,38,1)'],  # 100%: vermelho
+                                        ]
+
+                                        _fig_sw = _go_tm.Figure(_go_tm.Heatmap(
+                                            z=_sw_z,
+                                            x=list(_sw_ctrs),
+                                            y=_y_lbl,
+                                            colorscale=_sw_cs,
+                                            zmin=-10, zmax=100,
+                                            ygap=4,
+                                            xgap=1,
+                                            colorbar=dict(
+                                                title=dict(
+                                                    text='% do Máx<br>Coletivo',
+                                                    font=dict(color='white'),
+                                                ),
+                                                tickfont=dict(color='white'),
+                                                tickvals=[0, 25, 50, 75, 100],
+                                                ticktext=['0%', '25%', '50%',
+                                                          '75%', '100%'],
+                                            ),
+                                            hovertemplate=(
+                                                "<b>%{y}</b><br>"
+                                                "Tempo: %{x:.0f}–%{x:.0f} min<br>"
+                                                "Intensidade: %{z:.0f}% do máx coletivo"
+                                                "<extra></extra>"
+                                            ),
+                                        ))
+                                        _fig_sw.update_layout(
+                                            title=dict(
+                                                text=(f"Swimlane — {tipo_metrica}"
+                                                      f" | bins 1 min"),
+                                                font=dict(color='white', size=12)),
+                                            xaxis=dict(
+                                                title='Tempo (minutos)',
+                                                color='rgba(255,255,255,0.6)',
+                                                gridcolor='rgba(255,255,255,0.04)'),
+                                            yaxis=dict(
+                                                color='rgba(255,255,255,0.75)',
+                                                tickfont=dict(size=10)),
+                                            paper_bgcolor='rgba(0,0,0,0)',
+                                            plot_bgcolor=_HT_BG,
+                                            height=max(280,
+                                                       28 * len(_atls_ord) + 100),
+                                            margin=dict(l=200, r=100, t=36),
+                                        )
+                                        _add_period_bands_tm(_fig_sw)
+                                        st.plotly_chart(
+                                            _fig_sw, use_container_width=True)
 
                                     # ── Média do time (valores brutos, colorida) ────
                                     _tm_mean = np.nanmean(_raw_mat, axis=0)
