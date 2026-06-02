@@ -9001,7 +9001,48 @@ Escolha um ou mais atletas para análise simultânea.
                                         )
                                         _z_mat.append(_vn)
 
-                                    # ── Heatmap (% do máx individual) ──────────────
+                                    # ── Pré-calcula bandas de período ──────────────
+                                    _period_bands_tm = []
+                                    for _i_pb, _pn_pb in enumerate(_period_order_tm):
+                                        _ps_pb = _period_start_min_tm[_pn_pb]
+                                        _pe_pb = (
+                                            _period_start_min_tm[_period_order_tm[_i_pb + 1]]
+                                            if _i_pb + 1 < len(_period_order_tm)
+                                            else _cum_min_tm
+                                        )
+                                        _period_bands_tm.append((_pn_pb, _ps_pb, _pe_pb))
+
+                                    def _add_period_bands_tm(_fig, show_labels: bool = True):
+                                        """Adiciona bandas alternadas + linhas divisórias + rótulos de período."""
+                                        _fc = ['rgba(255,255,255,0.045)', 'rgba(0,0,0,0)']
+                                        for _ii, (_nm, _ps, _pe) in enumerate(_period_bands_tm):
+                                            _fig.add_vrect(
+                                                x0=_ps, x1=_pe,
+                                                fillcolor=_fc[_ii % 2],
+                                                layer='below', line_width=0,
+                                            )
+                                            if _ii > 0:  # linha divisória entre períodos
+                                                _fig.add_vline(
+                                                    x=_ps,
+                                                    line_dash='dot',
+                                                    line_color='rgba(255,255,255,0.20)',
+                                                    line_width=1,
+                                                )
+                                            if show_labels:
+                                                _fig.add_annotation(
+                                                    x=(_ps + _pe) / 2,
+                                                    y=1.01,
+                                                    yref='paper',
+                                                    text=_nm,
+                                                    showarrow=False,
+                                                    font=dict(
+                                                        color='rgba(255,255,255,0.40)',
+                                                        size=9),
+                                                    xanchor='center',
+                                                    yanchor='bottom',
+                                                )
+
+                                    # ── Heatmap (% do máx coletivo) ────────────────
                                     _fig_ht = _go_tm.Figure(_go_tm.Heatmap(
                                         z=_z_mat,
                                         x=_tg,
@@ -9045,8 +9086,9 @@ Escolha um ou mais atletas para análise simultânea.
                                         paper_bgcolor='rgba(0,0,0,0)',
                                         plot_bgcolor='rgba(0,0,0,0)',
                                         height=max(300, 36 * len(_atls_ord) + 120),
-                                        margin=dict(l=200, r=100),
+                                        margin=dict(l=200, r=100, t=40),
                                     )
+                                    _add_period_bands_tm(_fig_ht)
                                     st.plotly_chart(_fig_ht, use_container_width=True)
 
                                     # ── Média do time (valores brutos, colorida) ────
@@ -9081,6 +9123,7 @@ Escolha um ou mais atletas para análise simultânea.
                                             y=_tlm, line_dash='dot',
                                             line_color='rgba(245,158,11,0.50)',
                                             annotation_text=f"Média-Alta ≥{_tlm}")
+                                        _add_period_bands_tm(_fig_avg)
                                         _fig_avg.update_layout(
                                             title=dict(
                                                 text=(f"Intensidade Média do Time — "
