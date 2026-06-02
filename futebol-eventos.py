@@ -8619,25 +8619,39 @@ Escolha um ou mais atletas para análise simultânea.
                     # ── Helper: rolling window para um atleta ──────────────────────
                     def _calc_rolling(_atl):
                         """Retorna (tempos_min, valores) para o atleta e configuração atual."""
-                        if tipo_metrica == 'Distância' and dados_posicao_por_periodo:
+                        # ── Sensor helper (reutilizado no fallback de Distância) ────
+                        def _get_sp():
                             if _jan_modo_todos:
-                                _vj, _tj = combinar_periodos_continuo_posicao(
-                                    dados_posicao_por_periodo, _atl)
-                            else:
-                                _daj = dados_posicao_por_periodo.get(
-                                    periodo_janela, {}).get(_atl, {})
-                                _vj = _daj.get('vel', [])
-                                _tj = _daj.get('ts_pos', [])
-                            if _vj:
-                                return calcular_distancia_janelas_por_vel_posicao(
-                                    _vj, _tj, window_minutes, _hz_jan)
-                        # Métricas baseadas em sensor
-                        if _jan_modo_todos:
-                            _sp = combinar_periodos_continuo(
-                                dados_sensor_por_atleta_por_periodo, _atl)
-                        else:
-                            _sp = dados_sensor_por_atleta_por_periodo.get(
+                                return combinar_periodos_continuo(
+                                    dados_sensor_por_atleta_por_periodo, _atl)
+                            return dados_sensor_por_atleta_por_periodo.get(
                                 periodo_janela, {}).get(_atl, [])
+
+                        if tipo_metrica == 'Distância':
+                            # 1ª tentativa: GPS field-filtered (mais preciso)
+                            if dados_posicao_por_periodo:
+                                if _jan_modo_todos:
+                                    _vj, _tj = combinar_periodos_continuo_posicao(
+                                        dados_posicao_por_periodo, _atl)
+                                else:
+                                    _daj = dados_posicao_por_periodo.get(
+                                        periodo_janela, {}).get(_atl, {})
+                                    _vj = _daj.get('vel', [])
+                                    _tj = _daj.get('ts_pos', [])
+                                if _vj:
+                                    _res_gps = calcular_distancia_janelas_por_vel_posicao(
+                                        _vj, _tj, window_minutes, _hz_jan)
+                                    if _res_gps[0]:   # GPS devolveu dados válidos
+                                        return _res_gps
+                            # 2ª tentativa: sensor IMU (fallback)
+                            _sp = _get_sp()
+                            if _sp:
+                                return calcular_distancia_janelas_discretas_10s(
+                                    _sp, window_minutes)
+                            return [], []
+
+                        # Métricas baseadas em sensor
+                        _sp = _get_sp()
                         if not _sp:
                             return [], []
                         if tipo_metrica == 'PlayerLoad':
