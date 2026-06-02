@@ -4609,8 +4609,12 @@ details[data-testid="stExpander"] summary:hover { color: #5dade2 !important; }
 
 /* ─ Sidebar ────────────────────────────────────────────────────── */
 [data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0a0f18 0%, #0d1520 100%) !important;
-    border-right: 1px solid rgba(255,255,255,0.05) !important;
+    background: linear-gradient(180deg, #141921 0%, #1b2436 100%) !important;
+    border-right: 2px solid rgba(255,255,255,0.11) !important;
+    box-shadow: 4px 0 32px rgba(0,0,0,0.55) !important;
+}
+[data-testid="stSidebarContent"] {
+    padding-top: 1rem !important;
 }
 
 /* ─ Botões ─────────────────────────────────────────────────────── */
@@ -4632,6 +4636,65 @@ details[data-testid="stExpander"] summary:hover { color: #5dade2 !important; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
 </style>
 """, unsafe_allow_html=True)
+
+    # ── Modo Apresentação — CSS dinâmico ──────────────────────────────────
+    if st.session_state.get('modo_apresentacao'):
+        st.markdown("""<style>
+/* ── Ocultar ruído técnico ── */
+[data-testid="stCaptionContainer"],
+.stCaption { display: none !important; }
+[data-testid="stDownloadButton"],
+[data-testid="stFileDownloader"] { display: none !important; }
+.element-container:has([data-testid="stDownloadButton"]) { display: none !important; }
+
+/* ── Ampliar métricas ── */
+[data-testid="stMetricValue"] {
+    font-size: 2.8rem !important;
+    font-weight: 800 !important;
+}
+[data-testid="stMetricLabel"] {
+    font-size: 0.95rem !important;
+    font-weight: 600 !important;
+    opacity: 0.75 !important;
+}
+[data-testid="stMetricDelta"] { font-size: 0.9rem !important; }
+[data-testid="metric-container"] {
+    padding: 18px 22px !important;
+    border-color: rgba(74,222,128,0.18) !important;
+    box-shadow: 0 0 18px rgba(74,222,128,0.06) !important;
+}
+
+/* ── Sidebar com acento verde em modo apresentação ── */
+[data-testid="stSidebar"] {
+    border-right: 2px solid rgba(74,222,128,0.40) !important;
+    box-shadow: 4px 0 32px rgba(74,222,128,0.07) !important;
+}
+</style>""", unsafe_allow_html=True)
+
+        # Banner flutuante no canto superior direito
+        st.markdown("""
+<div style="
+    position: fixed; top: 58px; right: 22px; z-index: 9999;
+    background: linear-gradient(135deg, rgba(15,40,25,0.96) 0%, rgba(10,30,18,0.96) 100%);
+    border: 1px solid rgba(74,222,128,0.45);
+    border-radius: 10px; padding: 7px 16px;
+    font-size: 0.76rem; font-weight: 600; color: #4ade80;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.55), 0 0 12px rgba(74,222,128,0.12);
+    backdrop-filter: blur(10px);
+    display: flex; align-items: center; gap: 8px;
+    letter-spacing: 0.3px;
+">
+  <span style="font-size:0.65rem;
+               animation:_puls 1.4s ease-in-out infinite;
+               display:inline-block">🟢</span>
+  Modo Apresentação
+  <style>
+    @keyframes _puls {
+      0%,100% { opacity:1; transform:scale(1); }
+      50%      { opacity:.5; transform:scale(0.85); }
+    }
+  </style>
+</div>""", unsafe_allow_html=True)
 
     # ─── Header branded ──────────────────────────────────────────────────
     st.markdown(f"""
@@ -4718,6 +4781,16 @@ Escolha um ou mais atletas para análise simultânea.
                     _prefs['tour_done'] = True
                     _salvar_prefs(_prefs)
                     st.rerun()
+
+        # ── Modo Apresentação ─────────────────────────────────────────
+        _pmode_on = st.session_state.get('modo_apresentacao', False)
+        _pmode_label = "🖥️ Sair do Modo Apresentação" if _pmode_on else "🖥️ Modo Apresentação"
+        if st.button(_pmode_label, use_container_width=True,
+                     type="primary" if _pmode_on else "secondary",
+                     help="Amplia métricas e oculta detalhes técnicos para exibição em telão / projetor"):
+            st.session_state['modo_apresentacao'] = not _pmode_on
+            st.rerun()
+        st.divider()
 
         st.header("🌍 Servidor")
         # ── FEATURE 2: pré-seleciona servidor salvo nas prefs ────────
@@ -8723,7 +8796,8 @@ Escolha um ou mais atletas para análise simultânea.
                                     exibir_resultados_janela(tempos_janela, valores_janela, "Aceleração", atleta_janela,
                                                              window_minutes, "m/s²", _period_boundaries)
 
-                            st.markdown(REFERENCIAS["janelas"])
+                            if not st.session_state.get('modo_apresentacao'):
+                                st.markdown(REFERENCIAS["janelas"])
                         else:
                             st.info("Dados de sensor não disponíveis")
                 else:
