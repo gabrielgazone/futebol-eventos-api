@@ -9577,9 +9577,18 @@ Escolha um ou mais atletas para análise simultânea.
                                             # Hz calculado por len(xs)/dur_s — robusto
                                             # mesmo com ts_pos = 0 (não confiável).
                                             # Fallback: lats/lons → gps_para_campo_coords
+                                            # Exclui goleiro: animação mostra
+                                            # apenas os jogadores de linha
+                                            _jan_atls_linha = [
+                                                _a for _a in _jan_atletas
+                                                if _get_pos_grupo(
+                                                    _get_pos_atl(_a))[0] != 'Goleiro'
+                                            ]
+
                                             _anim_map = {}
                                             _ao_hz_ref = 10.0  # Hz de ref para frames
-                                            for _ci_ao, _atl_ao in enumerate(_jan_atletas):
+                                            for _ci_ao, _atl_ao in enumerate(
+                                                    _jan_atls_linha):
                                                 for _pn_ao3 in _sorted_by_ts_tm:
                                                     _pos_ao = dados_posicao_por_periodo.get(
                                                         _pn_ao3, {}).get(_atl_ao, {})
