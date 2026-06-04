@@ -106,7 +106,7 @@
     <div class='ctrl'>
       <label>📐 Marg:</label>
       <button class='sbtn' onclick='stepDim("ig",-1)' title='−1m'>−</button>
-      <input type='number' class='ninp' id='ig' min='0' max='15' value='3'
+      <input type='number' class='ninp' id='ig' min='0' max='15' value='1'
         style='width:40px' oninput='onDim()'>
       <span class='unit'>m</span>
       <button class='sbtn' onclick='stepDim("ig",1)' title='+1m'>+</button>
@@ -119,7 +119,7 @@
 
   <script>
   // ── Estado global ──────────────────────────────────────────────────
-  var cLat=0, cLon=0, rotD=0, fL=105, fW=68, fI=3;
+  var cLat=0, cLon=0, rotD=0, fL=105, fW=68, fI=1;
   var campoOn=false;
   var map=null, cm=null, cl=null;
   var initialized=false;

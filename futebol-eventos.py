@@ -6833,7 +6833,7 @@ Escolha um ou mais atletas para análise simultânea.
                                 'rot':          int(_vs.get('rot',   0)),
                                 'fl':           int(_vs.get('fl',  105)),
                                 'fw':           int(_vs.get('fw',   68)),
-                                'ig':           int(_vs.get('ig',    3)),
+                                'ig':           int(_vs.get('ig',    1)),
                                 '_from_venues': _venue_name,
                                 '_saved_at':    _vs.get('saved_at', ''),
                             }
@@ -6874,8 +6874,11 @@ Escolha um ou mais atletas para análise simultânea.
                                 # Dimensões e rotação do venue são usadas quando disponíveis.
                                 _venue_info = st.session_state.get('venue', {})
                                 _venue_rot  = int(_venue_info.get('rotation') or 0)
-                                _venue_fl   = float(_venue_info.get('length')   or 105)
-                                _venue_fw   = float(_venue_info.get('width')    or 68)
+                                # Dimensões padrão fixas (105×68m). O usuário ainda pode
+                                # ajustar comprimento/largura no painel do mapa; apenas os
+                                # valores de ENTRADA padrão são 105×68 (não os do venue).
+                                _venue_fl   = 105.0
+                                _venue_fw   = 68.0
 
                                 # Posição do mapa: mediana GPS > venue lat/lng > 0,0
                                 if lats_gps:
@@ -6889,10 +6892,10 @@ Escolha um ou mais atletas para análise simultânea.
 
                                 if _venue_info:
                                     st.caption(
-                                        f"📡 Venue detectado: **{_venue_fl:.0f}×{_venue_fw:.0f}m** · "
+                                        f"📡 Campo padrão: **{_venue_fl:.0f}×{_venue_fw:.0f}m** · "
                                         f"rot **{_venue_rot}°** · "
                                         f"centro **{_lat_c:.5f}, {_lon_c:.5f}** "
-                                        f"_(pré-populado automaticamente)_"
+                                        f"_(ajustável no painel do mapa)_"
                                     )
 
                                 # Componente bidirecional: retorna {lat,lon,rot,fl,fw,ig}
