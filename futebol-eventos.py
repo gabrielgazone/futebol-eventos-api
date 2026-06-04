@@ -635,6 +635,14 @@ class CatapultAPI:
         """Bandas de velocidade personalizadas por atleta (GET /athletes/{id}/velocity_zones)."""
         return _api_fetch(self.base_url, self._token, f"athletes/{athlete_id}/velocity_zones")
 
+    def get_acceleration_zones(self):
+        """Bandas de aceleração configuradas na conta (GET /acceleration_zones)."""
+        return _api_fetch(self.base_url, self._token, "acceleration_zones")
+
+    def get_athlete_acceleration_zones(self, athlete_id):
+        """Bandas de aceleração personalizadas por atleta (GET /athletes/{id}/acceleration_zones)."""
+        return _api_fetch(self.base_url, self._token, f"athletes/{athlete_id}/acceleration_zones")
+
     # ── Activity/period summaries (pre-computed by OpenField) ───────────────
     def get_athlete_activity_summary(self, activity_id, athlete_id):
         """Resumo pré-computado pelo OpenField (GET /activities/{id}/athletes/{aid}/summary)."""
@@ -1105,6 +1113,110 @@ def get_zones_for_athlete(athlete_name):
     return _DEFAULT_VELOCITY_ZONES[:]
 
 
+# ── Defaults de aceleração ────────────────────────────────────────────────────
+_DEFAULT_ACCELERATION_ZONES = [
+    {'name': 'A3 — Alta Aceleração', 'min_ms2': 2.0,   'max_ms2': 9999,  'color': '#00C853'},
+    {'name': 'A2 — Aceleração',      'min_ms2': 1.0,   'max_ms2': 2.0,   'color': '#69F0AE'},
+    {'name': 'A1 — Aceleração Leve', 'min_ms2': 0.1,   'max_ms2': 1.0,   'color': '#B9F6CA'},
+    {'name': 'D1 — Desacel. Leve',   'min_ms2': -1.0,  'max_ms2': -0.1,  'color': '#FFD180'},
+    {'name': 'D2 — Desaceleração',   'min_ms2': -2.0,  'max_ms2': -1.0,  'color': '#FF6D00'},
+    {'name': 'D3 — Alta Desacel.',   'min_ms2': -9999, 'max_ms2': -2.0,  'color': '#DD2C00'},
+]
+
+
+def _parse_api_acceleration_zones(api_response):
+    """Converte resposta da API /acceleration_zones para lista de dicts padronizados."""
+    if not api_response:
+        return _DEFAULT_ACCELERATION_ZONES[:]
+    try:
+        zones_raw = (api_response if isinstance(api_response, list)
+                     else api_response.get('data', []))
+        if not zones_raw:
+            return _DEFAULT_ACCELERATION_ZONES[:]
+        result = []
+        for z in zones_raw:
+            min_val = float(z.get('min_acceleration', z.get('min', 0)))
+            max_val = float(z.get('max_acceleration', z.get('max', 9999)))
+            result.append({
+                'name':    z.get('name', ''),
+                'min_ms2': min_val,
+                'max_ms2': max_val,
+                'color':   z.get('color', '#888888'),
+            })
+        return result if result else _DEFAULT_ACCELERATION_ZONES[:]
+    except Exception:
+        return _DEFAULT_ACCELERATION_ZONES[:]
+
+
+# ── Helpers para nomes/cores padrão por índice de banda ──────────────────────
+_NOMES_BANDA_VEL_DEFAULT = {
+    1: 'Caminhada', 2: 'Trote', 3: 'Corrida',
+    4: 'Corrida Intensa', 5: 'Alta Velocidade', 6: 'Sprint',
+}
+_CORES_BANDA_VEL_DEFAULT = {
+    1: '#2196F3', 2: '#4CAF50', 3: '#CDDC39',
+    4: '#FF9800', 5: '#FF5722', 6: '#F44336',
+}
+
+
+def _bandas_vel_ativas() -> dict:
+    """Retorna BANDAS_VEL usando zonas da conta Catapult (session_state) ou
+    o dict hardcoded como fallback.
+
+    A API retorna velocidades em m/s — converte para km/h multiplicando por 3.6.
+    """
+    try:
+        zones = st.session_state.get('velocity_zones_account')
+    except Exception:
+        return BANDAS_VEL
+    if not zones:
+        return BANDAS_VEL
+    result = {}
+    for i, z in enumerate(zones, start=1):
+        min_kmh = round(float(z.get('min_ms', 0)) * 3.6, 1)
+        max_raw = float(z.get('max_ms', 9999))
+        max_kmh = round(max_raw * 3.6, 1) if max_raw < 9000 else 9999
+        nome    = z.get('name') or _NOMES_BANDA_VEL_DEFAULT.get(i, f'B{i}')
+        if max_kmh >= 9999:
+            label = f"B{i} — > {min_kmh} km/h ({nome})"
+        else:
+            label = f"B{i} — {min_kmh}-{max_kmh} km/h ({nome})"
+        color = (z.get('color') or _CORES_BANDA_VEL_DEFAULT.get(i, '#888888'))
+        result[i] = {'label': label, 'min': min_kmh, 'max': max_kmh, 'color': color}
+    return result if result else BANDAS_VEL
+
+
+def _bandas_acc_ativas() -> dict:
+    """Retorna BANDAS_ACC usando zonas da conta Catapult (session_state) ou
+    o dict hardcoded como fallback.
+    """
+    try:
+        zones = st.session_state.get('acceleration_zones_account')
+    except Exception:
+        return BANDAS_ACC
+    if not zones:
+        return BANDAS_ACC
+    result = {}
+    # Ordena: acc positivas primeiro (A1, A2, A3), depois negativas (D1, D2, D3)
+    pos_z = sorted([z for z in zones if z.get('min_ms2', 0) >= 0],
+                   key=lambda z: z['min_ms2'])
+    neg_z = sorted([z for z in zones if z.get('max_ms2', 0) <= 0],
+                   key=lambda z: z['max_ms2'], reverse=True)
+    for i, z in enumerate(reversed(pos_z), start=1):
+        result[f'A{i}'] = {
+            'label': z.get('name', f'Acc +{i}'),
+            'min':   z['min_ms2'], 'max': z['max_ms2'],
+            'color': z.get('color', '#69F0AE'),
+        }
+    for i, z in enumerate(neg_z, start=1):
+        result[f'D{i}'] = {
+            'label': z.get('name', f'Dec -{i}'),
+            'min':   z['min_ms2'], 'max': z['max_ms2'],
+            'color': z.get('color', '#FF6D00'),
+        }
+    return result if result else BANDAS_ACC
+
+
 # ── Configuração dos tipos de eventos futebol ──────────────────────────────
 FUTEBOL_EVENTS_CONFIG = {
     'football_kick': {
@@ -1535,11 +1647,13 @@ def adicionar_trajetoria_campo(fig, x_coords, y_coords, velocidades, nome=""):
     ys = list(y_coords)
     vs = list(velocidades) if velocidades else [0]*len(xs)
 
+    _bv_traj = _bandas_vel_ativas()
+
     def _vc(v):
-        for k, b in BANDAS_VEL.items():
+        for k, b in _bv_traj.items():
             if v < b['max']:
                 return b['color']
-        return BANDAS_VEL[6]['color']
+        return list(_bv_traj.values())[-1]['color']
 
     # Segmentos coloridos
     seg_x, seg_y = [xs[0]], [ys[0]]
@@ -1568,8 +1682,8 @@ def adicionar_trajetoria_campo(fig, x_coords, y_coords, velocidades, nome=""):
         marker=dict(size=12, color='#F44336', symbol='x',
                     line=dict(color='white', width=2))))
 
-    # Legenda de bandas
-    for b in BANDAS_VEL.values():
+    # Legenda de bandas (usa valores da conta)
+    for b in _bv_traj.values():
         fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers',
             name=b['label'], marker=dict(size=9, color=b['color'])))
 
@@ -1605,8 +1719,11 @@ def adicionar_pontos_velocidade_bandas(fig, x_coords, y_coords, velocidades,
     xs = np.array(x_coords)
     ys = np.array(y_coords)
     vs = np.array(velocidades) if velocidades else np.zeros(len(xs))
+    _bv_pts = _bandas_vel_ativas()
     for k in bandas_sel:
-        b = BANDAS_VEL[k]
+        b = _bv_pts.get(k) or BANDAS_VEL.get(k, {})
+        if not b:
+            continue
         mask = (vs >= b['min']) & (vs < b['max'])
         if mask.sum() == 0:
             continue
@@ -1662,8 +1779,11 @@ def adicionar_pontos_aceleracao_bandas(fig, x_coords, y_coords, aceleracoes,
     xs  = np.array(x_coords)
     ys  = np.array(y_coords)
     acc = np.array(aceleracoes) if aceleracoes else np.zeros(len(xs))
+    _ba_pts = _bandas_acc_ativas()
     for k in bandas_sel:
-        b = BANDAS_ACC[k]
+        b = _ba_pts.get(k) or BANDAS_ACC.get(k, {})
+        if not b:
+            continue
         mask = (acc >= b['min']) & (acc < b['max'])
         if mask.sum() == 0:
             continue
@@ -1992,12 +2112,11 @@ def criar_mapa_satelite_futebol(
         campo_group.add_to(m)
 
     # ---- Trajetória GPS colorida por velocidade ----
-    BANDAS_VEL = [
-        (0,   7,   "#2196F3", "Caminhada / Trote (<7 km/h)"),
-        (7,   14,  "#4CAF50", "Corrida Leve (7-14 km/h)"),
-        (14,  19,  "#FFEB3B", "Corrida Moderada (14-19 km/h)"),
-        (19,  24,  "#FF9800", "Corrida Intensa (19-24 km/h)"),
-        (24,  999, "#F44336", "Sprint (>24 km/h)"),
+    # Usa bandas da conta Catapult se disponíveis, senão defaults
+    _bv_map = _bandas_vel_ativas()
+    BANDAS_VEL_MAP = [
+        (b['min'], b['max'] if b['max'] < 9000 else 9999, b['color'], b['label'])
+        for b in _bv_map.values()
     ]
 
     # Subsample para performance (máx 8000 pontos)
@@ -2011,10 +2130,10 @@ def criar_mapa_satelite_futebol(
 
     # Desenha segmentos contíguos agrupados por banda
     def cor_banda(v):
-        for vmin, vmax, cor, _ in BANDAS_VEL:
+        for vmin, vmax, cor, _ in BANDAS_VEL_MAP:
             if v < vmax:
                 return cor
-        return "#F44336"
+        return BANDAS_VEL_MAP[-1][2] if BANDAS_VEL_MAP else "#F44336"
 
     seg_lats, seg_lons, seg_cor = [lats_s[0]], [lons_s[0]], cor_banda(vels_s[0])
     for i in range(1, len(lats_s)):
@@ -2061,16 +2180,17 @@ def criar_mapa_satelite_futebol(
         tooltip=f"🎯 Centro do campo — clique no mapa para mover<br>{float(centro_lat):.6f}, {float(centro_lon):.6f}"
     ).add_to(m)
 
-    # ---- Legenda HTML ----
-    legenda_html = """
+    # ---- Legenda HTML (bandas da conta Catapult) ----
+    _leg_rows = ""
+    for _vmin, _vmax, _cor, _lbl in BANDAS_VEL_MAP:
+        _leg_rows += (
+            f'<span style="color:{_cor}">&#9632;</span> {_lbl}<br>'
+        )
+    legenda_html = f"""
     <div style="position:fixed;bottom:30px;left:30px;z-index:9999;background:rgba(0,0,0,0.75);
                 padding:10px 14px;border-radius:8px;color:white;font-size:12px;line-height:1.7;">
       <b>Velocidade</b><br>
-      <span style="color:#2196F3">&#9632;</span> &lt;7 km/h — Caminhada<br>
-      <span style="color:#4CAF50">&#9632;</span> 7-14 km/h — Trote<br>
-      <span style="color:#FFEB3B">&#9632;</span> 14-19 km/h — Corrida<br>
-      <span style="color:#FF9800">&#9632;</span> 19-24 km/h — Corrida intensa<br>
-      <span style="color:#F44336">&#9632;</span> &gt;24 km/h — Sprint
+      {_leg_rows}
     </div>
     """
     m.get_root().html.add_child(folium.Element(legenda_html))
@@ -3360,7 +3480,8 @@ def calcular_efforts_velocidade_sensor(
     records = []
     esf_num = 1
 
-    for banda_id, bcfg in BANDAS_VEL.items():
+    _bv_det = _bandas_vel_ativas()
+    for banda_id, bcfg in _bv_det.items():
         bmin, bmax = bcfg['min'], bcfg['max']
 
         # Máscara booleana: ponto dentro da banda
@@ -3440,7 +3561,8 @@ def calcular_efforts_aceleracao_sensor(
     records = []
     esf_num = 1
 
-    for banda_id, bcfg in BANDAS_ACC.items():
+    _ba_det = _bandas_acc_ativas()
+    for banda_id, bcfg in _ba_det.items():
         bmin, bmax = bcfg['min'], bcfg['max']
         # Ordenar para uso uniforme
         lo, hi = min(bmin, bmax), max(bmin, bmax)
@@ -4984,7 +5106,30 @@ Escolha um ou mais atletas para análise simultânea.
                     st.success(f"✅ {len(atividades)} atividades")
                 
                 st.session_state.api = api
-        
+
+                # ── Auto-busca zonas de velocidade e aceleração da conta ──────
+                try:
+                    _vz_raw = api.get_velocity_zones()
+                    if _vz_raw:
+                        _vz_parsed = _parse_api_velocity_zones(_vz_raw)
+                        st.session_state['velocity_zones_account'] = _vz_parsed
+                        st.success(
+                            f"✅ {len(_vz_parsed)} zonas de velocidade "
+                            "carregadas da conta Catapult")
+                except Exception:
+                    pass
+
+                try:
+                    _az_raw = api.get_acceleration_zones()
+                    if _az_raw:
+                        _az_parsed = _parse_api_acceleration_zones(_az_raw)
+                        st.session_state['acceleration_zones_account'] = _az_parsed
+                        st.success(
+                            f"✅ {len(_az_parsed)} zonas de aceleração "
+                            "carregadas da conta Catapult")
+                except Exception:
+                    pass
+
         if not st.session_state.df_activities.empty and token:
             st.markdown("---")
             st.header("🎯 Filtros")
@@ -7146,23 +7291,25 @@ Escolha um ou mais atletas para análise simultânea.
                                     _attack_dir_val = st.session_state[_atk_key]
 
                                     # ── Seletores de bandas (dependem do modo) ────────
-                                    bandas_vel_sel = list(BANDAS_VEL.keys())
-                                    bandas_acc_sel = list(BANDAS_ACC.keys())
+                                    _bv_ui = _bandas_vel_ativas()
+                                    _ba_ui = _bandas_acc_ativas()
+                                    bandas_vel_sel = list(_bv_ui.keys())
+                                    bandas_acc_sel = list(_ba_ui.keys())
 
                                     if modo_viz == "⚡ Bandas de Velocidade":
                                         bandas_vel_sel = st.multiselect(
                                             "Bandas de velocidade a exibir:",
-                                            options=list(BANDAS_VEL.keys()),
-                                            default=list(BANDAS_VEL.keys()),
-                                            format_func=lambda k: BANDAS_VEL[k]['label'],
+                                            options=list(_bv_ui.keys()),
+                                            default=list(_bv_ui.keys()),
+                                            format_func=lambda k: _bv_ui[k]['label'],
                                             key="ms_bv"
                                         )
                                     elif modo_viz == "🔁 Bandas de Aceleração":
                                         bandas_acc_sel = st.multiselect(
                                             "Bandas de aceleração a exibir:",
-                                            options=list(BANDAS_ACC.keys()),
-                                            default=list(BANDAS_ACC.keys()),
-                                            format_func=lambda k: BANDAS_ACC[k]['label'],
+                                            options=list(_ba_ui.keys()),
+                                            default=list(_ba_ui.keys()),
+                                            format_func=lambda k: _ba_ui[k]['label'],
                                             key="ms_ba"
                                         )
 
