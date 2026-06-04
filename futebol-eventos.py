@@ -5246,30 +5246,13 @@ Escolha um ou mais atletas para análise simultânea.
                 if not st.session_state.get('velocity_zones_account'):
                     st.session_state['velocity_zones_account'] = _DEFAULT_VELOCITY_ZONES[:]
 
-                # Zonas de aceleração (tenta por equipe, depois global)
-                _az_parsed_final = None
-                if not _df_teams_auto.empty:
-                    for _, _tr in _df_teams_auto.iterrows():
-                        try:
-                            _taz = api.get_team_acceleration_zones(_tr['id'])
-                            if _taz:
-                                _paz = _parse_api_acceleration_zones(_taz)
-                                if _paz and bool(_paz):
-                                    _az_parsed_final = _paz
-                                    break
-                        except Exception:
-                            pass
-                if not _az_parsed_final:
-                    try:
-                        _az_raw = api.get_acceleration_zones()
-                        if _az_raw:
-                            _az_parsed_final = _parse_api_acceleration_zones(_az_raw)
-                    except Exception:
-                        pass
-                if _az_parsed_final:
-                    st.session_state['acceleration_zones_account'] = _az_parsed_final
-                    st.success(
-                        f"✅ {len(_az_parsed_final)} zonas de aceleração carregadas")
+                # ── Bandas de aceleração ──────────────────────────────────────
+                # Mesma situação da velocidade: a API Connect v6 não expõe os
+                # cortes das bandas de aceleração. Inicializa com os defaults
+                # (BANDAS_ACC, via fallback de _bandas_acc_ativas) sem chamar a
+                # API. Os esforços de aceleração da API já trazem o nº da banda.
+                if not st.session_state.get('acceleration_zones_account'):
+                    st.session_state['acceleration_zones_account'] = _DEFAULT_ACCELERATION_ZONES[:]
 
         if not st.session_state.df_activities.empty and token:
             st.markdown("---")
