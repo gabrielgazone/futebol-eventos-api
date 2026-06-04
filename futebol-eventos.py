@@ -474,7 +474,7 @@ def _salvar_venue(nome: str, cfg: dict) -> None:
         'rot':      cfg.get('rot', 0),
         'fl':       cfg.get('fl',  105),
         'fw':       cfg.get('fw',  68),
-        'ig':       cfg.get('ig',  3),
+        'ig':       cfg.get('ig',  1),
         'saved_at': datetime.now().strftime('%Y-%m-%d %H:%M'),
     }
     try:
@@ -651,6 +651,12 @@ class CatapultAPI:
     def get_athlete_acceleration_zones(self, athlete_id):
         """Bandas de aceleração personalizadas por atleta (GET /athletes/{id}/acceleration_zones)."""
         return _api_fetch(self.base_url, self._token, f"athletes/{athlete_id}/acceleration_zones")
+
+    def get_settings(self):
+        """Configurações/preferências do usuário (GET /settings).
+        Retorna pares {key, value} — ex.: SpeedUnit, DistanceUnit.
+        NÃO contém os cortes das bandas de velocidade (a API v6 não os expõe)."""
+        return _api_fetch(self.base_url, self._token, "settings")
 
     # ── Activity/period summaries (pre-computed by OpenField) ───────────────
     def get_athlete_activity_summary(self, activity_id, athlete_id):
@@ -1057,13 +1063,19 @@ def plotar_heatmap_presenca_campo(x_coords, y_coords, athlete_name):
 # ══════════════════════════════════════════════════════════════════════════════
 # BANDAS DE VELOCIDADE E ACELERAÇÃO (referências Catapult Football)
 # ══════════════════════════════════════════════════════════════════════════════
+# Valores padrão = "Bandas Globais" da conta Catapult OpenField (km/h).
+# IMPORTANTE: a API Connect v6 NÃO expõe os limites das bandas de velocidade
+# (confirmado na documentação oficial — não há endpoint /velocity_zones em v6,
+# e /teams/{id} só traz dwell_time e rhie_bands, não os cortes em km/h).
+# Por isso estes valores espelham exatamente a tela "Bandas Globais" e podem
+# ser ajustados pelo usuário na barra lateral.
 BANDAS_VEL = {
-    1: {'label': 'B1 — < 8 km/h (Caminhada)',          'min': 0,    'max': 8,    'color': '#2196F3'},
-    2: {'label': 'B2 — 8-14 km/h (Trote)',             'min': 8,    'max': 14,   'color': '#4CAF50'},
-    3: {'label': 'B3 — 14-19 km/h (Corrida)',          'min': 14,   'max': 19,   'color': '#CDDC39'},
-    4: {'label': 'B4 — 19-23 km/h (Corrida Intensa)',  'min': 19,   'max': 23,   'color': '#FF9800'},
-    5: {'label': 'B5 — 23-25 km/h (Alta Velocidade)',  'min': 23,   'max': 25,   'color': '#FF5722'},
-    6: {'label': 'B6 — > 25 km/h (Sprint)',            'min': 25,   'max': 9999, 'color': '#F44336'},
+    1: {'label': 'B1 — 0-7 km/h (Caminhada)',           'min': 0,     'max': 7,     'color': '#2196F3'},
+    2: {'label': 'B2 — 7-14.4 km/h (Trote)',            'min': 7,     'max': 14.4,  'color': '#4CAF50'},
+    3: {'label': 'B3 — 14.4-19.8 km/h (Corrida)',       'min': 14.4,  'max': 19.8,  'color': '#CDDC39'},
+    4: {'label': 'B4 — 19.8-25.2 km/h (Corrida Intensa)', 'min': 19.8, 'max': 25.2, 'color': '#FF9800'},
+    5: {'label': 'B5 — 25.2-29.9 km/h (Alta Velocidade)', 'min': 25.2, 'max': 29.9, 'color': '#FF5722'},
+    6: {'label': 'B6 — 29.9-45 km/h (Sprint)',          'min': 29.9,  'max': 45,    'color': '#F44336'},
 }
 BANDAS_ACC = {
     'A3': {'label': 'Acc +3 — > 2 m/s² (Alta Aceleração)',   'min': 2,     'max': 9999, 'color': '#00C853'},
@@ -1078,13 +1090,14 @@ BANDAS_ACC = {
 # BANDAS DE VELOCIDADE — helpers de zonas individuais / da conta
 # ══════════════════════════════════════════════════════════════════════════════
 
+# Espelha as "Bandas Globais" da conta Catapult (km/h convertido p/ m/s).
 _DEFAULT_VELOCITY_ZONES = [
-    {'name': 'B1 — Caminhada',        'min_ms': 0/3.6,   'max_ms': 7/3.6,   'color': '#2196F3'},
-    {'name': 'B2 — Trote',            'min_ms': 7/3.6,   'max_ms': 14/3.6,  'color': '#4CAF50'},
-    {'name': 'B3 — Corrida',          'min_ms': 14/3.6,  'max_ms': 19/3.6,  'color': '#CDDC39'},
-    {'name': 'B4 — Corrida Intensa',  'min_ms': 19/3.6,  'max_ms': 24/3.6,  'color': '#FF9800'},
-    {'name': 'B5 — Alta Velocidade',  'min_ms': 24/3.6,  'max_ms': 30/3.6,  'color': '#FF5722'},
-    {'name': 'B6 — Sprint',           'min_ms': 30/3.6,  'max_ms': 9999,    'color': '#F44336'},
+    {'name': 'B1 — Caminhada',        'min_ms': 0/3.6,     'max_ms': 7/3.6,    'color': '#2196F3'},
+    {'name': 'B2 — Trote',            'min_ms': 7/3.6,     'max_ms': 14.4/3.6, 'color': '#4CAF50'},
+    {'name': 'B3 — Corrida',          'min_ms': 14.4/3.6,  'max_ms': 19.8/3.6, 'color': '#CDDC39'},
+    {'name': 'B4 — Corrida Intensa',  'min_ms': 19.8/3.6,  'max_ms': 25.2/3.6, 'color': '#FF9800'},
+    {'name': 'B5 — Alta Velocidade',  'min_ms': 25.2/3.6,  'max_ms': 29.9/3.6, 'color': '#FF5722'},
+    {'name': 'B6 — Sprint',           'min_ms': 29.9/3.6,  'max_ms': 45/3.6,   'color': '#F44336'},
 ]
 
 
@@ -1213,6 +1226,99 @@ def _bandas_vel_ativas() -> dict:
         color = (z.get('color') or _CORES_BANDA_VEL_DEFAULT.get(i, '#888888'))
         result[i] = {'label': label, 'min': min_kmh, 'max': max_kmh, 'color': color}
     return result if result else BANDAS_VEL
+
+
+def _legenda_vel_js() -> str:
+    """Gera a expressão JS (innerHTML) da legenda de velocidade a partir das
+    bandas ativas (_bandas_vel_ativas), para os campos interativo/fixo.
+
+    Retorna uma string JS do tipo: "'<b>Velocidade</b><br>'+'<span ...'+..."
+    de modo que a legenda no mapa SEMPRE reflita os valores reais das bandas.
+    """
+    import re as _re
+
+    def _fmt(v):
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            return str(v)
+        return str(int(fv)) if fv == int(fv) else f"{fv:g}"
+
+    bandas = _bandas_vel_ativas()
+    itens = list(bandas.items())
+    n = len(itens)
+    partes = ["'<b>Velocidade</b><br>'"]
+    for idx, (_k, b) in enumerate(itens):
+        cor = b.get('color', '#888888')
+        mn, mx = b.get('min', 0), b.get('max', 9999)
+        _m = _re.search(r'\(([^)]*)\)', b.get('label', '') or '')
+        nome = _m.group(1) if _m else ''
+        if idx == 0:
+            txt = f"&lt;{_fmt(mx)} km/h {nome}"
+        elif idx == n - 1 or float(mx) >= 9000:
+            txt = f"&gt;{_fmt(mn)} km/h {nome}"
+        else:
+            txt = f"{_fmt(mn)}-{_fmt(mx)} km/h {nome}"
+        br = '' if idx == n - 1 else '<br>'
+        partes.append(
+            f"'<span style=\"color:{cor}\">■</span> {txt}{br}'"
+        )
+    return "+".join(partes)
+
+
+def _fmt_num_banda(v) -> str:
+    """Formata número de banda removendo .0 (7.0→7, 14.4→14.4)."""
+    try:
+        fv = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    return str(int(fv)) if fv == int(fv) else f"{fv:g}"
+
+
+def _rotulo_banda_vel(band_raw) -> str:
+    """Mapeia o NÚMERO da banda de velocidade vindo da API Catapult (campo
+    'band', 1–8) para um rótulo legível com a faixa configurada pelo usuário,
+    ex.: '2 — 7-14.4 km/h (Trote)'. Mantém o número da API (fonte oficial).
+    """
+    import re as _re
+    s = str(band_raw).strip()
+    if not s:
+        return s
+    try:
+        n = int(float(s))
+    except (TypeError, ValueError):
+        return s
+    bc = _bandas_vel_ativas().get(n)
+    if not bc:
+        return f"Banda {n}"
+    mn, mx = bc.get('min', 0), bc.get('max', 9999)
+    _m = _re.search(r'\(([^)]*)\)', bc.get('label', '') or '')
+    nome = _m.group(1) if _m else ''
+    faixa = (f">{_fmt_num_banda(mn)} km/h" if float(mx) >= 9000
+             else f"{_fmt_num_banda(mn)}-{_fmt_num_banda(mx)} km/h")
+    return f"{n} — {faixa}" + (f" ({nome})" if nome else "")
+
+
+# API de aceleração: band -3..3 → chaves internas A1..A3 / D1..D3
+_ACC_BAND_MAP = {1: 'A1', 2: 'A2', 3: 'A3', -1: 'D1', -2: 'D2', -3: 'D3'}
+# Mapa inverso (chave interna → número da banda), usado no fallback local.
+_ACC_KEY_TO_NUM = {v: k for k, v in _ACC_BAND_MAP.items()}
+
+
+def _rotulo_banda_acc(band_raw) -> str:
+    """Mapeia o NÚMERO da banda de aceleração da API Catapult (campo 'band',
+    -3 a 3) para um rótulo legível, ex.: '2 — Acc +2 — 1-2 m/s²'."""
+    s = str(band_raw).strip()
+    if not s:
+        return s
+    try:
+        n = int(float(s))
+    except (TypeError, ValueError):
+        return s
+    bc = _bandas_acc_ativas().get(_ACC_BAND_MAP.get(n))
+    if not bc:
+        return f"Banda {n}"
+    return f"{n} — {bc.get('label', '')}"
 
 
 def _bandas_acc_ativas() -> dict:
@@ -2309,7 +2415,7 @@ def criar_html_campo_interativo(lats_gps, lons_gps, vels_gps, atleta_nome, heigh
         "    </div>\n"
         "    <div class='ctrl'>\n"
         "      <label>📐 Margem: <span class='val' id='igv'>3</span>m</label>\n"
-        "      <input type='range' id='ig' min='0' max='8' value='3' oninput='onDim()'>\n"
+        "      <input type='range' id='ig' min='0' max='8' value='1' oninput='onDim()'>\n"
         "    </div>\n"
         "    <span id='status'>📍 Ajuste Lat/Lon acima para mover o centro · ↑↓ no teclado = ~5m</span>\n"
         "  </div>\n"
@@ -2348,7 +2454,7 @@ def criar_html_campo_interativo(lats_gps, lons_gps, vels_gps, atleta_nome, heigh
         "  // ---- Estado do campo ----\n"
         "  let campoOn=false;\n"
         f"  let cLat={lat_c},cLon={lon_c};\n"
-        "  let rotD=0,fL=105,fW=68,fI=3;\n"
+        "  let rotD=0,fL=105,fW=68,fI=1;\n"
         "  const cl=L.layerGroup().addTo(map);\n"
         "  // ---- Marcador arrastável (L.Marker com divIcon — não depende de map.on click) ----\n"
         "  const cmIcon=L.divIcon({\n"
@@ -2499,12 +2605,7 @@ def criar_html_campo_interativo(lats_gps, lons_gps, vels_gps, atleta_nome, heigh
         "  leg.onAdd=function(){\n"
         "    const d=L.DomUtil.create('div');\n"
         "    d.style='background:rgba(0,0,0,.78);padding:8px 11px;border-radius:6px;color:#fff;font-size:11px;line-height:1.9';\n"
-        "    d.innerHTML='<b>Velocidade</b><br>'\n"
-        "      +'<span style=\"color:#2196F3\">■</span> &lt;7 km/h Caminhada<br>'\n"
-        "      +'<span style=\"color:#4CAF50\">■</span> 7-14 km/h Trote<br>'\n"
-        "      +'<span style=\"color:#FFEB3B\">■</span> 14-19 km/h Corrida<br>'\n"
-        "      +'<span style=\"color:#FF9800\">■</span> 19-24 km/h Intensa<br>'\n"
-        "      +'<span style=\"color:#F44336\">■</span> &gt;24 km/h Sprint';\n"
+        "    d.innerHTML=" + _legenda_vel_js() + ";\n"
         "    L.DomEvent.disableClickPropagation(d);\n"
         "    return d;\n"
         "  };\n"
@@ -2680,12 +2781,7 @@ def criar_html_campo_fixo(lats_gps, lons_gps, vels_gps, campo_config,
         "  leg.onAdd=function(){\n"
         "    const d=L.DomUtil.create('div');\n"
         "    d.style='background:rgba(0,0,0,.78);padding:8px 11px;border-radius:6px;color:#fff;font-size:11px;line-height:1.9';\n"
-        "    d.innerHTML='<b>Velocidade</b><br>'\n"
-        "      +'<span style=\"color:#2196F3\">■</span> &lt;7 km/h Caminhada<br>'\n"
-        "      +'<span style=\"color:#4CAF50\">■</span> 7-14 km/h Trote<br>'\n"
-        "      +'<span style=\"color:#FFEB3B\">■</span> 14-19 km/h Corrida<br>'\n"
-        "      +'<span style=\"color:#FF9800\">■</span> 19-24 km/h Intensa<br>'\n"
-        "      +'<span style=\"color:#F44336\">■</span> &gt;24 km/h Sprint';\n"
+        "    d.innerHTML=" + _legenda_vel_js() + ";\n"
         "    L.DomEvent.disableClickPropagation(d);\n"
         "    return d;\n"
         "  };\n"
@@ -3321,7 +3417,8 @@ def processar_efforts_velocidade(efforts_data, historical_vmax_ms=None):
             'Vel. Máx (km/h)': round(max_vel * 3.6, 1) if max_vel else 0,
             'Distância (m)': round(distance, 1),
             '% do Máximo': round(percent_of_max, 1),
-            'Banda': band,
+            'Banda': _rotulo_banda_vel(band),
+            '_band_num': band,
             '_start_ts': start_time,
             '_end_ts': end_time,
         })
@@ -3385,7 +3482,8 @@ def processar_efforts_aceleracao(efforts_data, historical_max_acc=None):
             'Distância (m)': round(distance, 1),
             '% do Máximo': round(percent_of_max, 1),
             'Tipo': tipo,
-            'Banda': band,
+            'Banda': _rotulo_banda_acc(band),
+            '_band_num': band,
             '_start_ts': start_time,
             '_end_ts': end_time
         })
@@ -3546,7 +3644,8 @@ def calcular_efforts_velocidade_sensor(
                 'Vel. Inicial (km/h)': round(vel_ini, 1),
                 'Distância (m)':      round(seg_dist, 1),
                 '% do Máximo':        pct_max,
-                'Banda':              banda_id,
+                'Banda':              _rotulo_banda_vel(banda_id),
+                '_band_num':          banda_id,
                 '_start_ts':          _ts_s,
                 '_end_ts':            _ts_e_val,
                 '_seg_start_idx':     seg_s,
@@ -3630,7 +3729,8 @@ def calcular_efforts_aceleracao_sensor(
                                    if vel_arr else 0,
                 '% do Máximo':    pct_max,
                 'Tipo':           tipo,
-                'Banda':          banda_id,
+                'Banda':          _rotulo_banda_acc(_ACC_KEY_TO_NUM.get(banda_id, banda_id)),
+                '_band_num':      banda_id,
                 '_start_ts':      _ts_s,
                 '_end_ts':        _ts_e_val,
                 '_seg_start_idx': seg_s,
@@ -5136,42 +5236,15 @@ Escolha um ou mais atletas para análise simultânea.
                 
                 st.session_state.api = api
 
-                # ── Auto-busca zonas de velocidade e aceleração da conta ──────
-                # Estratégia: as "Bandas Globais" da conta ficam em
-                # /teams/{id}/velocity_zones, não em /velocity_zones (global).
-                # Tenta todas as equipes carregadas; usa a primeira resposta válida.
-                # Fallback: /velocity_zones (sistema).
-                _vz_parsed_final = None
-                _vz_origem = ""
-                _df_teams_auto = st.session_state.get('df_teams', pd.DataFrame())
-                if not _df_teams_auto.empty:
-                    for _, _tr in _df_teams_auto.iterrows():
-                        try:
-                            _tvz = api.get_team_velocity_zones(_tr['id'])
-                            if _tvz:
-                                _parsed_t = _parse_api_velocity_zones(_tvz)
-                                if _parsed_t and bool(_parsed_t):
-                                    _vz_parsed_final = _parsed_t
-                                    _vz_origem = f"equipe {_tr['nome']}"
-                                    break
-                        except Exception:
-                            pass
-                if not _vz_parsed_final:
-                    try:
-                        _vz_raw = api.get_velocity_zones()
-                        if _vz_raw:
-                            _vz_parsed_final = _parse_api_velocity_zones(_vz_raw)
-                            _vz_origem = "conta (global)"
-                    except Exception:
-                        pass
-                # Garante que session_state sempre tem zonas definidas
-                if not _vz_parsed_final:
-                    _vz_parsed_final = _DEFAULT_VELOCITY_ZONES[:]
-                    _vz_origem = "padrão (API não retornou zonas)"
-                st.session_state['velocity_zones_account'] = _vz_parsed_final
-                st.success(
-                    f"✅ {len(_vz_parsed_final)} zonas de velocidade "
-                    f"carregadas ({_vz_origem})")
+                # ── Bandas de velocidade ──────────────────────────────────────
+                # A API Connect v6 NÃO expõe os cortes das "Bandas Globais"
+                # (não há endpoint /velocity_zones em v6; /teams/{id} só traz
+                # dwell_time e rhie_bands). Portanto NÃO tentamos buscar da API
+                # — isso só trazia valores de sistema errados. Em vez disso,
+                # inicializamos com os valores reais da conta Catapult (defaults)
+                # e o usuário ajusta no editor da barra lateral, se necessário.
+                if not st.session_state.get('velocity_zones_account'):
+                    st.session_state['velocity_zones_account'] = _DEFAULT_VELOCITY_ZONES[:]
 
                 # Zonas de aceleração (tenta por equipe, depois global)
                 _az_parsed_final = None
@@ -5677,80 +5750,98 @@ Escolha um ou mais atletas para análise simultânea.
                 st.session_state['hist_vmax']        = _hvm_dict
                 st.session_state['hist_vmax_source'] = _src_dict
 
-        # ── Bandas de Velocidade (CORRECTION 2) ──────────────────────────
+        # ── Bandas de Velocidade — editor das "Bandas Globais" ────────────
+        # A API Connect v6 NÃO expõe os cortes das bandas (confirmado na doc
+        # oficial). Por isso o usuário define aqui os mesmos valores da tela
+        # "Bandas Globais" do OpenField. Os valores fluem por _bandas_vel_ativas().
         if not st.session_state.get('df_activities', pd.DataFrame()).empty and token:
             with st.expander("🏷️ Bandas de Velocidade", expanded=False):
-                _vz_api = st.session_state.get('api')
-                if _vz_api and st.button("🔄 Recarregar zonas da conta", key="btn_load_vel_zones"):
-                    # Tenta por equipe primeiro (Bandas Globais customizadas),
-                    # depois fallback para /velocity_zones (global)
-                    _rb_parsed = None
-                    _rb_origem = ""
-                    _df_t_rb = st.session_state.get('df_teams', pd.DataFrame())
-                    if not _df_t_rb.empty:
-                        for _, _tr_rb in _df_t_rb.iterrows():
-                            try:
-                                _tvz_rb = _vz_api.get_team_velocity_zones(_tr_rb['id'])
-                                if _tvz_rb:
-                                    _p_rb = _parse_api_velocity_zones(_tvz_rb)
-                                    if _p_rb and bool(_p_rb):
-                                        _rb_parsed = _p_rb
-                                        _rb_origem = f"equipe {_tr_rb['nome']}"
-                                        break
-                            except Exception:
-                                pass
-                    if not _rb_parsed:
-                        try:
-                            _vz_raw_rb = _vz_api.get_velocity_zones()
-                            if _vz_raw_rb:
-                                _rb_parsed = _parse_api_velocity_zones(_vz_raw_rb)
-                                _rb_origem = "global"
-                        except Exception as _vze:
-                            st.error(f"Erro: {_vze}")
-                    if not _rb_parsed:
-                        _rb_parsed = _DEFAULT_VELOCITY_ZONES[:]
-                        _rb_origem = "padrão"
-                    st.session_state['velocity_zones_account'] = _rb_parsed
-                    st.success(
-                        f"✅ {len(_rb_parsed)} zonas carregadas "
-                        f"({_rb_origem}).")
+                st.caption(
+                    "Defina aqui os mesmos limites da tela **Bandas Globais** "
+                    "do OpenField. A API Connect v6 não fornece estes cortes, "
+                    "então eles são configurados manualmente e usados em todo o app."
+                )
 
+                # Zonas atuais (sessão) ou defaults espelhando a conta Catapult.
                 _cur_zones = (
                     st.session_state.get('velocity_zones_account')
                     or _DEFAULT_VELOCITY_ZONES
                 )
-                _origem_label = (
-                    "✅ Da conta Catapult" if st.session_state.get('velocity_zones_account')
-                    else "⚠️ Padrão (API não retornou zonas)"
-                )
-                st.caption(_origem_label)
-                _df_zones = pd.DataFrame([
+                _df_edit_vz = pd.DataFrame([
                     {
-                        'Zona': z['name'],
-                        'Mín (km/h)': round(z['min_ms'] * 3.6, 2),
-                        'Máx (km/h)': '∞' if z['max_ms'] >= 9000 else round(z['max_ms'] * 3.6, 2),
+                        'Banda': z.get('name', f'B{_i+1}'),
+                        'Mín (km/h)': round(float(z['min_ms']) * 3.6, 2),
+                        'Máx (km/h)': (45.0 if z['max_ms'] >= 9000
+                                       else round(float(z['max_ms']) * 3.6, 2)),
+                        'Cor': z.get('color', '#888888'),
                     }
-                    for z in _cur_zones
+                    for _i, z in enumerate(_cur_zones)
                 ])
-                st.dataframe(_df_zones, use_container_width=True, hide_index=True)
+                _edited_vz = st.data_editor(
+                    _df_edit_vz,
+                    use_container_width=True, hide_index=True,
+                    num_rows="dynamic", key="editor_vel_zones",
+                    column_config={
+                        'Banda': st.column_config.TextColumn('Banda'),
+                        'Mín (km/h)': st.column_config.NumberColumn(
+                            'Mín (km/h)', min_value=0.0, max_value=60.0, step=0.1, format="%.2f"),
+                        'Máx (km/h)': st.column_config.NumberColumn(
+                            'Máx (km/h)', min_value=0.0, max_value=60.0, step=0.1, format="%.2f"),
+                        'Cor': st.column_config.TextColumn('Cor (hex)'),
+                    },
+                )
 
-                # Debug: resposta bruta da API por equipe
-                _vz_debug_api = st.session_state.get('api')
-                if _vz_debug_api and st.button(
-                        "🔍 Inspecionar resposta bruta da API", key="btn_vz_debug"):
-                    _df_teams_dbg = st.session_state.get('df_teams', pd.DataFrame())
-                    if not _df_teams_dbg.empty:
-                        for _, _tr_dbg in _df_teams_dbg.iterrows():
+                _cc_vz_save, _cc_vz_reset = st.columns(2)
+                with _cc_vz_save:
+                    if st.button("💾 Salvar bandas", key="btn_save_vel_zones",
+                                 use_container_width=True):
+                        _new_zones = []
+                        for _, _row in _edited_vz.iterrows():
                             try:
-                                _r = _vz_debug_api.get_team_velocity_zones(_tr_dbg['id'])
-                                st.write(f"**`/teams/{_tr_dbg['id']}/velocity_zones`**:", _r)
-                            except Exception as _e:
-                                st.write(f"Equipe {_tr_dbg['id']}: erro → {_e}")
+                                _mn = float(_row['Mín (km/h)'])
+                                _mx = float(_row['Máx (km/h)'])
+                            except (TypeError, ValueError):
+                                continue
+                            _new_zones.append({
+                                'name':   str(_row.get('Banda') or '').strip() or f'B{len(_new_zones)+1}',
+                                'min_ms': _mn / 3.6,
+                                'max_ms': _mx / 3.6,
+                                'color':  str(_row.get('Cor') or '#888888').strip() or '#888888',
+                            })
+                        if _new_zones:
+                            st.session_state['velocity_zones_account'] = _new_zones
+                            st.success(f"✅ {len(_new_zones)} bandas de velocidade salvas.")
+                            st.rerun()
+                        else:
+                            st.warning("Nenhuma banda válida para salvar.")
+                with _cc_vz_reset:
+                    if st.button("↩️ Restaurar Catapult", key="btn_reset_vel_zones",
+                                 use_container_width=True,
+                                 help="Restaura os valores das Bandas Globais Catapult."):
+                        st.session_state['velocity_zones_account'] = _DEFAULT_VELOCITY_ZONES[:]
+                        st.rerun()
+
+                # ── Diagnóstico: prova de que a API não expõe os cortes ───────
+                st.divider()
+                st.caption(
+                    "ℹ️ A API Connect v6 **não** fornece os cortes das bandas "
+                    "(confirmado na documentação oficial). Use o botão abaixo "
+                    "para inspecionar a resposta crua da sua conta."
+                )
+                _diag_api = st.session_state.get('api')
+                if _diag_api and st.button(
+                        "🔍 Diagnóstico da API (/settings)", key="btn_diag_settings"):
                     try:
-                        _r_global = _vz_debug_api.get_velocity_zones()
-                        st.write("**`/velocity_zones` (global)**:", _r_global)
-                    except Exception as _eg:
-                        st.write(f"/velocity_zones erro: {_eg}")
+                        _s = _diag_api.get_settings()
+                        st.write("**`GET /settings`** (preferências do usuário):")
+                        st.json(_s if _s else {"resultado": "vazio/None"})
+                    except Exception as _e_s:
+                        st.write(f"/settings → erro: {_e_s}")
+                    st.info(
+                        "Observe: aparecem chaves como `SpeedUnit`/`DistanceUnit` "
+                        "(unidades), mas **nenhum corte de banda** (7 / 14.4 / "
+                        "19.8 …). Por isso os limites são definidos aqui no editor."
+                    )
 
         # ── Parâmetros disponíveis (FEATURE 6) ───────────────────────────
         _avail_params = st.session_state.get('available_params')
