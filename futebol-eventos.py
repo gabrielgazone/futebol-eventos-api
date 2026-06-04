@@ -635,6 +635,15 @@ class CatapultAPI:
         """Bandas de velocidade personalizadas por atleta (GET /athletes/{id}/velocity_zones)."""
         return _api_fetch(self.base_url, self._token, f"athletes/{athlete_id}/velocity_zones")
 
+    def get_team_velocity_zones(self, team_id):
+        """Bandas de velocidade da equipe — onde ficam as 'Bandas Globais'
+        configuradas na conta (GET /teams/{id}/velocity_zones)."""
+        return _api_fetch(self.base_url, self._token, f"teams/{team_id}/velocity_zones")
+
+    def get_team_acceleration_zones(self, team_id):
+        """Bandas de aceleração da equipe (GET /teams/{id}/acceleration_zones)."""
+        return _api_fetch(self.base_url, self._token, f"teams/{team_id}/acceleration_zones")
+
     def get_acceleration_zones(self):
         """Bandas de aceleração configuradas na conta (GET /acceleration_zones)."""
         return _api_fetch(self.base_url, self._token, "acceleration_zones")
@@ -1084,20 +1093,40 @@ def _parse_api_velocity_zones(api_response):
     if not api_response:
         return _DEFAULT_VELOCITY_ZONES[:]
     try:
-        zones_raw = api_response if isinstance(api_response, list) else api_response.get('data', [])
+        zones_raw = (api_response if isinstance(api_response, list)
+                     else api_response.get('data', api_response.get('velocity_zones', [])))
         if not zones_raw:
             return _DEFAULT_VELOCITY_ZONES[:]
         result = []
         for z in zones_raw:
-            min_val = z.get('min_velocity', z.get('min', 0))
-            max_val = z.get('max_velocity', z.get('max', 9999))
+            # Aceita vários formatos de chave da API Catapult
+            min_val = float(z.get('min_velocity',
+                            z.get('lower_threshold',
+                            z.get('min', 0))) or 0)
+            max_val = float(z.get('max_velocity',
+                            z.get('upper_threshold',
+                            z.get('max', 9999))) or 9999)
             result.append({
-                'name': z.get('name', ''),
-                'min_ms': float(min_val),
-                'max_ms': float(max_val),
-                'color': z.get('color', '#888888'),
+                'name':   z.get('name', z.get('label', '')),
+                'min_ms': min_val,
+                'max_ms': max_val,
+                'color':  z.get('color', '#888888'),
             })
-        return result if result else _DEFAULT_VELOCITY_ZONES[:]
+        if not result:
+            return _DEFAULT_VELOCITY_ZONES[:]
+
+        # ── Auto-detecção de unidade: m/s ou km/h ─────────────────────────
+        # Se qualquer valor finito de max for > 20 → API retornou km/h.
+        # Sprint típico ≤ 35 km/h = 9.7 m/s; limiar 20 distingue com segurança.
+        _finite_maxes = [z['max_ms'] for z in result if z['max_ms'] < 9000]
+        if _finite_maxes and max(_finite_maxes) > 20:
+            # Converte km/h → m/s para padronizar com _DEFAULT_VELOCITY_ZONES
+            for z in result:
+                z['min_ms'] = z['min_ms'] / 3.6
+                if z['max_ms'] < 9000:
+                    z['max_ms'] = z['max_ms'] / 3.6
+
+        return result
     except Exception:
         return _DEFAULT_VELOCITY_ZONES[:]
 
@@ -5108,27 +5137,66 @@ Escolha um ou mais atletas para análise simultânea.
                 st.session_state.api = api
 
                 # ── Auto-busca zonas de velocidade e aceleração da conta ──────
-                try:
-                    _vz_raw = api.get_velocity_zones()
-                    if _vz_raw:
-                        _vz_parsed = _parse_api_velocity_zones(_vz_raw)
-                        st.session_state['velocity_zones_account'] = _vz_parsed
-                        st.success(
-                            f"✅ {len(_vz_parsed)} zonas de velocidade "
-                            "carregadas da conta Catapult")
-                except Exception:
-                    pass
+                # Estratégia: as "Bandas Globais" da conta ficam em
+                # /teams/{id}/velocity_zones, não em /velocity_zones (global).
+                # Tenta todas as equipes carregadas; usa a primeira resposta válida.
+                # Fallback: /velocity_zones (sistema).
+                _vz_parsed_final = None
+                _vz_origem = ""
+                _df_teams_auto = st.session_state.get('df_teams', pd.DataFrame())
+                if not _df_teams_auto.empty:
+                    for _, _tr in _df_teams_auto.iterrows():
+                        try:
+                            _tvz = api.get_team_velocity_zones(_tr['id'])
+                            if _tvz:
+                                _parsed_t = _parse_api_velocity_zones(_tvz)
+                                if _parsed_t and bool(_parsed_t):
+                                    _vz_parsed_final = _parsed_t
+                                    _vz_origem = f"equipe {_tr['nome']}"
+                                    break
+                        except Exception:
+                            pass
+                if not _vz_parsed_final:
+                    try:
+                        _vz_raw = api.get_velocity_zones()
+                        if _vz_raw:
+                            _vz_parsed_final = _parse_api_velocity_zones(_vz_raw)
+                            _vz_origem = "conta (global)"
+                    except Exception:
+                        pass
+                # Garante que session_state sempre tem zonas definidas
+                if not _vz_parsed_final:
+                    _vz_parsed_final = _DEFAULT_VELOCITY_ZONES[:]
+                    _vz_origem = "padrão (API não retornou zonas)"
+                st.session_state['velocity_zones_account'] = _vz_parsed_final
+                st.success(
+                    f"✅ {len(_vz_parsed_final)} zonas de velocidade "
+                    f"carregadas ({_vz_origem})")
 
-                try:
-                    _az_raw = api.get_acceleration_zones()
-                    if _az_raw:
-                        _az_parsed = _parse_api_acceleration_zones(_az_raw)
-                        st.session_state['acceleration_zones_account'] = _az_parsed
-                        st.success(
-                            f"✅ {len(_az_parsed)} zonas de aceleração "
-                            "carregadas da conta Catapult")
-                except Exception:
-                    pass
+                # Zonas de aceleração (tenta por equipe, depois global)
+                _az_parsed_final = None
+                if not _df_teams_auto.empty:
+                    for _, _tr in _df_teams_auto.iterrows():
+                        try:
+                            _taz = api.get_team_acceleration_zones(_tr['id'])
+                            if _taz:
+                                _paz = _parse_api_acceleration_zones(_taz)
+                                if _paz and bool(_paz):
+                                    _az_parsed_final = _paz
+                                    break
+                        except Exception:
+                            pass
+                if not _az_parsed_final:
+                    try:
+                        _az_raw = api.get_acceleration_zones()
+                        if _az_raw:
+                            _az_parsed_final = _parse_api_acceleration_zones(_az_raw)
+                    except Exception:
+                        pass
+                if _az_parsed_final:
+                    st.session_state['acceleration_zones_account'] = _az_parsed_final
+                    st.success(
+                        f"✅ {len(_az_parsed_final)} zonas de aceleração carregadas")
 
         if not st.session_state.df_activities.empty and token:
             st.markdown("---")
@@ -5613,28 +5681,76 @@ Escolha um ou mais atletas para análise simultânea.
         if not st.session_state.get('df_activities', pd.DataFrame()).empty and token:
             with st.expander("🏷️ Bandas de Velocidade", expanded=False):
                 _vz_api = st.session_state.get('api')
-                if _vz_api and st.button("🔄 Carregar zonas da conta", key="btn_load_vel_zones"):
-                    try:
-                        _vz_raw = _vz_api.get_velocity_zones()
-                        _parsed = _parse_api_velocity_zones(_vz_raw)
-                        st.session_state['velocity_zones_account'] = _parsed
-                        st.success(f"{len(_parsed)} zonas carregadas da conta.")
-                    except Exception as _vze:
-                        st.error(f"Erro: {_vze}")
+                if _vz_api and st.button("🔄 Recarregar zonas da conta", key="btn_load_vel_zones"):
+                    # Tenta por equipe primeiro (Bandas Globais customizadas),
+                    # depois fallback para /velocity_zones (global)
+                    _rb_parsed = None
+                    _rb_origem = ""
+                    _df_t_rb = st.session_state.get('df_teams', pd.DataFrame())
+                    if not _df_t_rb.empty:
+                        for _, _tr_rb in _df_t_rb.iterrows():
+                            try:
+                                _tvz_rb = _vz_api.get_team_velocity_zones(_tr_rb['id'])
+                                if _tvz_rb:
+                                    _p_rb = _parse_api_velocity_zones(_tvz_rb)
+                                    if _p_rb and bool(_p_rb):
+                                        _rb_parsed = _p_rb
+                                        _rb_origem = f"equipe {_tr_rb['nome']}"
+                                        break
+                            except Exception:
+                                pass
+                    if not _rb_parsed:
+                        try:
+                            _vz_raw_rb = _vz_api.get_velocity_zones()
+                            if _vz_raw_rb:
+                                _rb_parsed = _parse_api_velocity_zones(_vz_raw_rb)
+                                _rb_origem = "global"
+                        except Exception as _vze:
+                            st.error(f"Erro: {_vze}")
+                    if not _rb_parsed:
+                        _rb_parsed = _DEFAULT_VELOCITY_ZONES[:]
+                        _rb_origem = "padrão"
+                    st.session_state['velocity_zones_account'] = _rb_parsed
+                    st.success(
+                        f"✅ {len(_rb_parsed)} zonas carregadas "
+                        f"({_rb_origem}).")
 
                 _cur_zones = (
                     st.session_state.get('velocity_zones_account')
                     or _DEFAULT_VELOCITY_ZONES
                 )
+                _origem_label = (
+                    "✅ Da conta Catapult" if st.session_state.get('velocity_zones_account')
+                    else "⚠️ Padrão (API não retornou zonas)"
+                )
+                st.caption(_origem_label)
                 _df_zones = pd.DataFrame([
                     {
                         'Zona': z['name'],
-                        'Mín (km/h)': round(z['min_ms'] * 3.6, 1),
-                        'Máx (km/h)': '∞' if z['max_ms'] >= 9000 else f"{round(z['max_ms'] * 3.6, 1):.1f}",
+                        'Mín (km/h)': round(z['min_ms'] * 3.6, 2),
+                        'Máx (km/h)': '∞' if z['max_ms'] >= 9000 else round(z['max_ms'] * 3.6, 2),
                     }
                     for z in _cur_zones
                 ])
                 st.dataframe(_df_zones, use_container_width=True, hide_index=True)
+
+                # Debug: resposta bruta da API por equipe
+                _vz_debug_api = st.session_state.get('api')
+                if _vz_debug_api and st.button(
+                        "🔍 Inspecionar resposta bruta da API", key="btn_vz_debug"):
+                    _df_teams_dbg = st.session_state.get('df_teams', pd.DataFrame())
+                    if not _df_teams_dbg.empty:
+                        for _, _tr_dbg in _df_teams_dbg.iterrows():
+                            try:
+                                _r = _vz_debug_api.get_team_velocity_zones(_tr_dbg['id'])
+                                st.write(f"**`/teams/{_tr_dbg['id']}/velocity_zones`**:", _r)
+                            except Exception as _e:
+                                st.write(f"Equipe {_tr_dbg['id']}: erro → {_e}")
+                    try:
+                        _r_global = _vz_debug_api.get_velocity_zones()
+                        st.write("**`/velocity_zones` (global)**:", _r_global)
+                    except Exception as _eg:
+                        st.write(f"/velocity_zones erro: {_eg}")
 
         # ── Parâmetros disponíveis (FEATURE 6) ───────────────────────────
         _avail_params = st.session_state.get('available_params')
