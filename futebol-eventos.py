@@ -12463,6 +12463,8 @@ Escolha um ou mais atletas para análise simultânea.
                     with _wcs2_c2:
                         _wcs2_metric_opts = [
                             "Distância (m)",
+                            "🏃 Velocidade (bandas)",
+                            "💥 Aceleração (bandas)",
                             "Dist. >14 km/h (m)",
                             "Dist. >19 km/h (m)  — Alta Intensidade",
                             "Dist. >24 km/h (m)  — Sprint",
@@ -12476,8 +12478,48 @@ Escolha um ou mais atletas para análise simultânea.
                         _wcs2_metric = st.selectbox(
                             "📊 Variável", _wcs2_metric_opts,
                             key="wcs2_metric_sel",
-                            help="Métrica para identificar a janela de maior exigência"
+                            help="Métrica para identificar a janela de maior exigência. "
+                                 "Escolha 🏃 Velocidade ou 💥 Aceleração para selecionar bandas específicas."
                         )
+
+                        # ── Seleção de bandas (aparece ao escolher Velocidade/Aceleração) ──
+                        _sel_vel_bands = []   # lista de dicts {min,max} das bandas de velocidade marcadas
+                        _sel_acc_bands = []   # idem para aceleração
+                        if _wcs2_metric == "🏃 Velocidade (bandas)":
+                            _bv_act = _bandas_vel_ativas()
+                            _bv_lbl = {}
+                            for _bk, _bd in _bv_act.items():
+                                _mx = float(_bd.get('max', 9999))
+                                _faixa = (f"&gt;{_fmt_num_banda(_bd.get('min', 0))}"
+                                          if _mx >= 9000
+                                          else f"{_fmt_num_banda(_bd.get('min', 0))}-{_fmt_num_banda(_mx)}")
+                                _bv_lbl[f"B{_bk} — {_faixa} km/h"] = _bk
+                            _bv_pick = st.multiselect(
+                                "🎚️ Bandas de velocidade a visualizar",
+                                list(_bv_lbl.keys()),
+                                default=list(_bv_lbl.keys()),
+                                key="wcs2_vel_bands",
+                                help="A distância percorrida (m) é acumulada apenas enquanto a "
+                                     "velocidade está dentro das bandas selecionadas."
+                            )
+                            _sel_vel_bands = [_bv_act[_bv_lbl[_s]] for _s in _bv_pick]
+                            if not _sel_vel_bands:
+                                st.info("Selecione ao menos uma banda de velocidade.")
+                        elif _wcs2_metric == "💥 Aceleração (bandas)":
+                            _ba_act = _bandas_acc_ativas()
+                            _ba_lbl = {f"{_bk} — {_bd.get('label', '')}": _bk
+                                       for _bk, _bd in _ba_act.items()}
+                            _ba_pick = st.multiselect(
+                                "🎚️ Bandas de aceleração a visualizar",
+                                list(_ba_lbl.keys()),
+                                default=list(_ba_lbl.keys()),
+                                key="wcs2_acc_bands",
+                                help="Conta as amostras (n) cuja aceleração cai dentro das "
+                                     "bandas selecionadas (inclui acelerações e desacelerações)."
+                            )
+                            _sel_acc_bands = [_ba_act[_ba_lbl[_s]] for _s in _ba_pick]
+                            if not _sel_acc_bands:
+                                st.info("Selecione ao menos uma banda de aceleração.")
 
                     # ── Detecta Hz real a partir dos timestamps ─────────────────────
                     def _detect_hz(_periodos_list, _dppp):
@@ -12594,6 +12636,28 @@ Escolha um ou mais atletas para análise simultânea.
                         _m  = _wcs2_metric
                         if _m == "Distância (m)":
                             _sv = [v / (3.6 * _Hz) for v in _wv]
+                        elif _m == "🏃 Velocidade (bandas)":
+                            # Distância (m) acumulada apenas nas bandas de velocidade marcadas.
+                            _faixas_v = [(float(b.get('min', 0)), float(b.get('max', 9999)))
+                                         for b in _sel_vel_bands]
+                            def _in_vband(_vv, _ff=_faixas_v):
+                                for _lo, _hi in _ff:
+                                    if _lo <= _vv < _hi:
+                                        return True
+                                return False
+                            _sv = ([v / (3.6 * _Hz) if _in_vband(v) else 0.0 for v in _wv]
+                                   if _faixas_v else [0.0] * len(_wv))
+                        elif _m == "💥 Aceleração (bandas)":
+                            # Nº de amostras (n) cuja aceleração cai nas bandas marcadas.
+                            _faixas_a = [(float(b.get('min', -9999)), float(b.get('max', 9999)))
+                                         for b in _sel_acc_bands]
+                            def _in_aband(_aa, _ff=_faixas_a):
+                                for _lo, _hi in _ff:
+                                    if _lo <= _aa < _hi:
+                                        return True
+                                return False
+                            _sv = ([1.0 if _in_aband(a) else 0.0 for a in _wac]
+                                   if _faixas_a else [0.0] * len(_wac))
                         elif _m == "Dist. >14 km/h (m)":
                             _sv = [v / (3.6 * _Hz) if v > 14 else 0.0 for v in _wv]
                         elif "19" in _m:
