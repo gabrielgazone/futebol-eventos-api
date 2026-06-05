@@ -9311,11 +9311,15 @@ Escolha um ou mais atletas para análise simultânea.
                             min_value=0.5, max_value=10.0, value=1.0, step=0.5,
                             key="jan_window"
                         )
+                    _MET_ACOES = '💥 Ações Acel/Desacel'
                     with _col_m:
                         tipo_metrica = st.selectbox(
                             "Métrica:",
-                            ['Distância', 'PlayerLoad', 'Velocidade', 'Aceleração'],
-                            key="jan_metrica"
+                            ['Distância', 'PlayerLoad', 'Velocidade', 'Aceleração', _MET_ACOES],
+                            key="jan_metrica",
+                            help="💥 Ações Acel/Desacel = nº de esforços (ações reais da "
+                                 "Catapult) de aceleração/desaceleração no pior minuto — "
+                                 "mesmo cálculo da aba 'Pior Cenário (WCS)'."
                         )
                     with _col_extra:
                         if tipo_metrica == 'Velocidade':
@@ -9334,7 +9338,49 @@ Escolha um ou mais atletas para análise simultânea.
                     _unidade_jan = {
                         'Distância': 'm/min', 'PlayerLoad': 'PL/min',
                         'Velocidade': 'km/h', 'Aceleração': 'm/s²',
+                        _MET_ACOES: 'ações',
                     }.get(tipo_metrica, '')
+
+                    # ── Bandas de AÇÕES (efforts) — duas caixas accel/decel ────────
+                    # Mesma seleção da aba WCS para que os valores batam.
+                    sel_acc_bands = []
+                    if tipo_metrica == _MET_ACOES:
+                        _ba_act_j = _bandas_acc_ativas()
+                        _acc_lbl_j = {_ba_act_j[k]['label']: k
+                                      for k in _ba_act_j if str(k).startswith('A')}
+                        _dec_lbl_j = {_ba_act_j[k]['label']: k
+                                      for k in _ba_act_j if str(k).startswith('D')}
+                        _cja, _cjd = st.columns(2)
+                        with _cja:
+                            _acc_pick_j = st.multiselect(
+                                "🚀 Aceleração",
+                                list(_acc_lbl_j.keys()),
+                                default=list(_acc_lbl_j.keys()),
+                                key="jan_acc_bands_pos",
+                                help="Ações de aceleração (Gen2Acceleration · caixas 6,7,8)."
+                            )
+                        with _cjd:
+                            _dec_pick_j = st.multiselect(
+                                "🛑 Desaceleração",
+                                list(_dec_lbl_j.keys()),
+                                default=list(_dec_lbl_j.keys()),
+                                key="jan_acc_bands_neg",
+                                help="Ações de desaceleração (Gen2Acceleration · caixas 3,2,1)."
+                            )
+                        sel_acc_bands = (
+                            [_ba_act_j[_acc_lbl_j[_s]] for _s in _acc_pick_j]
+                            + [_ba_act_j[_dec_lbl_j[_s]] for _s in _dec_pick_j]
+                        )
+                        st.caption(
+                            "Conta o **nº de ações (efforts)** de acel/desacel da Catapult "
+                            "cujo instante cai na janela — o pior minuto é a janela com mais "
+                            "ações nas bandas selecionadas. Para **bater com a aba "
+                            "'Pior Cenário (WCS)'** (individual), selecione "
+                            "**🔵 Individual** + **🔀 Todos os períodos (combinado)** e a "
+                            "mesma janela em minutos."
+                        )
+                        if not sel_acc_bands:
+                            st.info("Selecione ao menos uma banda de aceleração ou desaceleração.")
 
                     # Detecta Hz GPS uma vez (usado por todos os modos)
                     _hz_jan = 10.0
@@ -9355,9 +9401,105 @@ Escolha um ou mais atletas para análise simultânea.
                             if _med_hz > 0:
                                 _hz_jan = round(1.0 / _med_hz, 1)
 
+                    # ── Helper: AÇÕES (efforts) — espelha exatamente o cálculo WCS ─
+                    def _calc_rolling_acoes(_atl):
+                        """
+                        Conta ações (efforts) de acel/desacel por janela rolante,
+                        usando EXATAMENTE a mesma lógica da aba 'Pior Cenário (WCS)':
+                        timeline = ts_pos concatenado dos períodos (de
+                        dados_posicao_por_periodo); cada effort soma +1 na amostra
+                        mais próxima do seu start_time; soma rolante de N amostras.
+                        Assim o pico individual coincide com o WCS.
+                        Retorna (tempos_min, valores) — valores = nº de ações na janela.
+                        """
+                        # Períodos: combinado = todos (exceto a chave combinada),
+                        # igual ao WCS; individual = só o período escolhido.
+                        if _jan_modo_todos:
+                            _ps = [k for k in dados_posicao_por_periodo
+                                   if k != _CHAVE_COMBINADO]
+                        else:
+                            _ps = [periodo_janela]
+
+                        # Timeline concatenada (ts_pos), idêntica à construção do WCS
+                        _wts = []
+                        for _pn in _ps:
+                            _da = dados_posicao_por_periodo.get(_pn, {}).get(_atl, {})
+                            _xs = _da.get('xs', [])
+                            _ys = _da.get('ys', [])
+                            _ts = _da.get('ts_pos', [])
+                            _nn = (min(len(_xs), len(_ys))
+                                   if (_xs and _ys) else len(_ts))
+                            if _nn == 0:
+                                continue
+                            _ts_pad = list(_ts[:_nn]) + [0.0] * max(0, _nn - len(_ts))
+                            _wts += _ts_pad
+
+                        _Hz = _hz_jan
+                        _n = max(2, int(window_minutes * 60 * _Hz))
+                        if len(_wts) < _n:
+                            return [], []
+
+                        _faixas_a = [(float(b.get('min', -9999)),
+                                      float(b.get('max', 9999))) for b in sel_acc_bands]
+                        if not _faixas_a:
+                            return [], []
+
+                        def _in_aband(_aa):
+                            for _lo, _hi in _faixas_a:
+                                if _lo <= _aa < _hi:
+                                    return True
+                            return False
+
+                        _sv = [0.0] * len(_wts)
+                        _wts_np = np.array(_wts, dtype=float)
+                        _ts_unix_ok = (_wts_np.size > 0
+                                       and float(np.median(_wts_np)) > 1e6)
+                        if not _ts_unix_ok:
+                            return [], []
+                        for _pn in _ps:
+                            _effs = (dados_efforts_acc_por_periodo
+                                     .get(_pn, {}).get(_atl, []) or [])
+                            for _ef in _effs:
+                                try:
+                                    _acv = float(_ef.get('acceleration'))
+                                    _stt = float(_ef.get('start_time') or 0)
+                                except (TypeError, ValueError):
+                                    continue
+                                if _stt <= 0 or not _in_aband(_acv):
+                                    continue
+                                _idx = int(np.argmin(np.abs(_wts_np - _stt)))
+                                if 0 <= _idx < len(_sv):
+                                    _sv[_idx] += 1.0
+
+                        # Soma rolante de N amostras (passo 1) → série de contagem
+                        _csum = sum(_sv[:_n])
+                        _roll = [_csum]
+                        for _i in range(1, len(_sv) - _n + 1):
+                            _csum += _sv[_i + _n - 1] - _sv[_i - 1]
+                            _roll.append(_csum)
+                        if not _roll:
+                            return [], []
+
+                        # Downsample (~1 ponto/s) garantindo o pico real (= WCS)
+                        _stepd = max(1, int(round(_Hz)))
+                        _t_out, _v_out = [], []
+                        for _i in range(0, len(_roll), _stepd):
+                            _t_out.append(_i / (_Hz * 60.0))
+                            _v_out.append(float(_roll[_i]))
+                        _imax = int(np.argmax(_roll))
+                        if _imax % _stepd != 0:
+                            import bisect as _bis
+                            _tp = _imax / (_Hz * 60.0)
+                            _pos = _bis.bisect_left(_t_out, _tp)
+                            _t_out.insert(_pos, _tp)
+                            _v_out.insert(_pos, float(_roll[_imax]))
+                        return _t_out, _v_out
+
                     # ── Helper: rolling window para um atleta ──────────────────────
                     def _calc_rolling(_atl):
                         """Retorna (tempos_min, valores) para o atleta e configuração atual."""
+                        if tipo_metrica == _MET_ACOES:
+                            return _calc_rolling_acoes(_atl)
                         # ── Sensor helper (reutilizado no fallback de Distância) ────
                         def _get_sp():
                             if _jan_modo_todos:
