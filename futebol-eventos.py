@@ -4413,16 +4413,22 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
         _win = float(min(_win, _total_s))
         _ini_max = max(0.0, _total_s - _win)
         if _ini_max > 0.5:
-            _ini_rel = st.slider(
-                "Início da janela", 0.0, float(_ini_max),
-                min(float(st.session_state.get("tatica_inicio", 0.0)), float(_ini_max)),
-                step=5.0, key="tatica_inicio", format="%.0f s")
+            _ini_max_min = round(_ini_max / 60.0, 2)
+            _prev_min = min(float(st.session_state.get("tatica_inicio_min", 0.0)), _ini_max_min)
+            _ini_min = st.slider(
+                "Início da janela (min) — arraste para escolher o trecho do jogo",
+                0.0, _ini_max_min, _prev_min, step=0.25,
+                key="tatica_inicio_min", format="%.2f min",
+                help="Posiciona a janela em qualquer ponto da partida. "
+                     "Ex.: leve até o fim para analisar os minutos finais.")
+            _ini_rel = _ini_min * 60.0
         else:
             _ini_rel = 0.0
         _t_ini = _t0_abs + _ini_rel
         _t_fim = _t_ini + _win
         st.caption(f"🎬 Janela: **{_mmss(_ini_rel)} → {_mmss(_ini_rel + _win)}** "
-                   f"(de {_mmss(_total_s)} totais)")
+                   f"(de {_mmss(_total_s)} totais) · o slider abaixo do gráfico percorre "
+                   f"os frames **dentro** desta janela.")
     else:
         st.caption(f"🎬 Janela: **período inteiro** ({_mmss(_total_s)})")
 
