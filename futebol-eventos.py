@@ -12863,7 +12863,7 @@ Escolha um ou mais atletas para análise simultânea.
                         _wcs2_metric_opts = [
                             "Distância (m)",
                             "🏃 Velocidade (bandas)",
-                            "💥 Aceleração (bandas)",
+                            "💥 Ações Acel/Desacel (efforts)",
                             "Dist. >14 km/h (m)",
                             "Dist. >19 km/h (m)  — Alta Intensidade",
                             "Dist. >24 km/h (m)  — Sprint",
@@ -12878,7 +12878,9 @@ Escolha um ou mais atletas para análise simultânea.
                             "📊 Variável", _wcs2_metric_opts,
                             key="wcs2_metric_sel",
                             help="Métrica para identificar a janela de maior exigência. "
-                                 "Escolha 🏃 Velocidade ou 💥 Aceleração para selecionar bandas específicas."
+                                 "🏃 Velocidade = distância nas bandas escolhidas. "
+                                 "💥 Ações Acel/Desacel = nº de esforços (ações reais da "
+                                 "Catapult) de aceleração/desaceleração no pior minuto."
                         )
 
                         # ── Seleção de bandas (aparece ao escolher Velocidade/Aceleração) ──
@@ -12904,7 +12906,7 @@ Escolha um ou mais atletas para análise simultânea.
                             _sel_vel_bands = [_bv_act[_bv_lbl[_s]] for _s in _bv_pick]
                             if not _sel_vel_bands:
                                 st.info("Selecione ao menos uma banda de velocidade.")
-                        elif _wcs2_metric == "💥 Aceleração (bandas)":
+                        elif _wcs2_metric == "💥 Ações Acel/Desacel (efforts)":
                             _ba_act = _bandas_acc_ativas()
                             # Duas caixas separadas: Aceleração (A*) e Desaceleração (D*).
                             _acc_lbl = {_ba_act[k]['label']: k
@@ -12918,7 +12920,7 @@ Escolha um ou mais atletas para análise simultânea.
                                     list(_acc_lbl.keys()),
                                     default=list(_acc_lbl.keys()),
                                     key="wcs2_acc_bands_pos",
-                                    help="Bandas de aceleração (Gen2Acceleration · caixas 6,7,8)."
+                                    help="Ações de aceleração (Gen2Acceleration · caixas 6,7,8)."
                                 )
                             with _cwd:
                                 _dec_pick = st.multiselect(
@@ -12926,11 +12928,16 @@ Escolha um ou mais atletas para análise simultânea.
                                     list(_dec_lbl.keys()),
                                     default=list(_dec_lbl.keys()),
                                     key="wcs2_acc_bands_neg",
-                                    help="Bandas de desaceleração (Gen2Acceleration · caixas 3,2,1)."
+                                    help="Ações de desaceleração (Gen2Acceleration · caixas 3,2,1)."
                                 )
                             _sel_acc_bands = (
                                 [_ba_act[_acc_lbl[_s]] for _s in _acc_pick]
                                 + [_ba_act[_dec_lbl[_s]] for _s in _dec_pick]
+                            )
+                            st.caption(
+                                "Conta o **nº de ações (efforts)** de aceleração/desaceleração "
+                                "registradas pela Catapult cujo instante cai na janela — o pior "
+                                "minuto é a janela com mais ações nas bandas selecionadas."
                             )
                             if not _sel_acc_bands:
                                 st.info("Selecione ao menos uma banda de aceleração ou desaceleração.")
@@ -12979,6 +12986,24 @@ Escolha um ou mais atletas para análise simultânea.
                         a for _pn in _wcs2_periodos
                         for a in dados_posicao_por_periodo.get(_pn, {}).keys()
                     ))
+
+                    # ── Diagnóstico: quantos efforts de aceleração existem? ─────────
+                    if _wcs2_metric == "💥 Ações Acel/Desacel (efforts)":
+                        _tot_acc_eff = sum(
+                            len(dados_efforts_acc_por_periodo.get(_pn, {}).get(_a, []) or [])
+                            for _pn in _wcs2_periodos for _a in _wcs2_athletes
+                        )
+                        if _tot_acc_eff > 0:
+                            st.caption(
+                                f"💥 **{_tot_acc_eff} ações** de acel/desacel encontradas "
+                                f"nos efforts da conta — contadas por janela para achar o pior minuto."
+                            )
+                        else:
+                            st.warning(
+                                "Nenhum effort de aceleração retornado pela API para estes "
+                                "atletas/períodos. Usando estimativa por amostra (dv/dt) como "
+                                "fallback — os números podem ser menos precisos."
+                            )
 
                     def _wcalc_wcs(_sv, _n, _is_vm):
                         if len(_sv) < max(_n, 2):
@@ -13061,8 +13086,11 @@ Escolha um ou mais atletas para análise simultânea.
                                 return False
                             _sv = ([v / (3.6 * _Hz) if _in_vband(v) else 0.0 for v in _wv]
                                    if _faixas_v else [0.0] * len(_wv))
-                        elif _m == "💥 Aceleração (bandas)":
-                            # Nº de amostras (n) cuja aceleração cai nas bandas marcadas.
+                        elif _m == "💥 Ações Acel/Desacel (efforts)":
+                            # Nº de AÇÕES (efforts da Catapult) de aceleração/desaceleração
+                            # na janela: cada effort cuja aceleração cai nas bandas marcadas
+                            # soma +1 na amostra mais próxima do seu start_time. A janela
+                            # rolante soma as ações → identifica o pior minuto.
                             _faixas_a = [(float(b.get('min', -9999)), float(b.get('max', 9999)))
                                          for b in _sel_acc_bands]
                             def _in_aband(_aa, _ff=_faixas_a):
@@ -13070,8 +13098,29 @@ Escolha um ou mais atletas para análise simultânea.
                                     if _lo <= _aa < _hi:
                                         return True
                                 return False
-                            _sv = ([1.0 if _in_aband(a) else 0.0 for a in _wac]
-                                   if _faixas_a else [0.0] * len(_wac))
+                            _sv = [0.0] * len(_wx)
+                            _wts_np = np.array(_wts, dtype=float)
+                            # Timestamps Unix utilizáveis? (efforts usam start_time Unix)
+                            _ts_unix_ok = (_wts_np.size > 0
+                                           and float(np.median(_wts_np)) > 1e6)
+                            if _faixas_a and _ts_unix_ok:
+                                for _pn in _wcs2_periodos:
+                                    _effs = (dados_efforts_acc_por_periodo
+                                             .get(_pn, {}).get(_wa, []) or [])
+                                    for _ef in _effs:
+                                        try:
+                                            _acv = float(_ef.get('acceleration'))
+                                            _stt = float(_ef.get('start_time') or 0)
+                                        except (TypeError, ValueError):
+                                            continue
+                                        if _stt <= 0 or not _in_aband(_acv):
+                                            continue
+                                        _idx = int(np.argmin(np.abs(_wts_np - _stt)))
+                                        if 0 <= _idx < len(_sv):
+                                            _sv[_idx] += 1.0
+                            elif _faixas_a:
+                                # Sem ts Unix: estima pelas amostras de aceleração (dv/dt).
+                                _sv = [1.0 if _in_aband(a) else 0.0 for a in _wac]
                         elif _m == "Dist. >14 km/h (m)":
                             _sv = [v / (3.6 * _Hz) if v > 14 else 0.0 for v in _wv]
                         elif "19" in _m:
