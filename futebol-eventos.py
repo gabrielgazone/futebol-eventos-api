@@ -3830,13 +3830,22 @@ def _tatica_anim_layout(fig, tempos, height=560, right_margin=80):
                         dict(mode='immediate', frame=dict(duration=0, redraw=True),
                              transition=dict(duration=0))],
                   label=labels[i]) for i in range(len(tempos))]
+    def _play(dur):
+        return dict(frame=dict(duration=dur, redraw=True),
+                    fromcurrent=True, transition=dict(duration=0))
     fig.update_layout(
-        updatemenus=[dict(type='buttons', showactive=False, x=0.02, y=1.10, xanchor='left',
+        updatemenus=[dict(type='buttons', direction='right', showactive=False,
+                          x=0.02, y=1.10, xanchor='left',
                           bgcolor='#1f2937', font=dict(color='white'),
                           buttons=[
-                              dict(label='▶ Play', method='animate',
-                                   args=[None, dict(frame=dict(duration=120, redraw=True),
-                                                    fromcurrent=True, transition=dict(duration=0))]),
+                              dict(label='🐢 0.5×', method='animate',
+                                   args=[None, _play(1000)]),
+                              dict(label='▶ 1×', method='animate',
+                                   args=[None, _play(500)]),
+                              dict(label='⏩ 2×', method='animate',
+                                   args=[None, _play(250)]),
+                              dict(label='⏩⏩ 4×', method='animate',
+                                   args=[None, _play(120)]),
                               dict(label='⏸ Pause', method='animate',
                                    args=[[None], dict(frame=dict(duration=0, redraw=True),
                                                       mode='immediate', transition=dict(duration=0))]),
