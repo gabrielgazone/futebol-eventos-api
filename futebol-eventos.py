@@ -13523,12 +13523,23 @@ Escolha um ou mais atletas para análise simultânea.
                         }
                         _row_d.update(_mw_vals)
                         _wcs2_rows.append(_row_d)
+                        # Série de aceleração (m/s²) p/ colorir a trilha por banda
+                        # de acel/desacel quando a métrica de AÇÕES está ativa.
+                        _acc_full_anim = []
+                        if _m == "💥 Ações Acel/Desacel (efforts)":
+                            if any(abs(_v) > 0.1 for _v in _wv):
+                                _acc_full_anim = acc_series_from_vel(_wv, _wts, _Hz)
+                            else:
+                                _acc_full_anim = list(_wac)
                         _wcs2_segs[_wa] = {
                             'xn':     _wx[_best_si2:_best_ei2],
                             'yn':     _wy[_best_si2:_best_ei2],
                             'vel':    _wv[_best_si2:_best_ei2],
+                            'acc':    (_acc_full_anim[_best_si2:_best_ei2]
+                                       if _acc_full_anim else []),
                             'rolling': _roll_full,
                             'vel_all': _wv,        # velocidade de toda a série (trilha colorida)
+                            'acc_all': _acc_full_anim,
                             'xn_all':  _wx,
                             'yn_all':  _wy,
                         }
@@ -13956,6 +13967,13 @@ Escolha um ou mais atletas para análise simultânea.
                             _wcs2_xn  = _wseg.get('xn', [])
                             _wcs2_yn  = _wseg.get('yn', [])
                             _wcs2_vel = _wseg.get('vel', [])
+                            _wcs2_acc = _wseg.get('acc', [])
+                            # Quando a métrica é AÇÕES, a trilha/legenda usam bandas de
+                            # acel/desacel (m/s²) em vez de velocidade.
+                            _is_acoes_anim = (
+                                _wcs2_metric == "💥 Ações Acel/Desacel (efforts)"
+                                and len(_wcs2_acc) == len(_wcs2_xn)
+                            )
 
                             if len(_wcs2_xn) >= 2:
                                 st.markdown(f"### 🏃 {_wsel_atl} — WCS {_wcs2_min} min")
@@ -13983,6 +14001,28 @@ Escolha um ou mais atletas para análise simultânea.
                                     if v < 24: return '#FF9800'
                                     return '#F44336'
 
+                                # ── Cor por banda de aceleração/desaceleração ───────
+                                _acc_bands_anim = list(_bandas_acc_ativas().values())
+                                _NEUTRO_COR_AC = '#546E7A'   # zona leve/neutra (−2..2)
+                                def _ac_color(a):
+                                    for _b in _acc_bands_anim:
+                                        try:
+                                            if float(_b['min']) <= a < float(_b['max']):
+                                                return _b.get('color', _NEUTRO_COR_AC)
+                                        except (TypeError, ValueError, KeyError):
+                                            continue
+                                    # satura no topo da banda extrema de aceleração
+                                    try:
+                                        _tops = [float(_b['max']) for _b in _acc_bands_anim
+                                                 if float(_b['min']) >= 0]
+                                        if _tops and a >= max(_tops):
+                                            return next(_b.get('color', _NEUTRO_COR_AC)
+                                                        for _b in _acc_bands_anim
+                                                        if float(_b['max']) == max(_tops))
+                                    except (TypeError, ValueError, KeyError, StopIteration):
+                                        pass
+                                    return _NEUTRO_COR_AC
+
                                 _fig_wcs2 = desenhar_campo_futebol_bonito(
                                     field_length=_wcs2_fl,
                                     field_width=_wcs2_fw,
@@ -14000,9 +14040,13 @@ Escolha um ou mais atletas para análise simultânea.
                                 if _fr2[-1] != _nf2 - 1:
                                     _fr2.append(_nf2 - 1)
 
-                                # ── Trilha completa colorida por velocidade (estática) ──
-                                # Mostra toda a janela WCS colorida por faixa de velocidade
-                                _trail_colors = [_vc_wcs2(v) for v in _wcs2_vel]
+                                # ── Trilha completa colorida (estática) ──
+                                # Métrica de AÇÕES → cor por banda de acel/desacel;
+                                # caso contrário → faixa de velocidade.
+                                if _is_acoes_anim:
+                                    _trail_colors = [_ac_color(a) for a in _wcs2_acc]
+                                else:
+                                    _trail_colors = [_vc_wcs2(v) for v in _wcs2_vel]
                                 _fig_wcs2.add_trace(go.Scatter(
                                     x=_wcs2_xn, y=_wcs2_yn,
                                     mode='markers',
@@ -14012,27 +14056,47 @@ Escolha um ou mais atletas para análise simultânea.
                                     ),
                                     name='Trilha', showlegend=False, hoverinfo='skip',
                                 ))
-                                # Legenda de velocidade inline
-                                _fig_wcs2.add_trace(go.Scatter(
-                                    x=[None], y=[None], mode='markers',
-                                    marker=dict(size=10, color='#2196F3'), name='< 7 km/h',
-                                ))
-                                _fig_wcs2.add_trace(go.Scatter(
-                                    x=[None], y=[None], mode='markers',
-                                    marker=dict(size=10, color='#4CAF50'), name='7–14 km/h',
-                                ))
-                                _fig_wcs2.add_trace(go.Scatter(
-                                    x=[None], y=[None], mode='markers',
-                                    marker=dict(size=10, color='#FFEB3B'), name='14–19 km/h',
-                                ))
-                                _fig_wcs2.add_trace(go.Scatter(
-                                    x=[None], y=[None], mode='markers',
-                                    marker=dict(size=10, color='#FF9800'), name='19–24 km/h',
-                                ))
-                                _fig_wcs2.add_trace(go.Scatter(
-                                    x=[None], y=[None], mode='markers',
-                                    marker=dict(size=10, color='#F44336'), name='> 24 km/h',
-                                ))
+                                # ── Legenda inline ──
+                                if _is_acoes_anim:
+                                    # Bandas de acel/desacel (rótulo curto B1/B2/B3)
+                                    import re as _re_anim
+                                    for _bk, _bd in _bandas_acc_ativas().items():
+                                        _lbl_full = _bd.get('label', _bk)
+                                        # encurta: "Aceleração B1 — 2 a 3 m/s²"
+                                        _emoji = '🚀' if str(_bk).startswith('A') else '🛑'
+                                        _fig_wcs2.add_trace(go.Scatter(
+                                            x=[None], y=[None], mode='markers',
+                                            marker=dict(size=10,
+                                                        color=_bd.get('color', '#888')),
+                                            name=f"{_emoji} {_lbl_full}",
+                                        ))
+                                    _fig_wcs2.add_trace(go.Scatter(
+                                        x=[None], y=[None], mode='markers',
+                                        marker=dict(size=10, color=_NEUTRO_COR_AC),
+                                        name='• Neutro (−2 a 2 m/s²)',
+                                    ))
+                                else:
+                                    # Legenda de velocidade inline
+                                    _fig_wcs2.add_trace(go.Scatter(
+                                        x=[None], y=[None], mode='markers',
+                                        marker=dict(size=10, color='#2196F3'), name='< 7 km/h',
+                                    ))
+                                    _fig_wcs2.add_trace(go.Scatter(
+                                        x=[None], y=[None], mode='markers',
+                                        marker=dict(size=10, color='#4CAF50'), name='7–14 km/h',
+                                    ))
+                                    _fig_wcs2.add_trace(go.Scatter(
+                                        x=[None], y=[None], mode='markers',
+                                        marker=dict(size=10, color='#FFEB3B'), name='14–19 km/h',
+                                    ))
+                                    _fig_wcs2.add_trace(go.Scatter(
+                                        x=[None], y=[None], mode='markers',
+                                        marker=dict(size=10, color='#FF9800'), name='19–24 km/h',
+                                    ))
+                                    _fig_wcs2.add_trace(go.Scatter(
+                                        x=[None], y=[None], mode='markers',
+                                        marker=dict(size=10, color='#F44336'), name='> 24 km/h',
+                                    ))
                                 # Marcadores início / fim
                                 _fig_wcs2.add_trace(go.Scatter(
                                     x=[_wcs2_xn[0]], y=[_wcs2_yn[0]],
@@ -14053,11 +14117,14 @@ Escolha um ou mais atletas para análise simultânea.
                                     name='Fim', showlegend=False, hoverinfo='skip',
                                 ))
                                 # Dot animado (único trace que muda nos frames)
+                                _dot_c0 = (_ac_color(_wcs2_acc[0] if _wcs2_acc else 0)
+                                           if _is_acoes_anim
+                                           else _vc_wcs2(_wcs2_vel[0] if _wcs2_vel else 0))
                                 _fig_wcs2.add_trace(go.Scatter(
                                     x=[_wcs2_xn[0]], y=[_wcs2_yn[0]], mode='markers',
                                     marker=dict(
                                         size=20,
-                                        color=_vc_wcs2(_wcs2_vel[0] if _wcs2_vel else 0),
+                                        color=_dot_c0,
                                         symbol='circle',
                                         line=dict(color='white', width=3),
                                     ),
@@ -14074,7 +14141,13 @@ Escolha um ou mais atletas para análise simultânea.
                                     _dm3  = int(_ds3 // 60)
                                     _dsr3 = int(_ds3 % 60)
                                     _v3   = float(_wcs2_vel[_fk2]) if _fk2 < len(_wcs2_vel) else 0.0
-                                    _c3   = _vc_wcs2(_v3)
+                                    if _is_acoes_anim:
+                                        _a3  = float(_wcs2_acc[_fk2]) if _fk2 < len(_wcs2_acc) else 0.0
+                                        _c3  = _ac_color(_a3)
+                                        _hud = f'   |   ⚡ {_a3:+.1f} m/s²'
+                                    else:
+                                        _c3  = _vc_wcs2(_v3)
+                                        _hud = f'   |   💨 {_v3:.1f} km/h'
                                     _frames2.append(go.Frame(
                                         data=[go.Scatter(
                                             x=[_wcs2_xn[_fk2]],
@@ -14092,7 +14165,7 @@ Escolha um ou mais atletas para análise simultânea.
                                             text=(
                                                 f'WCS {_wcs2_min} min — {_wsel_atl} | '
                                                 f'⏱️ {_dm3}:{_dsr3:02d} / {_wcs2_min}:00'
-                                                f'   |   💨 {_v3:.1f} km/h'
+                                                f'{_hud}'
                                             ),
                                             font=dict(color='white', size=12),
                                         )),
