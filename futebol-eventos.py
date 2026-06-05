@@ -4550,7 +4550,11 @@ def encontrar_eventos_nao_sobrepostos(t_start_min, d_out, window_minutes, limiar
 
     n = len(d_out)
     # Quantos passos (de 10 s cada) equivalem a 1 janela completa
-    step_min   = (t_start_min[1] - t_start_min[0]) if n > 1 else (10.0 / 60.0)
+    step_min = (t_start_min[1] - t_start_min[0]) if n > 1 else (10.0 / 60.0)
+    # Blindagem: timestamps duplicados → step_min = 0 → divisão (numpy) vira inf →
+    # int(inf) levantaria OverflowError. Usa o passo padrão de 10 s nesse caso.
+    if not np.isfinite(step_min) or step_min <= 0:
+        step_min = 10.0 / 60.0
     excl_steps = max(1, int(round(window_minutes / step_min)))
 
     usado = [False] * n
@@ -4569,6 +4573,8 @@ def encontrar_eventos_nao_sobrepostos(t_start_min, d_out, window_minutes, limiar
 
         t_ini   = t_start_min[idx]
         t_fim   = t_ini + window_minutes
+        if not (np.isfinite(t_ini) and np.isfinite(t_fim)):
+            continue   # ignora janelas com tempo não-finito (evita int(inf)/int(nan))
         mins_i  = int(t_ini);  segs_i = int((t_ini - mins_i) * 60)
         mins_f  = int(t_fim);  segs_f = int((t_fim - mins_f) * 60)
 
@@ -5232,6 +5238,18 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
     if not tempos_janela or not valores_janela:
         st.warning("Dados insuficientes para calcular as janelas")
         return
+
+    # Saneamento: remove pares com tempo/valor não-finito (inf/nan). Sem isso,
+    # conversões int() adiante (formatação de tempo) podem levantar OverflowError.
+    _t_arr = np.asarray(tempos_janela, dtype=float)
+    _v_arr = np.asarray(valores_janela, dtype=float)
+    _fin = np.isfinite(_t_arr) & np.isfinite(_v_arr)
+    if not _fin.all():
+        tempos_janela = _t_arr[_fin].tolist()
+        valores_janela = _v_arr[_fin].tolist()
+        if not tempos_janela or not valores_janela:
+            st.warning("Dados insuficientes para calcular as janelas")
+            return
 
     valores_array = np.array(valores_janela)
 
