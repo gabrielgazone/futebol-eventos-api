@@ -4380,31 +4380,51 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
         s = int(round(s))
         return f"{s // 60:02d}:{s % 60:02d}"
 
-    _jan_map = {"30 s": 30.0, "1 min": 60.0, "2 min": 120.0, "5 min": 300.0}
-    _opcoes = [k for k, v in _jan_map.items() if v < _total_s] + ["Período inteiro"]
+    _jan_map = {"30 s": 30.0, "1 min": 60.0, "2 min": 120.0, "5 min": 300.0, "10 min": 600.0}
+    _opcoes = [k for k, v in _jan_map.items() if v < _total_s]
+    _opcoes += ["Período inteiro", "Personalizada…"]
     _idx_pad = _opcoes.index("1 min") if "1 min" in _opcoes else 0
 
     cj1, cj2 = st.columns([1, 2])
     with cj1:
         jan_sel = st.selectbox(
             "Janela de análise", _opcoes, index=_idx_pad, key="tatica_janela",
-            help="Janelas curtas mostram o **deslocamento contínuo** (≈tempo real, ~0,5 s "
-                 "entre frames). O 'Período inteiro' dá a visão geral, mas com saltos "
-                 "grandes entre frames (não é movimento contínuo).")
-    if jan_sel in _jan_map:
-        _win = _jan_map[jan_sel]
-        _ini_max = max(0.0, _total_s - _win)
+            help="Você pode analisar **qualquer trecho ou o período/jogo inteiro**. "
+                 "Janelas curtas mostram o **deslocamento contínuo** (≈tempo real); janelas "
+                 "longas e o 'Período inteiro' cobrem tudo, mas com frames mais espaçados "
+                 "(o movimento aparece em saltos quanto maior o trecho).")
+
+    if jan_sel == "Período inteiro":
+        _win = None
+        _t_ini, _t_fim = _t0_abs, _t1_abs
+    elif jan_sel == "Personalizada…":
         with cj2:
+            _win_min = st.number_input(
+                "Duração da janela (min)", min_value=0.25,
+                max_value=round(_total_s / 60.0, 2),
+                value=float(min(2.0, round(_total_s / 60.0, 2))), step=0.5,
+                key="tatica_win_custom",
+                help="Defina qualquer duração — de 15 s ao período inteiro.")
+        _win = float(_win_min) * 60.0
+    else:
+        _win = _jan_map[jan_sel]
+
+    if _win is not None:
+        _win = float(min(_win, _total_s))
+        _ini_max = max(0.0, _total_s - _win)
+        if _ini_max > 0.5:
             _ini_rel = st.slider(
                 "Início da janela", 0.0, float(_ini_max),
                 min(float(st.session_state.get("tatica_inicio", 0.0)), float(_ini_max)),
                 step=5.0, key="tatica_inicio", format="%.0f s")
+        else:
+            _ini_rel = 0.0
         _t_ini = _t0_abs + _ini_rel
         _t_fim = _t_ini + _win
         st.caption(f"🎬 Janela: **{_mmss(_ini_rel)} → {_mmss(_ini_rel + _win)}** "
                    f"(de {_mmss(_total_s)} totais)")
     else:
-        _t_ini, _t_fim = _t0_abs, _t1_abs
+        st.caption(f"🎬 Janela: **período inteiro** ({_mmss(_total_s)})")
 
     _vel_opts = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0]
     st.select_slider(
@@ -4413,7 +4433,8 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
         help="1× reproduz no tempo real do jogo. Abaixo de 1× = câmera lenta; "
              "acima = acelerado. Aplica-se ao botão ▶ Play.")
 
-    frames = _tatica_frames_sincronizados(dados_prep, atletas_sel, t_ini=_t_ini, t_fim=_t_fim)
+    frames = _tatica_frames_sincronizados(dados_prep, atletas_sel,
+                                          t_ini=_t_ini, t_fim=_t_fim, max_frames=300)
     if frames is None:
         st.warning("Janela sem sobreposição temporal suficiente — ajuste o início ou a duração.")
         return
@@ -4424,9 +4445,10 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
     _dt = dur_s / max(1, nf - 1)
     st.caption(f"⏱️ {nf} frames · ~{_dt:.1f}s entre frames · {natl} atletas sincronizados · "
                f"campo {FL:.0f}×{FW:.0f} m · 📍 {_fonte_pos}")
-    if _dt > 5.0:
-        st.caption("⚠️ Frames muito espaçados nesta janela — o movimento aparece em **saltos**. "
-                   "Escolha uma janela mais curta (30 s / 1 min) para ver o deslocamento contínuo.")
+    if _dt > 3.0:
+        st.caption("ℹ️ Trecho longo: os frames ficam espaçados (~{:.0f}s) e o movimento "
+                   "aparece em **saltos**. Para ver o deslocamento contínuo, reduza a janela "
+                   "(ex.: 1–2 min) e arraste o **início** pelo trecho que quer analisar.".format(_dt))
     if _n_proj > 0:
         st.info("📍 Coordenadas de campo **reconstruídas a partir do GPS** (lat/lon → campo). "
                 "As posições **relativas** entre jogadores são fiéis; o alinhamento absoluto do "
