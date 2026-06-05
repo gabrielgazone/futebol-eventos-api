@@ -3545,6 +3545,589 @@ def obter_limites_periodos_posicao(dados_posicao_por_periodo: dict, atleta: str)
     return boundaries
 
 
+# ════════════════════════════════════════════════════════════════════════
+#  TÁTICA COLETIVA
+#  Visões que usam a posição de VÁRIOS atletas no MESMO instante — o time
+#  como sistema, não como soma de indivíduos. Tudo reaproveita os xs/ys de
+#  campo (mesmo referencial, em metros) já presentes em
+#  dados_posicao_por_periodo. 4 visões: Pitch Control (Spearman),
+#  Respiração da equipe (centroide + convex hull), Voronoi e Replay 3D.
+# ════════════════════════════════════════════════════════════════════════
+
+# Paleta determinística para identificar atletas entre as visões.
+_TATICA_PALETA = [
+    '#FF5252', '#448AFF', '#FFD740', '#69F0AE', '#E040FB', '#FF6E40',
+    '#18FFFF', '#B2FF59', '#FF4081', '#40C4FF', '#EEFF41', '#FFAB40',
+    '#7C4DFF', '#64FFDA', '#F50057', '#00B0FF', '#76FF03', '#FF3D00',
+    '#D500F9', '#1DE9B6', '#C6FF00', '#FF9100', '#3D5AFE', '#00E5FF',
+]
+
+
+def _tatica_cor_atleta(i: int) -> str:
+    return _TATICA_PALETA[i % len(_TATICA_PALETA)]
+
+
+def _tatica_iniciais(nome: str) -> str:
+    """Iniciais curtas para rotular o marcador do atleta no campo."""
+    partes = [p for p in str(nome).strip().split() if p]
+    if not partes:
+        return '?'
+    if len(partes) == 1:
+        return partes[0][:3].upper()
+    return (partes[0][0] + partes[-1][0]).upper()
+
+
+def _convex_hull(points):
+    """Casco convexo (Andrew's monotone chain), em Python puro — sem scipy.
+    points: lista de (x, y). Retorna vértices do hull em sentido anti-horário."""
+    pts = sorted(set((round(float(x), 3), round(float(y), 3)) for x, y in points))
+    if len(pts) <= 2:
+        return pts
+
+    def _cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower = []
+    for p in pts:
+        while len(lower) >= 2 and _cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper = []
+    for p in reversed(pts):
+        while len(upper) >= 2 and _cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return lower[:-1] + upper[:-1]
+
+
+def _poly_area(hull):
+    """Área de um polígono (fórmula do cadarço / shoelace)."""
+    n = len(hull)
+    if n < 3:
+        return 0.0
+    s = 0.0
+    for i in range(n):
+        x1, y1 = hull[i]
+        x2, y2 = hull[(i + 1) % n]
+        s += x1 * y2 - x2 * y1
+    return abs(s) / 2.0
+
+
+def _tatica_frames_sincronizados(dados_periodo: dict, atletas_sel, max_frames: int = 140):
+    """Constrói frames sincronizados (posição de todos no mesmo instante).
+
+    Para cada atleta com x/y de campo, interpola xs/ys/vel numa grade temporal
+    comum (janela de sobreposição dos timestamps), ~1 frame/s, limitada a
+    max_frames. Onde o atleta não tem cobertura, o valor fica NaN.
+
+    Retorna (tempos, nomes, equipes, posicoes, PX, PY, PV) com PX/PY/PV de
+    shape [n_frames x n_atletas], ou None se não houver ≥2 atletas alinháveis.
+    """
+    import numpy as _np
+    series = []
+    for a in atletas_sel:
+        d = dados_periodo.get(a, {})
+        xs = d.get('xs', [])
+        ys = d.get('ys', [])
+        ts = d.get('ts_pos', [])
+        vel = d.get('vel', [])
+        n = min(len(xs), len(ys), len(ts))
+        if n < 5:
+            continue
+        ts_a = _np.asarray(ts[:n], dtype=float)
+        order = _np.argsort(ts_a)
+        ts_a = ts_a[order]
+        xa = _np.asarray(xs[:n], dtype=float)[order]
+        ya = _np.asarray(ys[:n], dtype=float)[order]
+        if len(vel) >= n:
+            va = _np.asarray(vel[:n], dtype=float)[order]
+        else:
+            va = _np.zeros(n, dtype=float)
+        uniq = _np.concatenate(([True], _np.diff(ts_a) > 0))
+        if uniq.sum() < 5:
+            continue
+        series.append({
+            'nome': a, 'equipe': d.get('equipe', ''), 'posicao': d.get('posicao', ''),
+            'ts': ts_a[uniq], 'x': xa[uniq], 'y': ya[uniq], 'v': va[uniq],
+        })
+    if len(series) < 2:
+        return None
+
+    t0 = max(s['ts'][0] for s in series)
+    t1 = min(s['ts'][-1] for s in series)
+    if not (t1 - t0 > 1.0):
+        # Sem sobreposição suficiente → usa a união (atletas terão trechos NaN)
+        t0 = min(s['ts'][0] for s in series)
+        t1 = max(s['ts'][-1] for s in series)
+    if not (t1 - t0 > 1.0):
+        return None
+
+    nf = int(max(2, min(max_frames, round(t1 - t0))))
+    tempos = _np.linspace(t0, t1, nf)
+    nomes, equipes, posicoes = [], [], []
+    PX, PY, PV = [], [], []
+    for s in series:
+        xi = _np.interp(tempos, s['ts'], s['x'], left=_np.nan, right=_np.nan)
+        yi = _np.interp(tempos, s['ts'], s['y'], left=_np.nan, right=_np.nan)
+        vi = _np.interp(tempos, s['ts'], s['v'], left=_np.nan, right=_np.nan)
+        fora = (tempos < s['ts'][0]) | (tempos > s['ts'][-1])
+        xi[fora] = _np.nan
+        yi[fora] = _np.nan
+        vi[fora] = _np.nan
+        nomes.append(s['nome'])
+        equipes.append(s['equipe'])
+        posicoes.append(s['posicao'])
+        PX.append(xi)
+        PY.append(yi)
+        PV.append(vi)
+    PX = _np.array(PX).T
+    PY = _np.array(PY).T
+    PV = _np.array(PV).T
+    return tempos, nomes, equipes, posicoes, PX, PY, PV
+
+
+def _tatica_add_campo_shapes(fig, FL, FW, line_color='rgba(255,255,255,0.85)'):
+    """Marcações brancas do campo como shapes (layer='above') — ficam por cima
+    de heatmaps (Pitch Control / Voronoi)."""
+    cy = FW / 2.0
+    L = dict(color=line_color, width=1.6)
+    fig.add_shape(type="rect", x0=0, y0=0, x1=FL, y1=FW, line=L, layer='above')
+    fig.add_shape(type="line", x0=FL / 2, y0=0, x1=FL / 2, y1=FW, line=L, layer='above')
+    fig.add_shape(type="circle", x0=FL / 2 - 9.15, y0=cy - 9.15,
+                  x1=FL / 2 + 9.15, y1=cy + 9.15, line=L, layer='above')
+    for x0, x1 in [(0, 16.5), (FL - 16.5, FL)]:
+        fig.add_shape(type="rect", x0=x0, y0=cy - 20.16, x1=x1, y1=cy + 20.16, line=L, layer='above')
+    for x0, x1 in [(0, 5.5), (FL - 5.5, FL)]:
+        fig.add_shape(type="rect", x0=x0, y0=cy - 9.16, x1=x1, y1=cy + 9.16, line=L, layer='above')
+
+
+def _tatica_anim_layout(fig, tempos, height=560, right_margin=80):
+    """Adiciona Play/Pause + slider com rótulos mm:ss (relativos ao início)."""
+    t0 = tempos[0]
+    labels = [f"{int((t - t0) // 60):02d}:{int((t - t0) % 60):02d}" for t in tempos]
+    steps = [dict(method='animate',
+                  args=[[f"f{i}"],
+                        dict(mode='immediate', frame=dict(duration=0, redraw=True),
+                             transition=dict(duration=0))],
+                  label=labels[i]) for i in range(len(tempos))]
+    fig.update_layout(
+        updatemenus=[dict(type='buttons', showactive=False, x=0.02, y=1.10, xanchor='left',
+                          bgcolor='#1f2937', font=dict(color='white'),
+                          buttons=[
+                              dict(label='▶ Play', method='animate',
+                                   args=[None, dict(frame=dict(duration=120, redraw=True),
+                                                    fromcurrent=True, transition=dict(duration=0))]),
+                              dict(label='⏸ Pause', method='animate',
+                                   args=[[None], dict(frame=dict(duration=0, redraw=True),
+                                                      mode='immediate', transition=dict(duration=0))]),
+                          ])],
+        sliders=[dict(active=0, x=0.02, len=0.96, y=0, xanchor='left', yanchor='top',
+                      currentvalue=dict(prefix='⏱️ ', font=dict(color='white')),
+                      font=dict(color='#9ca3af', size=9),
+                      steps=steps)],
+        height=height, paper_bgcolor='#0e1117', plot_bgcolor='#1a3a18',
+        margin=dict(l=30, r=right_margin, t=55, b=40),
+        font=dict(color='white'), showlegend=False,
+    )
+
+
+def _tatica_view_pitch_control(tempos, nomes, equipes, PX, PY, PV, FL, FW):
+    """🎯 Pitch Control (modelo de William Spearman): cada ponto do campo é
+    colorido pelo tempo de chegada do jogador mais próximo (posição projetada
+    pela velocidade). 1 time → domínio de espaço; 2 times → controle contestado."""
+    import numpy as _np
+    import plotly.graph_objects as _go
+    nf, natl = PX.shape
+
+    # Velocidades (m/s) e direção por diferenças finitas (NaN-safe).
+    dt = _np.gradient(tempos)
+    _pos_dt = dt[dt > 0]
+    dt[dt <= 0] = (_np.median(_pos_dt) if _pos_dt.size else 0.1)
+    VX = _np.zeros_like(PX)
+    VY = _np.zeros_like(PY)
+    VX[1:] = _np.nan_to_num(PX[1:] - PX[:-1])
+    VY[1:] = _np.nan_to_num(PY[1:] - PY[:-1])
+    VX = VX / dt[:, None]
+    VY = VY / dt[:, None]
+    sp = _np.hypot(VX, VY)
+    cap = 8.0
+    scl = _np.where(sp > cap, cap / _np.maximum(sp, 1e-6), 1.0)
+    VX *= scl
+    VY *= scl
+
+    eq_validas = [e for e in dict.fromkeys(equipes) if e]
+    dois_times = len(eq_validas) >= 2
+    eq_arr = _np.array(equipes, dtype=object)
+
+    step = 2.5
+    gx = _np.arange(step / 2, FL, step)
+    gy = _np.arange(step / 2, FW, step)
+    GX, GY = _np.meshgrid(gx, gy)
+    flatx = GX.ravel()
+    flaty = GY.ravel()
+    Vmax, tctrl, tau, sigma = 7.0, 0.7, 2.0, 0.6
+
+    def _z_frame(k):
+        ex = PX[k] + VX[k] * tctrl
+        ey = PY[k] + VY[k] * tctrl
+        valid = ~_np.isnan(ex) & ~_np.isnan(ey)
+        if valid.sum() == 0:
+            return _np.zeros_like(GX)
+        evx = ex[valid]
+        evy = ey[valid]
+        dx = flatx[:, None] - evx[None, :]
+        dy = flaty[:, None] - evy[None, :]
+        tt = _np.hypot(dx, dy) / Vmax
+        if dois_times:
+            eqv = eq_arr[valid]
+            hm = eqv == eq_validas[0]
+            tt_home = _np.min(tt[:, hm], axis=1) if hm.any() else _np.full(tt.shape[0], 99.0)
+            tt_away = _np.min(tt[:, ~hm], axis=1) if (~hm).any() else _np.full(tt.shape[0], 99.0)
+            z = 1.0 / (1.0 + _np.exp((tt_home - tt_away) / sigma))
+        else:
+            z = _np.exp(-_np.min(tt, axis=1) / tau)
+        return z.reshape(GX.shape)
+
+    def _players(k):
+        cols = []
+        for i in range(natl):
+            if dois_times:
+                cols.append('#2196F3' if equipes[i] == eq_validas[0] else '#E53935')
+            else:
+                cols.append(_tatica_cor_atleta(i))
+        return PX[k], PY[k], cols
+
+    txt = [_tatica_iniciais(n) for n in nomes]
+
+    if dois_times:
+        cs = [[0.0, 'rgba(229,57,53,0.85)'], [0.5, 'rgba(0,0,0,0.0)'],
+              [1.0, 'rgba(33,150,243,0.85)']]
+        cbtitle = f"Controle<br>🔵 {eq_validas[0][:10]}"
+        op = 0.55
+    else:
+        cs = [[0.0, 'rgba(0,0,0,0.0)'], [0.35, 'rgba(255,235,59,0.40)'],
+              [0.7, 'rgba(255,152,0,0.75)'], [1.0, 'rgba(213,0,0,0.92)']]
+        cbtitle = "Domínio<br>de espaço"
+        op = 0.6
+
+    z0 = _z_frame(0)
+    px0, py0, c0 = _players(0)
+    heat = _go.Heatmap(x=gx, y=gy, z=z0, zmin=0.0, zmax=1.0, colorscale=cs,
+                       opacity=op, showscale=True, zsmooth='best',
+                       colorbar=dict(title=dict(text=cbtitle, font=dict(size=10)),
+                                     len=0.55, x=1.0, thickness=12,
+                                     tickfont=dict(size=8)),
+                       hoverinfo='skip', name='pc')
+    players = _go.Scatter(x=px0, y=py0, mode='markers+text', text=txt,
+                          textposition='middle center', textfont=dict(color='white', size=8),
+                          marker=dict(size=16, color=c0, line=dict(color='white', width=1.5)),
+                          hovertext=nomes, hoverinfo='text', name='atletas')
+    fig = _go.Figure(data=[heat, players])
+    _tatica_add_campo_shapes(fig, FL, FW)
+    frames = []
+    for k in range(nf):
+        pxk, pyk, ck = _players(k)
+        frames.append(_go.Frame(name=f"f{k}",
+                                data=[_go.Heatmap(z=_z_frame(k)),
+                                      _go.Scatter(x=pxk, y=pyk, text=txt,
+                                                  marker=dict(size=16, color=ck,
+                                                              line=dict(color='white', width=1.5)))],
+                                traces=[0, 1]))
+    fig.frames = frames
+    fig.update_xaxes(range=[-3, FL + 3], showgrid=False, zeroline=False, visible=False)
+    fig.update_yaxes(range=[-3, FW + 3], showgrid=False, zeroline=False,
+                     scaleanchor='x', scaleratio=1, visible=False)
+    _tatica_anim_layout(fig, tempos, right_margin=95)
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _tatica_view_respiracao(tempos, nomes, equipes, PX, PY, PV, FL, FW):
+    """🫁 Respiração da equipe: centroide + casco convexo animados, e a evolução
+    de largura/comprimento/área do bloco ao longo do tempo."""
+    import numpy as _np
+    import plotly.graph_objects as _go
+    nf, natl = PX.shape
+
+    widths, lengths, areas, spreads = [], [], [], []
+    cxs, cys, hulls = [], [], []
+    for k in range(nf):
+        xs = PX[k]
+        ys = PY[k]
+        m = ~_np.isnan(xs) & ~_np.isnan(ys)
+        px = xs[m]
+        py = ys[m]
+        if len(px) < 3:
+            widths.append(_np.nan); lengths.append(_np.nan)
+            areas.append(_np.nan); spreads.append(_np.nan)
+            cxs.append(_np.nan); cys.append(_np.nan)
+            hulls.append(([], []))
+            continue
+        cx = float(px.mean()); cy = float(py.mean())
+        pts = list(zip(px.tolist(), py.tolist()))
+        h = _convex_hull(pts)
+        hx = [p[0] for p in h] + ([h[0][0]] if h else [])
+        hy = [p[1] for p in h] + ([h[0][1]] if h else [])
+        widths.append(float(py.max() - py.min()))
+        lengths.append(float(px.max() - px.min()))
+        areas.append(_poly_area(h))
+        spreads.append(float(_np.mean(_np.hypot(px - cx, py - cy))))
+        cxs.append(cx); cys.append(cy)
+        hulls.append((hx, hy))
+
+    def _hud(k):
+        w = widths[k]; l = lengths[k]; a = areas[k]
+        if _np.isnan(w):
+            return "🫁 Respiração da equipe"
+        return (f"🫁  Largura {w:.0f} m   ·   Comprimento {l:.0f} m   ·   "
+                f"Área {a:.0f} m²   ·   Dispersão {spreads[k]:.0f} m")
+
+    hx0, hy0 = hulls[0]
+    hull_tr = _go.Scatter(x=hx0, y=hy0, mode='lines', fill='toself',
+                          fillcolor='rgba(68,138,255,0.18)',
+                          line=dict(color='#448AFF', width=2),
+                          hoverinfo='skip', name='bloco')
+    cols = [_tatica_cor_atleta(i) for i in range(natl)]
+    txt = [_tatica_iniciais(n) for n in nomes]
+    players = _go.Scatter(x=PX[0], y=PY[0], mode='markers+text', text=txt,
+                          textposition='middle center', textfont=dict(color='white', size=8),
+                          marker=dict(size=15, color=cols, line=dict(color='white', width=1.2)),
+                          hovertext=nomes, hoverinfo='text', name='atletas')
+    centro = _go.Scatter(x=[cxs[0]], y=[cys[0]], mode='markers',
+                         marker=dict(size=16, color='#FFD740', symbol='x',
+                                     line=dict(color='black', width=1)),
+                         hoverinfo='skip', name='centroide')
+    fig = _go.Figure(data=[hull_tr, players, centro])
+    _tatica_add_campo_shapes(fig, FL, FW)
+    frames = []
+    for k in range(nf):
+        hxk, hyk = hulls[k]
+        frames.append(_go.Frame(name=f"f{k}",
+                                data=[_go.Scatter(x=hxk, y=hyk),
+                                      _go.Scatter(x=PX[k], y=PY[k], text=txt),
+                                      _go.Scatter(x=[cxs[k]], y=[cys[k]])],
+                                traces=[0, 1, 2],
+                                layout=dict(title=dict(text=_hud(k),
+                                                       font=dict(color='white', size=12)))))
+    fig.frames = frames
+    fig.update_xaxes(range=[-3, FL + 3], showgrid=False, zeroline=False, visible=False)
+    fig.update_yaxes(range=[-3, FW + 3], showgrid=False, zeroline=False,
+                     scaleanchor='x', scaleratio=1, visible=False)
+    _tatica_anim_layout(fig, tempos)
+    fig.update_layout(title=dict(text=_hud(0), font=dict(color='white', size=12)))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ── Evolução temporal (largura/comprimento + área) ──────────────────
+    tmin = [(t - tempos[0]) / 60.0 for t in tempos]
+    ev = _go.Figure()
+    ev.add_trace(_go.Scatter(x=tmin, y=widths, mode='lines', name='Largura (m)',
+                             line=dict(color='#40C4FF', width=2)))
+    ev.add_trace(_go.Scatter(x=tmin, y=lengths, mode='lines', name='Comprimento (m)',
+                             line=dict(color='#69F0AE', width=2)))
+    ev.add_trace(_go.Scatter(x=tmin, y=areas, mode='lines', name='Área (m²)',
+                             line=dict(color='#FFAB40', width=2, dash='dot'), yaxis='y2'))
+    ev.update_layout(
+        height=240, paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+        margin=dict(l=40, r=50, t=30, b=35), font=dict(color='white', size=10),
+        title=dict(text='📈 Evolução do bloco (compactação × expansão)',
+                   font=dict(color='white', size=12)),
+        xaxis=dict(title='minutos', gridcolor='#1f2937'),
+        yaxis=dict(title='metros', gridcolor='#1f2937'),
+        yaxis2=dict(title='m²', overlaying='y', side='right', showgrid=False),
+        legend=dict(orientation='h', y=1.18, font=dict(size=9)),
+    )
+    st.plotly_chart(ev, use_container_width=True)
+
+
+def _tatica_view_voronoi(tempos, nomes, equipes, PX, PY, PV, FL, FW):
+    """🔷 Voronoi: cada ponto do campo pertence ao jogador mais próximo —
+    o 'vitral' tático que mostra cobertura de espaço e buracos."""
+    import numpy as _np
+    import plotly.graph_objects as _go
+    nf, natl = PX.shape
+
+    step = 2.0
+    gx = _np.arange(step / 2, FL, step)
+    gy = _np.arange(step / 2, FW, step)
+    GX, GY = _np.meshgrid(gx, gy)
+    flatx = GX.ravel()
+    flaty = GY.ravel()
+
+    cores = [_tatica_cor_atleta(i) for i in range(natl)]
+    # Colorscale discreta: faixa i → cor do atleta i (z = idx + 0.5).
+    cs = []
+    for i, c in enumerate(cores):
+        cs.append([i / natl, c])
+        cs.append([(i + 1) / natl, c])
+
+    def _z_frame(k):
+        ex = PX[k]
+        ey = PY[k]
+        valid = ~_np.isnan(ex) & ~_np.isnan(ey)
+        idxs = _np.where(valid)[0]
+        if idxs.size == 0:
+            return _np.full(GX.shape, _np.nan)
+        dx = flatx[:, None] - ex[idxs][None, :]
+        dy = flaty[:, None] - ey[idxs][None, :]
+        d2 = dx * dx + dy * dy
+        nearest = idxs[_np.argmin(d2, axis=1)]
+        return (nearest + 0.5).reshape(GX.shape)
+
+    txt = [_tatica_iniciais(n) for n in nomes]
+    z0 = _z_frame(0)
+    heat = _go.Heatmap(x=gx, y=gy, z=z0, zmin=0.0, zmax=float(natl),
+                       colorscale=cs, opacity=0.5, showscale=False,
+                       hoverinfo='skip', name='voronoi')
+    players = _go.Scatter(x=PX[0], y=PY[0], mode='markers+text', text=txt,
+                          textposition='middle center', textfont=dict(color='black', size=8),
+                          marker=dict(size=15, color=cores, line=dict(color='white', width=2)),
+                          hovertext=nomes, hoverinfo='text', name='atletas')
+    fig = _go.Figure(data=[heat, players])
+    _tatica_add_campo_shapes(fig, FL, FW, line_color='rgba(255,255,255,0.95)')
+    frames = []
+    for k in range(nf):
+        frames.append(_go.Frame(name=f"f{k}",
+                                data=[_go.Heatmap(z=_z_frame(k)),
+                                      _go.Scatter(x=PX[k], y=PY[k], text=txt)],
+                                traces=[0, 1]))
+    fig.frames = frames
+    fig.update_xaxes(range=[-3, FL + 3], showgrid=False, zeroline=False, visible=False)
+    fig.update_yaxes(range=[-3, FW + 3], showgrid=False, zeroline=False,
+                     scaleanchor='x', scaleratio=1, visible=False)
+    _tatica_anim_layout(fig, tempos)
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _tatica_view_replay3d(tempos, nomes, equipes, PX, PY, PV, FL, FW):
+    """🎥 Replay 3D: campo plano + jogadores como marcadores 3D navegáveis
+    (câmera livre) — um 'broadcast sintético' a partir só das coordenadas."""
+    import numpy as _np
+    import plotly.graph_objects as _go
+    nf, natl = PX.shape
+
+    Xf, Yf = _np.meshgrid(_np.linspace(0, FL, 2), _np.linspace(0, FW, 2))
+    Zf = _np.zeros_like(Xf)
+    surf = _go.Surface(x=Xf, y=Yf, z=Zf, showscale=False, opacity=1.0,
+                       colorscale=[[0, '#2a7325'], [1, '#236b1e']], hoverinfo='skip')
+
+    def _line3d(xs, ys, w=4):
+        return _go.Scatter3d(x=xs, y=ys, z=[0.05] * len(xs), mode='lines',
+                             line=dict(color='white', width=w),
+                             hoverinfo='skip', showlegend=False)
+
+    cy = FW / 2.0
+    perim = _line3d([0, FL, FL, 0, 0], [0, 0, FW, FW, 0])
+    mid = _line3d([FL / 2, FL / 2], [0, FW])
+    th = _np.linspace(0, 2 * _np.pi, 60)
+    circ = _line3d((FL / 2 + 9.15 * _np.cos(th)).tolist(), (cy + 9.15 * _np.sin(th)).tolist(), w=3)
+
+    eq_validas = [e for e in dict.fromkeys(equipes) if e]
+    dois_times = len(eq_validas) >= 2
+    if dois_times:
+        cols = ['#2196F3' if equipes[i] == eq_validas[0] else '#E53935' for i in range(natl)]
+    else:
+        cols = [_tatica_cor_atleta(i) for i in range(natl)]
+    txt = [_tatica_iniciais(n) for n in nomes]
+    z_dot = 2.0
+    players = _go.Scatter3d(x=PX[0], y=PY[0], z=[z_dot] * natl, mode='markers+text',
+                            text=txt, textfont=dict(color='white', size=9),
+                            marker=dict(size=6, color=cols, line=dict(color='white', width=1)),
+                            hovertext=nomes, hoverinfo='text', name='atletas')
+    fig = _go.Figure(data=[surf, perim, mid, circ, players])
+    frames = [_go.Frame(name=f"f{k}",
+                        data=[_go.Scatter3d(x=PX[k], y=PY[k], z=[z_dot] * natl, text=txt)],
+                        traces=[4]) for k in range(nf)]
+    fig.frames = frames
+    fig.update_layout(
+        scene=dict(
+            xaxis=dict(range=[-2, FL + 2], visible=False),
+            yaxis=dict(range=[-2, FW + 2], visible=False),
+            zaxis=dict(range=[0, 20], visible=False),
+            aspectmode='manual', aspectratio=dict(x=2.0, y=1.3, z=0.35),
+            camera=dict(eye=dict(x=0.15, y=-1.7, z=1.05)),
+            bgcolor='#0e1117',
+        ),
+    )
+    _tatica_anim_layout(fig, tempos, height=620)
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atletas_sel):
+    """Aba 🧠 Tática Coletiva — orquestra as 4 visões coletivas."""
+    import numpy as _np
+
+    st.markdown("### 🧠 Tática Coletiva")
+    st.caption("O time como **sistema**: visões que cruzam a posição de todos os "
+               "atletas no mesmo instante. Pitch Control, respiração do bloco, "
+               "domínio de espaço (Voronoi) e replay 3D navegável.")
+
+    if not dados_posicao_por_periodo:
+        st.info("Carregue dados de posição (x/y de campo) para usar a Tática Coletiva.")
+        return
+
+    pers_validos = []
+    for p, dd in dados_posicao_por_periodo.items():
+        n_ok = sum(1 for a in atletas_sel
+                   if len(dd.get(a, {}).get('xs', [])) >= 5
+                   and len(dd.get(a, {}).get('ys', [])) >= 5)
+        if n_ok >= 2:
+            pers_validos.append((p, n_ok))
+    if not pers_validos:
+        st.warning("Esta aba precisa de **pelo menos 2 atletas com coordenadas de campo (x/y) "
+                   "no mesmo período**. Dispositivos só-GPS sem projeção de campo (venue) não "
+                   "fornecem x/y — confirme se a atividade tem um venue/campo configurado.")
+        return
+
+    n_ok_map = dict(pers_validos)
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        per_sel = st.selectbox("Período", [p for p, _ in pers_validos],
+                               format_func=lambda p: f"{p} ({n_ok_map[p]} atletas)",
+                               key="tatica_periodo")
+    with c2:
+        vis = st.radio("Visualização",
+                       ["🎯 Pitch Control", "🫁 Respiração da equipe", "🔷 Voronoi", "🎥 Replay 3D"],
+                       horizontal=True, key="tatica_vis")
+
+    dados_periodo = dados_posicao_por_periodo.get(per_sel, {})
+    frames = _tatica_frames_sincronizados(dados_periodo, atletas_sel)
+    if frames is None:
+        st.warning("Não foi possível sincronizar os atletas neste período "
+                   "(sem sobreposição temporal suficiente).")
+        return
+    tempos, nomes, equipes, posicoes, PX, PY, PV = frames
+    nf, natl = PX.shape
+
+    _venue = st.session_state.get('venue', {})
+    FL = float(_venue.get('length') or 105.0)
+    FW = float(_venue.get('width') or 68.0)
+
+    dur_s = float(tempos[-1] - tempos[0])
+    st.caption(f"⏱️ {nf} frames · {natl} atletas sincronizados · "
+               f"{dur_s / 60.0:.1f} min · campo {FL:.0f}×{FW:.0f} m")
+
+    if vis.startswith("🎯"):
+        _tatica_view_pitch_control(tempos, nomes, equipes, PX, PY, PV, FL, FW)
+        st.caption("🎯 **Pitch Control** (modelo de William Spearman, Liverpool FC). A cor mostra "
+                   "quão **dominado** está cada ponto do campo — calculado pelo tempo de chegada "
+                   "do jogador mais próximo, com a posição projetada pela velocidade atual. "
+                   "Quente = espaço sob controle; transparente = espaço livre. "
+                   "Com 2 equipes nos dados, vira controle **contestado** (azul × vermelho).")
+    elif vis.startswith("🫁"):
+        _tatica_view_respiracao(tempos, nomes, equipes, PX, PY, PV, FL, FW)
+        st.caption("🫁 **Respiração da equipe**: o polígono (casco convexo) e o centroide (✕) "
+                   "mostram o bloco **comprimindo** na marcação e **expandindo** na posse. "
+                   "O gráfico abaixo acompanha largura, comprimento e área ao longo do tempo.")
+    elif vis.startswith("🔷"):
+        _tatica_view_voronoi(tempos, nomes, equipes, PX, PY, PV, FL, FW)
+        st.caption("🔷 **Voronoi**: cada célula do campo é colorida pelo jogador **mais próximo**. "
+                   "Células grandes = jogador cobrindo muito espaço; zonas sem dono = buracos "
+                   "de cobertura.")
+    else:
+        _tatica_view_replay3d(tempos, nomes, equipes, PX, PY, PV, FL, FW)
+        st.caption("🎥 **Replay 3D**: 'broadcast sintético' reconstruído só das coordenadas. "
+                   "Arraste para girar a câmera, role para dar zoom e use Play para animar.")
+
+
 def combinar_periodos_continuo(dados_sensor_por_atleta_por_periodo: dict, atleta: str) -> list:
     """
     Combina sensor_points de múltiplos períodos em uma linha do tempo contínua.
@@ -6813,6 +7396,7 @@ Escolha um ou mais atletas para análise simultânea.
                 "🏠 Resumo",
                 "🗺️ Campo & GPS",
                 "📈 Carga Física",
+                "🧠 Tática Coletiva",
                 "📡 Ao Vivo",
             ])
 
@@ -6823,6 +7407,8 @@ Escolha um ou mais atletas para análise simultânea.
                 _sub_campo = st.tabs(["🗺️ Campo de Futebol", "🎬 História do Jogo", "⚡ WCS"])
             with _main_tabs[2]:
                 _sub_carga = st.tabs(["⏱️ Esforços", "📊 Janelas Temporais", "💪 Neuromuscular", "🏎️ Acc-Vel", "❤️ FC"])
+            with _main_tabs[3]:
+                render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, st.session_state.atletas_sel)
 
             # Mapeamento: abas[N] aponta para o container correto na nova estrutura
             abas = [
@@ -6834,7 +7420,7 @@ Escolha um ou mais atletas para análise simultânea.
                 _sub_carga[4],    # 5: FC (TRIMP + Zonas)      → Carga Física
                 _sub_resumo[1],   # 6: Por Posição             → Resumo ✓
                 _sub_campo[1],    # 7: História do Jogo        → Campo & GPS
-                _main_tabs[3],    # 8: Ao Vivo                → Ao Vivo (tab principal)
+                _main_tabs[4],    # 8: Ao Vivo                → Ao Vivo (tab principal)
             ]
 
             # ==================== ABA RESUMO: OVERVIEW DASHBOARD ====================
