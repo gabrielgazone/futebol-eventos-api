@@ -3686,6 +3686,126 @@ def _tatica_frames_sincronizados(dados_periodo: dict, atletas_sel, max_frames: i
     return tempos, nomes, equipes, posicoes, PX, PY, PV
 
 
+def _tatica_pos_ok(d: dict) -> bool:
+    """True se o atleta tem posição utilizável: x/y de campo nativo OU GPS
+    (lat/lon + timestamps) para reconstruir as coordenadas."""
+    if len(d.get('xs', [])) >= 5 and len(d.get('ys', [])) >= 5:
+        return True
+    if len(d.get('lats', [])) >= 5 and len(d.get('ts_gps', [])) >= 5:
+        return True
+    return False
+
+
+def _tatica_resolver_campo_config(dados_periodo: dict, atletas_sel):
+    """Resolve um campo_config (lat/lon/rot/fl/fw) para projetar GPS→campo.
+
+    Prioridade: (1) campo já aplicado na aba Campo & GPS; (2) venue salvo no
+    banco compartilhado; (3) AUTO — centro = mediana do GPS de todos os atletas
+    e rotação estimada por PCA (eixo principal da nuvem ≈ comprimento do campo).
+    Retorna (cfg_dict, fonte_str) ou (None, motivo_str)."""
+    import numpy as _np
+
+    # 1) Campo já aplicado pelo usuário na aba Campo & GPS (vale para todos).
+    for a in atletas_sel:
+        c = st.session_state.get(f"campo_cfg__{a}")
+        if c and c.get('lat') and c.get('lon'):
+            return dict(c), 'campo aplicado na aba Campo & GPS'
+
+    # 2) Venue salvo no banco compartilhado.
+    try:
+        vname = st.session_state.get('venue', {}).get('name', '')
+        vdb = _carregar_venues()
+        if vname and vname in vdb:
+            v = vdb[vname]
+            if v.get('lat') and v.get('lon'):
+                return ({'lat': float(v['lat']), 'lon': float(v['lon']),
+                         'rot': float(v.get('rot', 0)), 'fl': float(v.get('fl', 105)),
+                         'fw': float(v.get('fw', 68)), 'ig': int(v.get('ig', 1))},
+                        f'venue salvo "{vname}"')
+    except Exception:
+        pass
+
+    # 3) AUTO: centro = mediana GPS; rotação = eixo principal (PCA).
+    lats, lons = [], []
+    for a in atletas_sel:
+        d = dados_periodo.get(a, {})
+        lats += list(d.get('lats', []))
+        lons += list(d.get('lons', []))
+    if len(lats) < 20:
+        return None, 'sem GPS suficiente para reconstruir o campo'
+    lat0 = float(_np.median(lats))
+    lon0 = float(_np.median(lons))
+    la = _np.asarray(lats, dtype=float)
+    lo = _np.asarray(lons, dtype=float)
+    north = (la - lat0) * 111320.0
+    east = (lo - lon0) * 111320.0 * _np.cos(_np.radians(lat0))
+    rot = 0.0
+    try:
+        cov = _np.cov(_np.vstack([east, north]))
+        vals, vecs = _np.linalg.eigh(cov)
+        pe, pn = vecs[:, int(_np.argmax(vals))]
+        rot = float(-_np.degrees(_np.arctan2(pn, pe)))
+    except Exception:
+        rot = 0.0
+    venue = st.session_state.get('venue', {})
+    fl = float(venue.get('length') or 105.0)
+    fw = float(venue.get('width') or 68.0)
+    if fl < fw:
+        fl, fw = fw, fl
+    return ({'lat': lat0, 'lon': lon0, 'rot': rot, 'fl': fl, 'fw': fw, 'ig': 1},
+            'auto (centro = mediana GPS · rotação por PCA)')
+
+
+def _tatica_preparar_dados(dados_periodo: dict, atletas_sel):
+    """Garante coordenadas de campo (xs/ys/ts_pos/vel) para cada atleta. Usa o
+    x/y nativo quando existe; senão projeta o GPS (lat/lon → campo) com um
+    campo_config resolvido. Retorna (dados_prep, fonte, FL, FW, n_projetados)."""
+    nativos = [a for a in atletas_sel
+               if len(dados_periodo.get(a, {}).get('xs', [])) >= 5
+               and len(dados_periodo.get(a, {}).get('ys', [])) >= 5]
+    gps_only = [a for a in atletas_sel
+                if a not in nativos
+                and len(dados_periodo.get(a, {}).get('lats', [])) >= 5
+                and len(dados_periodo.get(a, {}).get('ts_gps', [])) >= 5]
+
+    venue = st.session_state.get('venue', {})
+    FL = float(venue.get('length') or 105.0)
+    FW = float(venue.get('width') or 68.0)
+    dados_prep = {a: dict(dados_periodo.get(a, {})) for a in atletas_sel}
+    fonte = 'x/y de campo nativo (API)'
+    n_proj = 0
+
+    if gps_only:
+        cfg, fnt = _tatica_resolver_campo_config(dados_periodo, atletas_sel)
+        if cfg:
+            FL = float(cfg.get('fl', FL))
+            FW = float(cfg.get('fw', FW))
+            for a in gps_only:
+                d = dados_periodo.get(a, {})
+                lats = d.get('lats', [])
+                lons = d.get('lons', [])
+                ts = d.get('ts_gps', [])
+                vel = d.get('vels_gps', [])
+                n = min(len(lats), len(lons), len(ts))
+                if n < 5:
+                    continue
+                try:
+                    fx, fy = gps_para_campo_coords(list(lats[:n]), list(lons[:n]), cfg)
+                except Exception:
+                    continue
+                dd = dict(d)
+                dd['xs'] = fx
+                dd['ys'] = fy
+                dd['ts_pos'] = list(ts[:n])
+                dd['vel'] = list(vel[:n]) if len(vel) >= n else [0.0] * n
+                dados_prep[a] = dd
+                n_proj += 1
+            if n_proj:
+                fonte = (f'misto: nativo + GPS→campo ({fnt})' if nativos
+                         else f'GPS→campo · {fnt}')
+    return dados_prep, fonte, FL, FW, n_proj
+
+
 def _tatica_add_campo_shapes(fig, FL, FW, line_color='rgba(255,255,255,0.85)'):
     """Marcações brancas do campo como shapes (layer='above') — ficam por cima
     de heatmaps (Pitch Control / Voronoi)."""
@@ -4066,15 +4186,13 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
 
     pers_validos = []
     for p, dd in dados_posicao_por_periodo.items():
-        n_ok = sum(1 for a in atletas_sel
-                   if len(dd.get(a, {}).get('xs', [])) >= 5
-                   and len(dd.get(a, {}).get('ys', [])) >= 5)
+        n_ok = sum(1 for a in atletas_sel if _tatica_pos_ok(dd.get(a, {})))
         if n_ok >= 2:
             pers_validos.append((p, n_ok))
     if not pers_validos:
-        st.warning("Esta aba precisa de **pelo menos 2 atletas com coordenadas de campo (x/y) "
-                   "no mesmo período**. Dispositivos só-GPS sem projeção de campo (venue) não "
-                   "fornecem x/y — confirme se a atividade tem um venue/campo configurado.")
+        st.warning("Esta aba precisa de **pelo menos 2 atletas com posição no mesmo período** — "
+                   "x/y de campo nativo **ou** trajetória GPS (lat/lon) para reconstruir as "
+                   "coordenadas. Confirme se os atletas têm GPS carregado nesta atividade.")
         return
 
     n_ok_map = dict(pers_validos)
@@ -4089,7 +4207,8 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
                        horizontal=True, key="tatica_vis")
 
     dados_periodo = dados_posicao_por_periodo.get(per_sel, {})
-    frames = _tatica_frames_sincronizados(dados_periodo, atletas_sel)
+    dados_prep, _fonte_pos, FL, FW, _n_proj = _tatica_preparar_dados(dados_periodo, atletas_sel)
+    frames = _tatica_frames_sincronizados(dados_prep, atletas_sel)
     if frames is None:
         st.warning("Não foi possível sincronizar os atletas neste período "
                    "(sem sobreposição temporal suficiente).")
@@ -4097,13 +4216,14 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
     tempos, nomes, equipes, posicoes, PX, PY, PV = frames
     nf, natl = PX.shape
 
-    _venue = st.session_state.get('venue', {})
-    FL = float(_venue.get('length') or 105.0)
-    FW = float(_venue.get('width') or 68.0)
-
     dur_s = float(tempos[-1] - tempos[0])
     st.caption(f"⏱️ {nf} frames · {natl} atletas sincronizados · "
-               f"{dur_s / 60.0:.1f} min · campo {FL:.0f}×{FW:.0f} m")
+               f"{dur_s / 60.0:.1f} min · campo {FL:.0f}×{FW:.0f} m · 📍 {_fonte_pos}")
+    if _n_proj > 0:
+        st.info("📍 Coordenadas de campo **reconstruídas a partir do GPS** (lat/lon → campo). "
+                "As posições **relativas** entre jogadores são fiéis; o alinhamento absoluto do "
+                "campo é aproximado. Para registro exato, configure o campo na aba "
+                "**Campo & GPS** (será usado automaticamente aqui).")
 
     if vis.startswith("🎯"):
         _tatica_view_pitch_control(tempos, nomes, equipes, PX, PY, PV, FL, FW)
