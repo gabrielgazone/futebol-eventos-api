@@ -1077,13 +1077,18 @@ BANDAS_VEL = {
     5: {'label': 'B5 — 25.2-29.9 km/h (Alta Velocidade)', 'min': 25.2, 'max': 29.9, 'color': '#FF5722'},
     6: {'label': 'B6 — 29.9-45 km/h (Sprint)',          'min': 29.9,  'max': 45,    'color': '#F44336'},
 }
+# Espelha as "Bandas Globais → Gen2Acceleration" da conta Catapult (m/s²).
+# A API Connect v6 também NÃO expõe estes cortes — são configurados manualmente
+# na barra lateral, mesmo raciocínio das bandas de velocidade.
 BANDAS_ACC = {
-    'A3': {'label': 'Acc +3 — > 2 m/s² (Alta Aceleração)',   'min': 2,     'max': 9999, 'color': '#00C853'},
-    'A2': {'label': 'Acc +2 — 1-2 m/s²',                    'min': 1,     'max': 2,    'color': '#69F0AE'},
-    'A1': {'label': 'Acc +1 — 0.1-1 m/s²',                  'min': 0.1,   'max': 1,    'color': '#B9F6CA'},
-    'D1': {'label': 'Dec -1 — 0 a -1 m/s²',                 'min': -1,    'max': -0.1, 'color': '#FFD180'},
-    'D2': {'label': 'Dec -2 — -1 a -2 m/s²',                'min': -2,    'max': -1,   'color': '#FF6D00'},
-    'D3': {'label': 'Dec -3 — < -2 m/s² (Alta Desacel.)',   'min': -9999, 'max': -2,   'color': '#DD2C00'},
+    'A1': {'label': '4 a 10 m/s² (Aceleração Máx)',  'min': 4,    'max': 10,  'color': '#00C853'},
+    'A2': {'label': '3 a 4 m/s² (Alta Aceleração)',  'min': 3,    'max': 4,   'color': '#43A047'},
+    'A3': {'label': '2 a 3 m/s² (Aceleração)',       'min': 2,    'max': 3,   'color': '#69F0AE'},
+    'A4': {'label': '0 a 2 m/s² (Aceleração Leve)',  'min': 0,    'max': 2,   'color': '#B9F6CA'},
+    'D1': {'label': '-2 a 0 m/s² (Desacel. Leve)',   'min': -2,   'max': 0,   'color': '#FFD180'},
+    'D2': {'label': '-3 a -2 m/s² (Desaceleração)',  'min': -3,   'max': -2,  'color': '#FF6D00'},
+    'D3': {'label': '-4 a -3 m/s² (Alta Desacel.)',  'min': -4,   'max': -3,  'color': '#DD2C00'},
+    'D4': {'label': '-10 a -4 m/s² (Desacel. Máx)',  'min': -10,  'max': -4,  'color': '#B71C1C'},
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1156,13 +1161,17 @@ def get_zones_for_athlete(athlete_name):
 
 
 # ── Defaults de aceleração ────────────────────────────────────────────────────
+# Espelha as "Bandas Globais → Gen2Acceleration" da conta Catapult (m/s²):
+# 8 bandas → -10/-4 · -4/-3 · -3/-2 · -2/0 · 0/2 · 2/3 · 3/4 · 4/10.
 _DEFAULT_ACCELERATION_ZONES = [
-    {'name': 'A3 — Alta Aceleração', 'min_ms2': 2.0,   'max_ms2': 9999,  'color': '#00C853'},
-    {'name': 'A2 — Aceleração',      'min_ms2': 1.0,   'max_ms2': 2.0,   'color': '#69F0AE'},
-    {'name': 'A1 — Aceleração Leve', 'min_ms2': 0.1,   'max_ms2': 1.0,   'color': '#B9F6CA'},
-    {'name': 'D1 — Desacel. Leve',   'min_ms2': -1.0,  'max_ms2': -0.1,  'color': '#FFD180'},
-    {'name': 'D2 — Desaceleração',   'min_ms2': -2.0,  'max_ms2': -1.0,  'color': '#FF6D00'},
-    {'name': 'D3 — Alta Desacel.',   'min_ms2': -9999, 'max_ms2': -2.0,  'color': '#DD2C00'},
+    {'name': 'Aceleração Máx',  'min_ms2': 4.0,   'max_ms2': 10.0,  'color': '#00C853'},
+    {'name': 'Alta Aceleração', 'min_ms2': 3.0,   'max_ms2': 4.0,   'color': '#43A047'},
+    {'name': 'Aceleração',      'min_ms2': 2.0,   'max_ms2': 3.0,   'color': '#69F0AE'},
+    {'name': 'Aceleração Leve', 'min_ms2': 0.0,   'max_ms2': 2.0,   'color': '#B9F6CA'},
+    {'name': 'Desacel. Leve',   'min_ms2': -2.0,  'max_ms2': 0.0,   'color': '#FFD180'},
+    {'name': 'Desaceleração',   'min_ms2': -3.0,  'max_ms2': -2.0,  'color': '#FF6D00'},
+    {'name': 'Alta Desacel.',   'min_ms2': -4.0,  'max_ms2': -3.0,  'color': '#DD2C00'},
+    {'name': 'Desacel. Máx',    'min_ms2': -10.0, 'max_ms2': -4.0,  'color': '#B71C1C'},
 ]
 
 
@@ -1332,8 +1341,10 @@ def _rotulo_banda_vel(band_raw) -> str:
     return f"{n} — {faixa}" + (f" ({nome})" if nome else "")
 
 
-# API de aceleração: band -3..3 → chaves internas A1..A3 / D1..D3
-_ACC_BAND_MAP = {1: 'A1', 2: 'A2', 3: 'A3', -1: 'D1', -2: 'D2', -3: 'D3'}
+# API de aceleração: band ±1..±4 → chaves internas A1..A4 / D1..D4
+# (Gen2Acceleration usa 8 bandas; mantém compatibilidade com ±3 anteriores)
+_ACC_BAND_MAP = {1: 'A1', 2: 'A2', 3: 'A3', 4: 'A4',
+                 -1: 'D1', -2: 'D2', -3: 'D3', -4: 'D4'}
 # Mapa inverso (chave interna → número da banda), usado no fallback local.
 _ACC_KEY_TO_NUM = {v: k for k, v in _ACC_BAND_MAP.items()}
 
@@ -1364,22 +1375,41 @@ def _bandas_acc_ativas() -> dict:
         return BANDAS_ACC
     if not zones:
         return BANDAS_ACC
+    def _fa(v):
+        """Formata limite de aceleração (m/s²), tratando ±infinito."""
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            return str(v)
+        if fv <= -9000:
+            return '-∞'
+        if fv >= 9000:
+            return '∞'
+        return str(int(fv)) if fv == int(fv) else f"{fv:g}"
+
     result = {}
-    # Ordena: acc positivas primeiro (A1, A2, A3), depois negativas (D1, D2, D3)
+    # Acelerações (positivas) → A1 (maior) … An (mais leve);
+    # desacelerações (negativas) → D1 (mais leve) … Dn (maior).
     pos_z = sorted([z for z in zones if z.get('min_ms2', 0) >= 0],
                    key=lambda z: z['min_ms2'])
     neg_z = sorted([z for z in zones if z.get('max_ms2', 0) <= 0],
                    key=lambda z: z['max_ms2'], reverse=True)
     for i, z in enumerate(reversed(pos_z), start=1):
+        _mn, _mx = z['min_ms2'], z['max_ms2']
+        _nome = (z.get('name') or '').strip()
+        _rng  = f"{_fa(_mn)} a {_fa(_mx)} m/s²"
         result[f'A{i}'] = {
-            'label': z.get('name', f'Acc +{i}'),
-            'min':   z['min_ms2'], 'max': z['max_ms2'],
+            'label': f"{_rng} ({_nome})" if _nome else _rng,
+            'min':   _mn, 'max': _mx,
             'color': z.get('color', '#69F0AE'),
         }
     for i, z in enumerate(neg_z, start=1):
+        _mn, _mx = z['min_ms2'], z['max_ms2']
+        _nome = (z.get('name') or '').strip()
+        _rng  = f"{_fa(_mn)} a {_fa(_mx)} m/s²"
         result[f'D{i}'] = {
-            'label': z.get('name', f'Dec -{i}'),
-            'min':   z['min_ms2'], 'max': z['max_ms2'],
+            'label': f"{_rng} ({_nome})" if _nome else _rng,
+            'min':   _mn, 'max': _mx,
             'color': z.get('color', '#FF6D00'),
         }
     return result if result else BANDAS_ACC
@@ -5858,6 +5888,76 @@ Escolha um ou mais atletas para análise simultânea.
                         "(unidades), mas **nenhum corte de banda** (7 / 14.4 / "
                         "19.8 …). Por isso os limites são definidos aqui no editor."
                     )
+
+        # ── Bandas de Aceleração — editor "Gen2Acceleration" ──────────────
+        # Mesmo raciocínio das bandas de velocidade: a API Connect v6 não expõe
+        # os cortes da tela "Bandas Globais → Gen2Acceleration", então o usuário
+        # define aqui os mesmos valores (m/s²). Fluem por _bandas_acc_ativas().
+        if not st.session_state.get('df_activities', pd.DataFrame()).empty and token:
+            with st.expander("🏷️ Bandas de Aceleração", expanded=False):
+                st.caption(
+                    "Defina aqui os mesmos limites da tela **Bandas Globais → "
+                    "Gen2Acceleration** do OpenField (m/s²). A API Connect v6 não "
+                    "fornece estes cortes, então são configurados manualmente e "
+                    "usados em todo o app (WCS, mapa, efforts)."
+                )
+
+                _cur_az = (
+                    st.session_state.get('acceleration_zones_account')
+                    or _DEFAULT_ACCELERATION_ZONES
+                )
+                _df_edit_az = pd.DataFrame([
+                    {
+                        'Banda':       z.get('name', f'Banda {_i+1}'),
+                        'Mín (m/s²)':  round(float(z['min_ms2']), 2),
+                        'Máx (m/s²)':  round(float(z['max_ms2']), 2),
+                        'Cor':         z.get('color', '#888888'),
+                    }
+                    for _i, z in enumerate(_cur_az)
+                ])
+                _edited_az = st.data_editor(
+                    _df_edit_az,
+                    use_container_width=True, hide_index=True,
+                    num_rows="dynamic", key="editor_acc_zones",
+                    column_config={
+                        'Banda': st.column_config.TextColumn('Banda'),
+                        'Mín (m/s²)': st.column_config.NumberColumn(
+                            'Mín (m/s²)', min_value=-20.0, max_value=20.0, step=0.1, format="%.2f"),
+                        'Máx (m/s²)': st.column_config.NumberColumn(
+                            'Máx (m/s²)', min_value=-20.0, max_value=20.0, step=0.1, format="%.2f"),
+                        'Cor': st.column_config.TextColumn('Cor (hex)'),
+                    },
+                )
+
+                _cc_az_save, _cc_az_reset = st.columns(2)
+                with _cc_az_save:
+                    if st.button("💾 Salvar bandas", key="btn_save_acc_zones",
+                                 use_container_width=True):
+                        _new_az = []
+                        for _, _row in _edited_az.iterrows():
+                            try:
+                                _mn = float(_row['Mín (m/s²)'])
+                                _mx = float(_row['Máx (m/s²)'])
+                            except (TypeError, ValueError):
+                                continue
+                            _new_az.append({
+                                'name':    str(_row.get('Banda') or '').strip() or f'Banda {len(_new_az)+1}',
+                                'min_ms2': _mn,
+                                'max_ms2': _mx,
+                                'color':   str(_row.get('Cor') or '#888888').strip() or '#888888',
+                            })
+                        if _new_az:
+                            st.session_state['acceleration_zones_account'] = _new_az
+                            st.success(f"✅ {len(_new_az)} bandas de aceleração salvas.")
+                            st.rerun()
+                        else:
+                            st.warning("Nenhuma banda válida para salvar.")
+                with _cc_az_reset:
+                    if st.button("↩️ Restaurar Catapult", key="btn_reset_acc_zones",
+                                 use_container_width=True,
+                                 help="Restaura os valores Gen2Acceleration da Catapult."):
+                        st.session_state['acceleration_zones_account'] = _DEFAULT_ACCELERATION_ZONES[:]
+                        st.rerun()
 
         # ── Parâmetros disponíveis (FEATURE 6) ───────────────────────────
         _avail_params = st.session_state.get('available_params')
