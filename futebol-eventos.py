@@ -791,6 +791,69 @@ def detectar_eventos_acc(acc_arr, limiar, min_dur_s=0.6, acima=True, freq_hz=10)
     return eventos
 
 
+def detectar_acoes_acc_idx(acc_arr, sel_acc_bands, min_dur_s=None, freq_hz=10):
+    """
+    Conta AÇÕES discretas de acel/desacel a partir da série de aceleração
+    (m/s², por amostra) — usado como FALLBACK quando a API não retorna
+    `acceleration_efforts`. Cada ação é uma entrada sustentada por pelo menos
+    `min_dur_s` numa zona de threshold, classificada pelo pico numa das bandas
+    selecionadas. Conta cada ação UMA vez (igual ao conceito de "effort").
+
+    Retorna a lista de índices (frame de início de cada ação) — equivalente ao
+    start_time dos efforts da Catapult, para ser somado na janela rolante.
+    """
+    if acc_arr is None or len(acc_arr) == 0 or not sel_acc_bands:
+        return []
+    if min_dur_s is None:
+        min_dur_s = get_min_dur_s()
+    min_frames = max(1, int(round(min_dur_s * freq_hz)))
+
+    faixas_pos = [(float(b.get('min', 0)), float(b.get('max', 0)))
+                  for b in sel_acc_bands if float(b.get('min', 0)) >= 0]
+    faixas_neg = [(float(b.get('min', 0)), float(b.get('max', 0)))
+                  for b in sel_acc_bands if float(b.get('max', 0)) <= 0]
+
+    a = np.asarray(acc_arr, dtype=float)
+    n = len(a)
+    starts = []
+
+    def _scan(thr, positivo, faixas):
+        if not faixas:
+            return
+        _top_hi = max(hi for _, hi in faixas)   # banda extrema (inclusiva no topo)
+        run = 0
+        start_i = -1
+        peak = 0.0
+        counted = False
+        for i in range(n):
+            v = a[i]
+            cond = (v >= thr) if positivo else (v <= -thr)
+            if cond:
+                if run == 0:
+                    start_i = i
+                    peak = v
+                run += 1
+                if (v > peak) if positivo else (v < peak):
+                    peak = v
+                if run >= min_frames and not counted:
+                    _ok = any(lo <= peak < hi for lo, hi in faixas)
+                    if not _ok and positivo and peak >= _top_hi:
+                        _ok = True   # satura no topo (ex.: 10 m/s²)
+                    if _ok:
+                        starts.append(start_i)
+                    counted = True
+            else:
+                run = 0
+                counted = False
+                peak = 0.0
+
+    if faixas_pos:
+        _scan(min(lo for lo, _ in faixas_pos), True, faixas_pos)
+    if faixas_neg:
+        _scan(min(abs(hi) for _, hi in faixas_neg), False, faixas_neg)
+    return sorted(starts)
+
+
 def get_min_dur_s():
     """Lê o slider de duração mínima de acc/dec do session_state."""
     return float(st.session_state.get('min_dur_esforco', _DEFAULT_MIN_DUR_S))
@@ -9420,19 +9483,22 @@ Escolha um ou mais atletas para análise simultânea.
                         else:
                             _ps = [periodo_janela]
 
-                        # Timeline concatenada (ts_pos), idêntica à construção do WCS
-                        _wts = []
+                        # Timeline concatenada (ts_pos + acc), idêntica à do WCS
+                        _wts, _wac = [], []
                         for _pn in _ps:
                             _da = dados_posicao_por_periodo.get(_pn, {}).get(_atl, {})
                             _xs = _da.get('xs', [])
                             _ys = _da.get('ys', [])
                             _ts = _da.get('ts_pos', [])
+                            _ac = _da.get('acc', [])
                             _nn = (min(len(_xs), len(_ys))
                                    if (_xs and _ys) else len(_ts))
                             if _nn == 0:
                                 continue
                             _ts_pad = list(_ts[:_nn]) + [0.0] * max(0, _nn - len(_ts))
+                            _ac_pad = list(_ac[:_nn]) + [0.0] * max(0, _nn - len(_ac))
                             _wts += _ts_pad
+                            _wac += _ac_pad
 
                         _Hz = _hz_jan
                         _n = max(2, int(window_minutes * 60 * _Hz))
@@ -9454,22 +9520,34 @@ Escolha um ou mais atletas para análise simultânea.
                         _wts_np = np.array(_wts, dtype=float)
                         _ts_unix_ok = (_wts_np.size > 0
                                        and float(np.median(_wts_np)) > 1e6)
-                        if not _ts_unix_ok:
-                            return [], []
-                        for _pn in _ps:
-                            _effs = (dados_efforts_acc_por_periodo
-                                     .get(_pn, {}).get(_atl, []) or [])
-                            for _ef in _effs:
-                                try:
-                                    _acv = float(_ef.get('acceleration'))
-                                    _stt = float(_ef.get('start_time') or 0)
-                                except (TypeError, ValueError):
-                                    continue
-                                if _stt <= 0 or not _in_aband(_acv):
-                                    continue
-                                _idx = int(np.argmin(np.abs(_wts_np - _stt)))
-                                if 0 <= _idx < len(_sv):
-                                    _sv[_idx] += 1.0
+                        _has_api_eff = any(
+                            len(dados_efforts_acc_por_periodo
+                                .get(_pn, {}).get(_atl, []) or []) > 0
+                            for _pn in _ps)
+                        if _ts_unix_ok and _has_api_eff:
+                            # AÇÕES reais (efforts da Catapult)
+                            for _pn in _ps:
+                                _effs = (dados_efforts_acc_por_periodo
+                                         .get(_pn, {}).get(_atl, []) or [])
+                                for _ef in _effs:
+                                    try:
+                                        _acv = float(_ef.get('acceleration'))
+                                        _stt = float(_ef.get('start_time') or 0)
+                                    except (TypeError, ValueError):
+                                        continue
+                                    if _stt <= 0 or not _in_aband(_acv):
+                                        continue
+                                    _idx = int(np.argmin(np.abs(_wts_np - _stt)))
+                                    if 0 <= _idx < len(_sv):
+                                        _sv[_idx] += 1.0
+                        else:
+                            # Fallback (API sem efforts): AÇÕES discretas do sinal de
+                            # aceleração (dv/dt). Mesma lógica/parâmetros do WCS → bate.
+                            _idxs_acc = detectar_acoes_acc_idx(
+                                _wac, sel_acc_bands, freq_hz=_Hz)
+                            for _ix in _idxs_acc:
+                                if 0 <= _ix < len(_sv):
+                                    _sv[_ix] += 1.0
 
                         # Soma rolante de N amostras (passo 1) → série de contagem
                         _csum = sum(_sv[:_n])
@@ -13141,10 +13219,14 @@ Escolha um ou mais atletas para análise simultânea.
                                 f"nos efforts da conta — contadas por janela para achar o pior minuto."
                             )
                         else:
-                            st.warning(
-                                "Nenhum effort de aceleração retornado pela API para estes "
-                                "atletas/períodos. Usando estimativa por amostra (dv/dt) como "
-                                "fallback — os números podem ser menos precisos."
+                            _dur_fb = get_min_dur_s()
+                            st.info(
+                                "ℹ️ A API não retornou *acceleration_efforts* para estes "
+                                "atletas/períodos (dispositivo sem aceleração nativa). "
+                                f"Contando **ações discretas** detectadas no sinal de "
+                                f"aceleração (dv/dt): cada entrada sustentada por "
+                                f"≥ **{_dur_fb:.1f} s** numa banda conta como 1 ação "
+                                "(ajuste a duração mínima na sidebar)."
                             )
 
                     def _wcalc_wcs(_sv, _n, _is_vm):
@@ -13245,7 +13327,13 @@ Escolha um ou mais atletas para análise simultânea.
                             # Timestamps Unix utilizáveis? (efforts usam start_time Unix)
                             _ts_unix_ok = (_wts_np.size > 0
                                            and float(np.median(_wts_np)) > 1e6)
-                            if _faixas_a and _ts_unix_ok:
+                            # Existem efforts reais da API para este atleta?
+                            _has_api_eff = any(
+                                len(dados_efforts_acc_por_periodo
+                                    .get(_pn, {}).get(_wa, []) or []) > 0
+                                for _pn in _wcs2_periodos)
+                            if _faixas_a and _ts_unix_ok and _has_api_eff:
+                                # Caminho preferido: AÇÕES reais (efforts da Catapult).
                                 for _pn in _wcs2_periodos:
                                     _effs = (dados_efforts_acc_por_periodo
                                              .get(_pn, {}).get(_wa, []) or [])
@@ -13261,8 +13349,14 @@ Escolha um ou mais atletas para análise simultânea.
                                         if 0 <= _idx < len(_sv):
                                             _sv[_idx] += 1.0
                             elif _faixas_a:
-                                # Sem ts Unix: estima pelas amostras de aceleração (dv/dt).
-                                _sv = [1.0 if _in_aband(a) else 0.0 for a in _wac]
+                                # Fallback (API sem efforts): deriva AÇÕES discretas do
+                                # sinal de aceleração (dv/dt) — entradas sustentadas na
+                                # zona por ≥ min_dur_s, contadas UMA vez (não por amostra).
+                                _idxs_acc = detectar_acoes_acc_idx(
+                                    _wac, _sel_acc_bands, freq_hz=_Hz)
+                                for _ix in _idxs_acc:
+                                    if 0 <= _ix < len(_sv):
+                                        _sv[_ix] += 1.0
                         elif _m == "Dist. >14 km/h (m)":
                             _sv = [v / (3.6 * _Hz) if v > 14 else 0.0 for v in _wv]
                         elif "19" in _m:
