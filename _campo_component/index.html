@@ -134,7 +134,7 @@
     if(!e.data || typeof e.data !== 'object') return;
     if(e.data.type === 'streamlit:render' && !initialized){
       var a = e.data.args || {};
-      initMap(a.pts||[], a.lat_c||0, a.lon_c||0, a.rot||0, a.fl||105, a.fw||68);
+      initMap(a.pts||[], a.lat_c||0, a.lon_c||0, a.rot||0, a.fl||105, a.fw||68, a.legend||null);
       initialized = true;
     }
   });
@@ -155,7 +155,7 @@
   }
 
   // ── Inicialização do mapa ────────────────────────────────────────────
-  function initMap(pts, lat_c, lon_c, rot, fl, fw){
+  function initMap(pts, lat_c, lon_c, rot, fl, fw, legend){
     cLat = lat_c; cLon = lon_c;
     // Pré-popula com dados do venue (se fornecidos pelo Python)
     rotD = +rot || 0;
@@ -234,12 +234,24 @@
       var d = L.DomUtil.create('div');
       d.style='background:rgba(0,0,0,.78);padding:8px 11px;border-radius:6px;'+
               'color:#fff;font-size:11px;line-height:1.9';
-      d.innerHTML='<b>Velocidade</b><br>'
-        +'<span style="color:#2196F3">■</span> &lt;7 km/h Caminhada<br>'
-        +'<span style="color:#4CAF50">■</span> 7-14 km/h Trote<br>'
-        +'<span style="color:#FFEB3B">■</span> 14-19 km/h Corrida<br>'
-        +'<span style="color:#FF9800">■</span> 19-24 km/h Intensa<br>'
-        +'<span style="color:#F44336">■</span> &gt;24 km/h Sprint';
+      function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+      var html='<b>Velocidade</b><br>';
+      if(legend && legend.length){
+        for(var li=0; li<legend.length; li++){
+          var it = legend[li] || {};
+          html += '<span style="color:'+(it.color||'#888')+'">■</span> '
+                + esc(it.text||'') + (li<legend.length-1 ? '<br>' : '');
+        }
+      } else {
+        // Fallback (caso o Python não envie as bandas)
+        html += '<span style="color:#2196F3">■</span> &lt;7 km/h Caminhada<br>'
+              + '<span style="color:#4CAF50">■</span> 7-14.4 km/h Trote<br>'
+              + '<span style="color:#CDDC39">■</span> 14.4-19.8 km/h Corrida<br>'
+              + '<span style="color:#FF9800">■</span> 19.8-25.2 km/h Intensa<br>'
+              + '<span style="color:#FF5722">■</span> 25.2-29.9 km/h Alta Vel.<br>'
+              + '<span style="color:#F44336">■</span> &gt;29.9 km/h Sprint';
+      }
+      d.innerHTML = html;
       L.DomEvent.disableClickPropagation(d);
       return d;
     };

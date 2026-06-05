@@ -1266,6 +1266,39 @@ def _legenda_vel_js() -> str:
     return "+".join(partes)
 
 
+def _legenda_vel_items() -> list:
+    """Retorna a legenda de velocidade como lista de dicts {'color','text'},
+    a partir das bandas ativas (_bandas_vel_ativas). Usada pelo componente
+    bidirecional do mapa (_campo_component) para renderizar a legenda real.
+    """
+    import re as _re
+
+    def _fmt(v):
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            return str(v)
+        return str(int(fv)) if fv == int(fv) else f"{fv:g}"
+
+    bandas = _bandas_vel_ativas()
+    itens = list(bandas.items())
+    n = len(itens)
+    out = []
+    for idx, (_k, b) in enumerate(itens):
+        cor = b.get('color', '#888888')
+        mn, mx = b.get('min', 0), b.get('max', 9999)
+        _m = _re.search(r'\(([^)]*)\)', b.get('label', '') or '')
+        nome = _m.group(1) if _m else ''
+        if idx == 0:
+            txt = f"<{_fmt(mx)} km/h {nome}".strip()
+        elif idx == n - 1 or float(mx) >= 9000:
+            txt = f">{_fmt(mn)} km/h {nome}".strip()
+        else:
+            txt = f"{_fmt(mn)}-{_fmt(mx)} km/h {nome}".strip()
+        out.append({'color': cor, 'text': txt})
+    return out
+
+
 def _fmt_num_banda(v) -> str:
     """Formata número de banda removendo .0 (7.0→7, 14.4→14.4)."""
     try:
@@ -6907,6 +6940,7 @@ Escolha um ou mais atletas para análise simultânea.
                                     rot=_venue_rot,
                                     fl=_venue_fl,
                                     fw=_venue_fw,
+                                    legend=_legenda_vel_items(),
                                     key=f"campo_mapa_{atleta_mapa}",
                                     default=None
                                 )
