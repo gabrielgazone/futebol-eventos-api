@@ -3863,30 +3863,30 @@ def _tatica_add_campo_shapes(fig, FL, FW, line_color='rgba(255,255,255,0.85)'):
 
 
 def _tatica_anim_layout(fig, tempos, height=560, right_margin=80):
-    """Adiciona Play/Pause + slider com rótulos mm:ss (relativos ao início)."""
+    """Play/Pause + slider de tempo (mm:ss). A velocidade é controlada pelo
+    slider de Velocidade da UI (st.session_state['tatica_vel_mult']): o Play roda
+    no tempo real do jogo dividido pelo multiplicador, usando o espaçamento real
+    entre frames (assim '1×' = tempo real do mundo em qualquer janela)."""
+    import numpy as _np
     t0 = tempos[0]
+    difs = _np.diff(_np.asarray(tempos, dtype=float))
+    dt = float(_np.median(difs)) if difs.size else 0.5      # segundos reais entre frames
+    vel = float(st.session_state.get('tatica_vel_mult', 1.0))
+    dur = int(max(20, round(dt * 1000.0 / max(0.1, vel))))  # ms por frame na reprodução
     labels = [f"{int((t - t0) // 60):02d}:{int((t - t0) % 60):02d}" for t in tempos]
     steps = [dict(method='animate',
                   args=[[f"f{i}"],
                         dict(mode='immediate', frame=dict(duration=0, redraw=True),
                              transition=dict(duration=0))],
                   label=labels[i]) for i in range(len(tempos))]
-    def _play(dur):
-        return dict(frame=dict(duration=dur, redraw=True),
-                    fromcurrent=True, transition=dict(duration=0))
     fig.update_layout(
         updatemenus=[dict(type='buttons', direction='right', showactive=False,
                           x=0.02, y=1.10, xanchor='left',
                           bgcolor='#1f2937', font=dict(color='white'),
                           buttons=[
-                              dict(label='🐢 0.5×', method='animate',
-                                   args=[None, _play(1000)]),
-                              dict(label='▶ 1×', method='animate',
-                                   args=[None, _play(500)]),
-                              dict(label='⏩ 2×', method='animate',
-                                   args=[None, _play(250)]),
-                              dict(label='⏩⏩ 4×', method='animate',
-                                   args=[None, _play(120)]),
+                              dict(label='▶ Play', method='animate',
+                                   args=[None, dict(frame=dict(duration=dur, redraw=True),
+                                                    fromcurrent=True, transition=dict(duration=0))]),
                               dict(label='⏸ Pause', method='animate',
                                    args=[[None], dict(frame=dict(duration=0, redraw=True),
                                                       mode='immediate', transition=dict(duration=0))]),
@@ -4405,6 +4405,13 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
                    f"(de {_mmss(_total_s)} totais)")
     else:
         _t_ini, _t_fim = _t0_abs, _t1_abs
+
+    _vel_opts = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0]
+    st.select_slider(
+        "Velocidade da animação", options=_vel_opts, value=1.0, key="tatica_vel_mult",
+        format_func=lambda v: ("1× (tempo real)" if v == 1.0 else f"{v:g}×"),
+        help="1× reproduz no tempo real do jogo. Abaixo de 1× = câmera lenta; "
+             "acima = acelerado. Aplica-se ao botão ▶ Play.")
 
     frames = _tatica_frames_sincronizados(dados_prep, atletas_sel, t_ini=_t_ini, t_fim=_t_fim)
     if frames is None:
