@@ -3613,12 +3613,43 @@ def _poly_area(hull):
     return abs(s) / 2.0
 
 
-def _tatica_frames_sincronizados(dados_periodo: dict, atletas_sel, max_frames: int = 140):
+def _tatica_intervalo(dados_periodo: dict, atletas_sel):
+    """Retorna (t0, t1) — janela temporal aproveitável (sobreposição dos atletas,
+    com fallback para a união) — para alimentar o seletor de janela na UI."""
+    import numpy as _np
+    starts, ends = [], []
+    for a in atletas_sel:
+        d = dados_periodo.get(a, {})
+        ts = d.get('ts_pos', [])
+        if len(ts) < 5:
+            continue
+        ts = _np.asarray(ts, dtype=float)
+        ts = ts[_np.isfinite(ts)]
+        if ts.size < 5:
+            continue
+        starts.append(float(ts.min()))
+        ends.append(float(ts.max()))
+    if len(starts) < 2:
+        return None
+    t0, t1 = max(starts), min(ends)        # sobreposição
+    if not (t1 - t0 > 1.0):
+        t0, t1 = min(starts), max(ends)    # fallback: união
+    if not (t1 - t0 > 1.0):
+        return None
+    return t0, t1
+
+
+def _tatica_frames_sincronizados(dados_periodo: dict, atletas_sel, max_frames: int = 160,
+                                 t_ini=None, t_fim=None, passo_min: float = 0.5):
     """Constrói frames sincronizados (posição de todos no mesmo instante).
 
     Para cada atleta com x/y de campo, interpola xs/ys/vel numa grade temporal
-    comum (janela de sobreposição dos timestamps), ~1 frame/s, limitada a
-    max_frames. Onde o atleta não tem cobertura, o valor fica NaN.
+    comum. O passo entre frames é adaptativo: ~`passo_min`s (tempo real) numa
+    janela curta, crescendo apenas o necessário para não passar de `max_frames`.
+    Onde o atleta não tem cobertura, o valor fica NaN.
+
+    Se `t_ini`/`t_fim` forem dados, recorta a animação a essa janela — é isso que
+    permite ver o deslocamento contínuo (em vez de saltos de ~26 s no jogo todo).
 
     Retorna (tempos, nomes, equipes, posicoes, PX, PY, PV) com PX/PY/PV de
     shape [n_frames x n_atletas], ou None se não houver ≥2 atletas alinháveis.
@@ -3662,7 +3693,17 @@ def _tatica_frames_sincronizados(dados_periodo: dict, atletas_sel, max_frames: i
     if not (t1 - t0 > 1.0):
         return None
 
-    nf = int(max(2, min(max_frames, round(t1 - t0))))
+    # Recorte opcional à janela escolhida na UI.
+    if t_ini is not None:
+        t0 = max(t0, float(t_ini))
+    if t_fim is not None:
+        t1 = min(t1, float(t_fim))
+    if not (t1 - t0 > 0.5):
+        return None
+
+    janela = t1 - t0
+    passo = max(passo_min, janela / max_frames)          # ~tempo real em janelas curtas
+    nf = int(max(2, min(max_frames, int(round(janela / passo)) + 1)))
     tempos = _np.linspace(t0, t1, nf)
     nomes, equipes, posicoes = [], [], []
     PX, PY, PV = [], [], []
@@ -4326,17 +4367,59 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
 
     dados_periodo = dados_posicao_por_periodo.get(per_sel, {})
     dados_prep, _fonte_pos, FL, FW, _n_proj = _tatica_preparar_dados(dados_periodo, atletas_sel)
-    frames = _tatica_frames_sincronizados(dados_prep, atletas_sel)
-    if frames is None:
+
+    _intervalo = _tatica_intervalo(dados_prep, atletas_sel)
+    if _intervalo is None:
         st.warning("Não foi possível sincronizar os atletas neste período "
                    "(sem sobreposição temporal suficiente).")
+        return
+    _t0_abs, _t1_abs = _intervalo
+    _total_s = _t1_abs - _t0_abs
+
+    def _mmss(s):
+        s = int(round(s))
+        return f"{s // 60:02d}:{s % 60:02d}"
+
+    _jan_map = {"30 s": 30.0, "1 min": 60.0, "2 min": 120.0, "5 min": 300.0}
+    _opcoes = [k for k, v in _jan_map.items() if v < _total_s] + ["Período inteiro"]
+    _idx_pad = _opcoes.index("1 min") if "1 min" in _opcoes else 0
+
+    cj1, cj2 = st.columns([1, 2])
+    with cj1:
+        jan_sel = st.selectbox(
+            "Janela de análise", _opcoes, index=_idx_pad, key="tatica_janela",
+            help="Janelas curtas mostram o **deslocamento contínuo** (≈tempo real, ~0,5 s "
+                 "entre frames). O 'Período inteiro' dá a visão geral, mas com saltos "
+                 "grandes entre frames (não é movimento contínuo).")
+    if jan_sel in _jan_map:
+        _win = _jan_map[jan_sel]
+        _ini_max = max(0.0, _total_s - _win)
+        with cj2:
+            _ini_rel = st.slider(
+                "Início da janela", 0.0, float(_ini_max),
+                min(float(st.session_state.get("tatica_inicio", 0.0)), float(_ini_max)),
+                step=5.0, key="tatica_inicio", format="%.0f s")
+        _t_ini = _t0_abs + _ini_rel
+        _t_fim = _t_ini + _win
+        st.caption(f"🎬 Janela: **{_mmss(_ini_rel)} → {_mmss(_ini_rel + _win)}** "
+                   f"(de {_mmss(_total_s)} totais)")
+    else:
+        _t_ini, _t_fim = _t0_abs, _t1_abs
+
+    frames = _tatica_frames_sincronizados(dados_prep, atletas_sel, t_ini=_t_ini, t_fim=_t_fim)
+    if frames is None:
+        st.warning("Janela sem sobreposição temporal suficiente — ajuste o início ou a duração.")
         return
     tempos, nomes, equipes, posicoes, PX, PY, PV = frames
     nf, natl = PX.shape
 
     dur_s = float(tempos[-1] - tempos[0])
-    st.caption(f"⏱️ {nf} frames · {natl} atletas sincronizados · "
-               f"{dur_s / 60.0:.1f} min · campo {FL:.0f}×{FW:.0f} m · 📍 {_fonte_pos}")
+    _dt = dur_s / max(1, nf - 1)
+    st.caption(f"⏱️ {nf} frames · ~{_dt:.1f}s entre frames · {natl} atletas sincronizados · "
+               f"campo {FL:.0f}×{FW:.0f} m · 📍 {_fonte_pos}")
+    if _dt > 5.0:
+        st.caption("⚠️ Frames muito espaçados nesta janela — o movimento aparece em **saltos**. "
+                   "Escolha uma janela mais curta (30 s / 1 min) para ver o deslocamento contínuo.")
     if _n_proj > 0:
         st.info("📍 Coordenadas de campo **reconstruídas a partir do GPS** (lat/lon → campo). "
                 "As posições **relativas** entre jogadores são fiéis; o alinhamento absoluto do "
