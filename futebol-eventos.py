@@ -791,6 +791,39 @@ def detectar_eventos_acc(acc_arr, limiar, min_dur_s=0.6, acima=True, freq_hz=10)
     return eventos
 
 
+def acc_series_from_vel(vel_kmh, ts_list, freq_hz=10.0):
+    """
+    Deriva aceleração (m/s²) a partir de uma série de velocidade (km/h) +
+    timestamps — idêntico ao fallback dv/dt do carregamento (suaviza com média
+    móvel de 3 e satura em ±10 m/s²). Usado para contar ações de acel/desacel
+    quando o dispositivo não tem aceleração nativa e positions['acc'] está vazio.
+    """
+    n = len(vel_kmh)
+    if n < 2:
+        return [0.0] * n
+    import statistics as _stv
+    _vms = [float(v) / 3.6 for v in vel_kmh]   # km/h → m/s
+    _dts = []
+    for _i in range(1, min(len(ts_list), n)):
+        _d = ts_list[_i] - ts_list[_i - 1]
+        _dts.append(_d if (_d and 0 < _d < 2) else None)
+    _valid = [d for d in _dts if d]
+    _dt_med = (_stv.median(_valid) if _valid
+               else (1.0 / freq_hz if freq_hz else 0.1))
+    _acc = [0.0] * n
+    for _i in range(1, n):
+        _dt = (_dts[_i - 1] if (_i - 1 < len(_dts) and _dts[_i - 1]) else _dt_med)
+        if _dt and _dt > 0:
+            _acc[_i] = (_vms[_i] - _vms[_i - 1]) / _dt
+    _sm = []
+    for _i in range(n):
+        _lo = max(0, _i - 1)
+        _hi = min(n, _i + 2)
+        _mv = sum(_acc[_lo:_hi]) / (_hi - _lo)
+        _sm.append(max(-10.0, min(10.0, _mv)))
+    return _sm
+
+
 def detectar_acoes_acc_idx(acc_arr, sel_acc_bands, min_dur_s=None, freq_hz=10):
     """
     Conta AÇÕES discretas de acel/desacel a partir da série de aceleração
@@ -9483,22 +9516,25 @@ Escolha um ou mais atletas para análise simultânea.
                         else:
                             _ps = [periodo_janela]
 
-                        # Timeline concatenada (ts_pos + acc), idêntica à do WCS
-                        _wts, _wac = [], []
+                        # Timeline concatenada (ts_pos + vel + acc), idêntica à do WCS
+                        _wts, _wac, _wv = [], [], []
                         for _pn in _ps:
                             _da = dados_posicao_por_periodo.get(_pn, {}).get(_atl, {})
                             _xs = _da.get('xs', [])
                             _ys = _da.get('ys', [])
                             _ts = _da.get('ts_pos', [])
                             _ac = _da.get('acc', [])
+                            _vl = _da.get('vel', [])
                             _nn = (min(len(_xs), len(_ys))
                                    if (_xs and _ys) else len(_ts))
                             if _nn == 0:
                                 continue
                             _ts_pad = list(_ts[:_nn]) + [0.0] * max(0, _nn - len(_ts))
                             _ac_pad = list(_ac[:_nn]) + [0.0] * max(0, _nn - len(_ac))
+                            _vl_pad = list(_vl[:_nn]) + [0.0] * max(0, _nn - len(_vl))
                             _wts += _ts_pad
                             _wac += _ac_pad
+                            _wv += _vl_pad
 
                         _Hz = _hz_jan
                         _n = max(2, int(window_minutes * 60 * _Hz))
@@ -9542,9 +9578,13 @@ Escolha um ou mais atletas para análise simultânea.
                                         _sv[_idx] += 1.0
                         else:
                             # Fallback (API sem efforts): AÇÕES discretas do sinal de
-                            # aceleração (dv/dt). Mesma lógica/parâmetros do WCS → bate.
+                            # aceleração. Mesma lógica/parâmetros do WCS → bate.
+                            # Deriva acc por dv/dt da velocidade (fonte confiável).
+                            _wac_fb = _wac
+                            if any(abs(_v) > 0.1 for _v in _wv):
+                                _wac_fb = acc_series_from_vel(_wv, _wts, _Hz)
                             _idxs_acc = detectar_acoes_acc_idx(
-                                _wac, sel_acc_bands, freq_hz=_Hz)
+                                _wac_fb, sel_acc_bands, freq_hz=_Hz)
                             for _ix in _idxs_acc:
                                 if 0 <= _ix < len(_sv):
                                     _sv[_ix] += 1.0
@@ -13350,10 +13390,16 @@ Escolha um ou mais atletas para análise simultânea.
                                             _sv[_idx] += 1.0
                             elif _faixas_a:
                                 # Fallback (API sem efforts): deriva AÇÕES discretas do
-                                # sinal de aceleração (dv/dt) — entradas sustentadas na
-                                # zona por ≥ min_dur_s, contadas UMA vez (não por amostra).
+                                # sinal de aceleração — entradas sustentadas na zona por
+                                # ≥ min_dur_s, contadas UMA vez (não por amostra).
+                                # Sem efforts da API, a aceleração nativa é ausente/ruim;
+                                # se houver sinal de velocidade, derivamos a aceleração
+                                # (dv/dt) dela — fonte confiável para contar ações.
+                                _wac_fb = _wac
+                                if any(abs(_v) > 0.1 for _v in _wv):
+                                    _wac_fb = acc_series_from_vel(_wv, _wts, _Hz)
                                 _idxs_acc = detectar_acoes_acc_idx(
-                                    _wac, _sel_acc_bands, freq_hz=_Hz)
+                                    _wac_fb, _sel_acc_bands, freq_hz=_Hz)
                                 for _ix in _idxs_acc:
                                     if 0 <= _ix < len(_sv):
                                         _sv[_ix] += 1.0
