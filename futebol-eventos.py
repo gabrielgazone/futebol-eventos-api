@@ -4127,28 +4127,116 @@ def _tatica_view_voronoi(tempos, nomes, equipes, PX, PY, PV, FL, FW):
 
 
 def _tatica_view_replay3d(tempos, nomes, equipes, PX, PY, PV, FL, FW):
-    """🎥 Replay 3D: campo plano + jogadores como marcadores 3D navegáveis
-    (câmera livre) — um 'broadcast sintético' a partir só das coordenadas."""
+    """🎥 Replay 3D: 'broadcast sintético' — gramado com faixas de corte,
+    marcações oficiais, traves 3D com rede e jogadores com sombra/haste,
+    tudo navegável (câmera livre) a partir só das coordenadas."""
     import numpy as _np
     import plotly.graph_objects as _go
     nf, natl = PX.shape
+    cx, cy = FL / 2.0, FW / 2.0
+    LZ = 0.06  # altura das linhas, rente ao gramado
 
-    Xf, Yf = _np.meshgrid(_np.linspace(0, FL, 2), _np.linspace(0, FW, 2))
-    Zf = _np.zeros_like(Xf)
-    surf = _go.Surface(x=Xf, y=Yf, z=Zf, showscale=False, opacity=1.0,
-                       colorscale=[[0, '#2a7325'], [1, '#236b1e']], hoverinfo='skip')
+    data = []
 
-    def _line3d(xs, ys, w=4):
-        return _go.Scatter3d(x=xs, y=ys, z=[0.05] * len(xs), mode='lines',
-                             line=dict(color='white', width=w),
+    # --- Entorno (fora das quatro linhas), bem escuro p/ destacar o campo ---
+    mX, mY = _np.meshgrid(_np.linspace(-10, FL + 10, 2), _np.linspace(-8, FW + 8, 2))
+    data.append(_go.Surface(x=mX, y=mY, z=_np.full_like(mX, -0.12), showscale=False,
+                            colorscale=[[0, '#10301a'], [1, '#10301a']],
+                            surfacecolor=_np.zeros_like(mX), hoverinfo='skip',
+                            lighting=dict(ambient=0.9, diffuse=0.1)))
+
+    # --- Gramado com faixas de corte (mowing stripes) ---
+    n_stripes = 14
+    sw = FL / n_stripes
+    greens = ['#2f7d28', '#2a7022']
+    for s in range(n_stripes):
+        x0, x1 = s * sw, (s + 1) * sw
+        Xf, Yf = _np.meshgrid(_np.linspace(x0, x1, 2), _np.linspace(0, FW, 2))
+        Zf = _np.zeros_like(Xf)
+        c = greens[s % 2]
+        data.append(_go.Surface(x=Xf, y=Yf, z=Zf, showscale=False,
+                                colorscale=[[0, c], [1, c]], surfacecolor=Zf,
+                                lighting=dict(ambient=0.88, diffuse=0.32, specular=0.04),
+                                hoverinfo='skip', name='grama'))
+
+    # --- Linhas oficiais do campo ---
+    LCOL = 'rgba(255,255,255,0.92)'
+
+    def _line(xs, ys, w=4, color=LCOL):
+        return _go.Scatter3d(x=list(xs), y=list(ys), z=[LZ] * len(xs), mode='lines',
+                             line=dict(color=color, width=w), hoverinfo='skip',
+                             showlegend=False)
+
+    def _dot(x, y, sz=3):
+        return _go.Scatter3d(x=[x], y=[y], z=[LZ], mode='markers',
+                             marker=dict(size=sz, color='white'),
                              hoverinfo='skip', showlegend=False)
 
-    cy = FW / 2.0
-    perim = _line3d([0, FL, FL, 0, 0], [0, 0, FW, FW, 0])
-    mid = _line3d([FL / 2, FL / 2], [0, FW])
-    th = _np.linspace(0, 2 * _np.pi, 60)
-    circ = _line3d((FL / 2 + 9.15 * _np.cos(th)).tolist(), (cy + 9.15 * _np.sin(th)).tolist(), w=3)
+    th = _np.linspace(0, 2 * _np.pi, 64)
+    data.append(_line([0, FL, FL, 0, 0], [0, 0, FW, FW, 0]))           # perímetro
+    data.append(_line([cx, cx], [0, FW]))                              # meio-campo
+    data.append(_line(cx + 9.15 * _np.cos(th), cy + 9.15 * _np.sin(th), w=3))  # círculo central
+    data.append(_dot(cx, cy))                                          # marca central
 
+    pa_d, pa_h = 16.5, 20.16   # área de penálti (profundidade, meia-largura)
+    ga_d, ga_h = 5.5, 9.16     # pequena área
+    pspot = 11.0
+    for side in (0, 1):
+        sgn = 1 if side == 0 else -1
+        xg = 0 if side == 0 else FL
+        data.append(_line([xg, xg + sgn * pa_d, xg + sgn * pa_d, xg],
+                          [cy - pa_h, cy - pa_h, cy + pa_h, cy + pa_h]))   # grande área
+        data.append(_line([xg, xg + sgn * ga_d, xg + sgn * ga_d, xg],
+                          [cy - ga_h, cy - ga_h, cy + ga_h, cy + ga_h]))   # pequena área
+        xp = xg + sgn * pspot
+        data.append(_dot(xp, cy))                                          # marca do penálti
+        a = _np.linspace(0, 2 * _np.pi, 90)
+        ax = xp + sgn * 9.15 * _np.cos(a)
+        ay = cy + 9.15 * _np.sin(a)
+        mask = (ax - xg) * sgn > pa_d                                      # só o arco fora da área
+        axm = _np.where(mask, ax, _np.nan)
+        aym = _np.where(mask, ay, _np.nan)
+        data.append(_line(axm, aym, w=3))                                  # arco do penálti
+
+    for (xc, yc, a0) in [(0, 0, 0), (FL, 0, 90), (FL, FW, 180), (0, FW, 270)]:
+        a = _np.linspace(_np.radians(a0), _np.radians(a0 + 90), 14)
+        data.append(_line(xc + 1.0 * _np.cos(a), yc + 1.0 * _np.sin(a), w=2))  # arcos de escanteio
+
+    # --- Traves 3D (postes + travessão + rede) ---
+    gw, gh, depth = 7.32, 2.44, 1.9
+
+    def _goal(xg, sgn):
+        yl, yr = cy - gw / 2, cy + gw / 2
+        xb = xg + sgn * depth
+        frame = [((xg, yl, 0), (xg, yl, gh)), ((xg, yr, 0), (xg, yr, gh)),
+                 ((xg, yl, gh), (xg, yr, gh)),                       # travessão
+                 ((xg, yl, gh), (xb, yl, 0)), ((xg, yr, gh), (xb, yr, 0)),
+                 ((xb, yl, 0), (xb, yr, 0))]
+        xs, ys, zs = [], [], []
+        for p0, p1 in frame:
+            xs += [p0[0], p1[0], None]; ys += [p0[1], p1[1], None]; zs += [p0[2], p1[2], None]
+        estrut = _go.Scatter3d(x=xs, y=ys, z=zs, mode='lines',
+                               line=dict(color='white', width=6), hoverinfo='skip', showlegend=False)
+        # rede: malha suave entre travessão e fundo
+        nx, ny = [], []
+        nz = []
+        for t in _np.linspace(0, 1, 5):       # verticais
+            yy = yl + (yr - yl) * t
+            nx += [xg, xb, None]; ny += [yy, yy, None]; nz += [gh, 0, None]
+        for t in _np.linspace(0, 1, 3):       # horizontais
+            xx = xg + (xb - xg) * t
+            zz = gh * (1 - t)
+            nx += [xx, xx, None]; ny += [yl, yr, None]; nz += [zz, zz, None]
+        rede = _go.Scatter3d(x=nx, y=ny, z=nz, mode='lines',
+                             line=dict(color='rgba(255,255,255,0.30)', width=1),
+                             hoverinfo='skip', showlegend=False)
+        return [estrut, rede]
+
+    data += _goal(0, -1)
+    data += _goal(FL, 1)
+
+    # --- Jogadores (sombra no chão + haste + marcador) ---
+    base = len(data)
     eq_validas = [e for e in dict.fromkeys(equipes) if e]
     dois_times = len(eq_validas) >= 2
     if dois_times:
@@ -4156,23 +4244,44 @@ def _tatica_view_replay3d(tempos, nomes, equipes, PX, PY, PV, FL, FW):
     else:
         cols = [_tatica_cor_atleta(i) for i in range(natl)]
     txt = [_tatica_iniciais(n) for n in nomes]
-    z_dot = 2.0
-    players = _go.Scatter3d(x=PX[0], y=PY[0], z=[z_dot] * natl, mode='markers+text',
-                            text=txt, textfont=dict(color='white', size=9),
-                            marker=dict(size=6, color=cols, line=dict(color='white', width=1)),
-                            hovertext=nomes, hoverinfo='text', name='atletas')
-    fig = _go.Figure(data=[surf, perim, mid, circ, players])
-    frames = [_go.Frame(name=f"f{k}",
-                        data=[_go.Scatter3d(x=PX[k], y=PY[k], z=[z_dot] * natl, text=txt)],
-                        traces=[4]) for k in range(nf)]
-    fig.frames = frames
+    z_dot = 2.2
+
+    def _shadow(k):
+        return _go.Scatter3d(x=PX[k], y=PY[k], z=[0.08] * natl, mode='markers',
+                             marker=dict(size=9, color='rgba(0,0,0,0.28)'),
+                             hoverinfo='skip', showlegend=False)
+
+    def _stems(k):
+        xs, ys, zs = [], [], []
+        for i in range(natl):
+            xs += [PX[k][i], PX[k][i], None]
+            ys += [PY[k][i], PY[k][i], None]
+            zs += [0.08, z_dot, None]
+        return _go.Scatter3d(x=xs, y=ys, z=zs, mode='lines',
+                             line=dict(color='rgba(255,255,255,0.35)', width=2),
+                             hoverinfo='skip', showlegend=False)
+
+    def _players(k):
+        return _go.Scatter3d(x=PX[k], y=PY[k], z=[z_dot] * natl, mode='markers+text',
+                             text=txt, textposition='top center',
+                             textfont=dict(color='white', size=9),
+                             marker=dict(size=7, color=cols, line=dict(color='white', width=1)),
+                             hovertext=nomes, hoverinfo='text', name='atletas')
+
+    i_sh, i_st, i_pl = base, base + 1, base + 2
+    data += [_shadow(0), _stems(0), _players(0)]
+
+    fig = _go.Figure(data=data)
+    fig.frames = [_go.Frame(name=f"f{k}",
+                            data=[_shadow(k), _stems(k), _players(k)],
+                            traces=[i_sh, i_st, i_pl]) for k in range(nf)]
     fig.update_layout(
         scene=dict(
-            xaxis=dict(range=[-2, FL + 2], visible=False),
-            yaxis=dict(range=[-2, FW + 2], visible=False),
-            zaxis=dict(range=[0, 20], visible=False),
-            aspectmode='manual', aspectratio=dict(x=2.0, y=1.3, z=0.35),
-            camera=dict(eye=dict(x=0.15, y=-1.7, z=1.05)),
+            xaxis=dict(range=[-8, FL + 8], visible=False),
+            yaxis=dict(range=[-6, FW + 6], visible=False),
+            zaxis=dict(range=[0, 12], visible=False),
+            aspectmode='manual', aspectratio=dict(x=2.0, y=1.3, z=0.42),
+            camera=dict(eye=dict(x=0.2, y=-1.6, z=0.85)),
             bgcolor='#0e1117',
         ),
     )
