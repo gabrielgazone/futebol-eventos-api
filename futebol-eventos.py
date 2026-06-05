@@ -1176,6 +1176,12 @@ _DEFAULT_ACCELERATION_ZONES = [
     {'name': 'Desaceleração B3', 'min_ms2': -10.0, 'max_ms2': -4.0,  'color': '#B71C1C'},
 ]
 
+# Versão da estrutura das bandas. Ao mudar a forma das bandas padrão (ex.: de 8
+# para 6 bandas de aceleração), incrementar este valor força a reinicialização
+# das zonas em session_state, descartando valores antigos em cache de sessões
+# que ficaram abertas antes da atualização.
+_ZONES_SCHEMA_VERSION = "2026-06-04-acc6"
+
 
 def _parse_api_acceleration_zones(api_response):
     """Converte resposta da API /acceleration_zones para lista de dicts padronizados."""
@@ -5427,8 +5433,10 @@ Escolha um ou mais atletas para análise simultânea.
                 #     para re-derivar de acordo com a nova conta;
                 #  2) inicializamos com os defaults como fallback inicial.
                 _tok_mark = str(hash(token)) if token else ''
-                if st.session_state.get('_token_marker') != _tok_mark:
+                if (st.session_state.get('_token_marker') != _tok_mark
+                        or st.session_state.get('_zones_schema') != _ZONES_SCHEMA_VERSION):
                     st.session_state['_token_marker'] = _tok_mark
+                    st.session_state['_zones_schema'] = _ZONES_SCHEMA_VERSION
                     for _zk in ('velocity_zones_account', 'acceleration_zones_account',
                                 'velocity_zones_manual', 'acceleration_zones_manual',
                                 'velocity_zones_source', 'acceleration_zones_source',
@@ -5921,6 +5929,22 @@ Escolha um ou mais atletas para análise simultânea.
                 st.session_state['hist_vmax']        = _hvm_dict
                 st.session_state['hist_vmax_source'] = _src_dict
 
+        # ── Auto-heal de schema das bandas ────────────────────────────────
+        # Se a estrutura das bandas padrão mudou (ex.: aceleração de 8→6 bandas)
+        # e a sessão já tinha zonas antigas em cache, descarta-as aqui — sem
+        # exigir reconectar — para refletir a nova estrutura/derivação.
+        if st.session_state.get('_zones_schema') != _ZONES_SCHEMA_VERSION:
+            st.session_state['_zones_schema'] = _ZONES_SCHEMA_VERSION
+            for _zk in ('velocity_zones_account', 'acceleration_zones_account',
+                        'velocity_zones_manual', 'acceleration_zones_manual',
+                        'velocity_zones_source', 'acceleration_zones_source',
+                        '_bandas_deriv_key'):
+                st.session_state.pop(_zk, None)
+            st.session_state['velocity_zones_account'] = _DEFAULT_VELOCITY_ZONES[:]
+            st.session_state['velocity_zones_source']  = 'default'
+            st.session_state['acceleration_zones_account'] = _DEFAULT_ACCELERATION_ZONES[:]
+            st.session_state['acceleration_zones_source']  = 'default'
+
         # ── Bandas de Velocidade — editor das "Bandas Globais" ────────────
         # A API Connect v6 NÃO expõe os cortes das bandas (confirmado na doc
         # oficial). Por isso o usuário define aqui os mesmos valores da tela
@@ -6410,6 +6434,36 @@ Escolha um ou mais atletas para análise simultânea.
                         velocidades = [pt[2] for pt in pontos_pos]
                         aceleracoes = [pt[3] for pt in pontos_pos]
                         ts_pos      = [pt[4] for pt in pontos_pos]
+
+                        # ── Fallback de aceleração (dv/dt) ───────────────────
+                        # Muitos dispositivos/exports NÃO trazem o parâmetro 'a'
+                        # (aceleração). Sem ele, a WCS por bandas de aceleração
+                        # ficaria zerada. Quando 'a' está ausente, derivamos a
+                        # aceleração (m/s²) da série de velocidade usando os ts.
+                        if not any(abs(_a) > 0.05 for _a in aceleracoes):
+                            import statistics as _stacc
+                            _vms = [float(v) / 3.6 for v in velocidades]  # km/h→m/s
+                            _dts = []
+                            for _i in range(1, len(ts_pos)):
+                                _d = ts_pos[_i] - ts_pos[_i - 1]
+                                _dts.append(_d if (_d and 0 < _d < 2) else None)
+                            _valid_dt = [_d for _d in _dts if _d]
+                            _dt_med = (_stacc.median(_valid_dt)
+                                       if _valid_dt else 0.1)
+                            _acc_calc = [0.0] * len(_vms)
+                            for _i in range(1, len(_vms)):
+                                _dt = (_dts[_i - 1] if _dts[_i - 1] else _dt_med)
+                                if _dt and _dt > 0:
+                                    _acc_calc[_i] = (_vms[_i] - _vms[_i - 1]) / _dt
+                            # Suaviza (média móvel 3) e satura em ±10 m/s².
+                            _acc_sm = []
+                            for _i in range(len(_acc_calc)):
+                                _lo = max(0, _i - 1)
+                                _hi = min(len(_acc_calc), _i + 2)
+                                _mv = sum(_acc_calc[_lo:_hi]) / (_hi - _lo)
+                                _acc_sm.append(max(-10.0, min(10.0, _mv)))
+                            aceleracoes = _acc_sm
+
                         dados_posicao[atleta_nome] = {
                             'vel': velocidades, 'xs': xs, 'ys': ys,
                             'acc': aceleracoes, 'ts_pos': ts_pos,
