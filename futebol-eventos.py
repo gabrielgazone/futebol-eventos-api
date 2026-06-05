@@ -4381,18 +4381,18 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
         return f"{s // 60:02d}:{s % 60:02d}"
 
     _jan_map = {"30 s": 30.0, "1 min": 60.0, "2 min": 120.0, "5 min": 300.0, "10 min": 600.0}
-    _opcoes = [k for k, v in _jan_map.items() if v < _total_s]
-    _opcoes += ["Período inteiro", "Personalizada…"]
-    _idx_pad = _opcoes.index("1 min") if "1 min" in _opcoes else 0
+    _opcoes = ["Período inteiro"] + [k for k, v in _jan_map.items() if v < _total_s]
+    _opcoes += ["Personalizada…"]
+    _idx_pad = 0  # padrão: período inteiro → o slider do gráfico cobre a partida toda
 
     cj1, cj2 = st.columns([1, 2])
     with cj1:
         jan_sel = st.selectbox(
             "Janela de análise", _opcoes, index=_idx_pad, key="tatica_janela",
-            help="Você pode analisar **qualquer trecho ou o período/jogo inteiro**. "
-                 "Janelas curtas mostram o **deslocamento contínuo** (≈tempo real); janelas "
-                 "longas e o 'Período inteiro' cobrem tudo, mas com frames mais espaçados "
-                 "(o movimento aparece em saltos quanto maior o trecho).")
+            help="**Período inteiro** (padrão): o slider abaixo do gráfico percorre a "
+                 "**partida toda** — arraste para qualquer momento. Para ver o "
+                 "**deslocamento contínuo em tempo real**, escolha uma janela menor "
+                 "(1–2 min) e use 'Início da janela' para posicioná-la no trecho desejado.")
 
     if jan_sel == "Período inteiro":
         _win = None
@@ -4430,7 +4430,8 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
                    f"(de {_mmss(_total_s)} totais) · o slider abaixo do gráfico percorre "
                    f"os frames **dentro** desta janela.")
     else:
-        st.caption(f"🎬 Janela: **período inteiro** ({_mmss(_total_s)})")
+        st.caption(f"🎬 Janela: **período inteiro** ({_mmss(_total_s)}) · o slider abaixo do "
+                   f"gráfico percorre a **partida toda** — arraste-o para qualquer momento.")
 
     _vel_opts = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0]
     st.select_slider(
@@ -4440,7 +4441,7 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
              "acima = acelerado. Aplica-se ao botão ▶ Play.")
 
     frames = _tatica_frames_sincronizados(dados_prep, atletas_sel,
-                                          t_ini=_t_ini, t_fim=_t_fim, max_frames=300)
+                                          t_ini=_t_ini, t_fim=_t_fim, max_frames=400)
     if frames is None:
         st.warning("Janela sem sobreposição temporal suficiente — ajuste o início ou a duração.")
         return
