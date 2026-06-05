@@ -1080,15 +1080,18 @@ BANDAS_VEL = {
 # Espelha as "Bandas Globais → Gen2Acceleration" da conta Catapult (m/s²).
 # A API Connect v6 também NÃO expõe estes cortes — são configurados manualmente
 # na barra lateral, mesmo raciocínio das bandas de velocidade.
+# Estrutura espelhando a tela "Bandas Globais → Gen2Acceleration" da Catapult,
+# dividida em ACELERAÇÃO (caixas 6,7,8 da nuvem) e DESACELERAÇÃO (caixas 3,2,1).
+# As caixas 4 e 5 (-2 a 2 m/s² · zona leve/neutra) NÃO são exibidas.
+#   Aceleração   B1 = caixa 6 (2 a 3)   · B2 = caixa 7 (3 a 4)   · B3 = caixa 8 (4 a 10)
+#   Desaceleração B1 = caixa 3 (-3 a -2) · B2 = caixa 2 (-4 a -3) · B3 = caixa 1 (-10 a -4)
 BANDAS_ACC = {
-    'A1': {'label': '4 a 10 m/s² (Aceleração Máx)',  'min': 4,    'max': 10,  'color': '#00C853'},
-    'A2': {'label': '3 a 4 m/s² (Alta Aceleração)',  'min': 3,    'max': 4,   'color': '#43A047'},
-    'A3': {'label': '2 a 3 m/s² (Aceleração)',       'min': 2,    'max': 3,   'color': '#69F0AE'},
-    'A4': {'label': '0 a 2 m/s² (Aceleração Leve)',  'min': 0,    'max': 2,   'color': '#B9F6CA'},
-    'D1': {'label': '-2 a 0 m/s² (Desacel. Leve)',   'min': -2,   'max': 0,   'color': '#FFD180'},
-    'D2': {'label': '-3 a -2 m/s² (Desaceleração)',  'min': -3,   'max': -2,  'color': '#FF6D00'},
-    'D3': {'label': '-4 a -3 m/s² (Alta Desacel.)',  'min': -4,   'max': -3,  'color': '#DD2C00'},
-    'D4': {'label': '-10 a -4 m/s² (Desacel. Máx)',  'min': -10,  'max': -4,  'color': '#B71C1C'},
+    'A1': {'label': 'Aceleração B1 — 2 a 3 m/s²',     'min': 2,    'max': 3,   'color': '#69F0AE'},
+    'A2': {'label': 'Aceleração B2 — 3 a 4 m/s²',     'min': 3,    'max': 4,   'color': '#43A047'},
+    'A3': {'label': 'Aceleração B3 — 4 a 10 m/s²',    'min': 4,    'max': 10,  'color': '#00C853'},
+    'D1': {'label': 'Desaceleração B1 — -3 a -2 m/s²', 'min': -3,  'max': -2,  'color': '#FFD180'},
+    'D2': {'label': 'Desaceleração B2 — -4 a -3 m/s²', 'min': -4,  'max': -3,  'color': '#FF6D00'},
+    'D3': {'label': 'Desaceleração B3 — -10 a -4 m/s²','min': -10, 'max': -4,  'color': '#B71C1C'},
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1161,17 +1164,16 @@ def get_zones_for_athlete(athlete_name):
 
 
 # ── Defaults de aceleração ────────────────────────────────────────────────────
-# Espelha as "Bandas Globais → Gen2Acceleration" da conta Catapult (m/s²):
-# 8 bandas → -10/-4 · -4/-3 · -3/-2 · -2/0 · 0/2 · 2/3 · 3/4 · 4/10.
+# Espelha "Bandas Globais → Gen2Acceleration" (m/s²), dividido em ACELERAÇÃO e
+# DESACELERAÇÃO. Apenas as 6 bandas relevantes da nuvem (caixas 6,7,8 e 3,2,1);
+# a zona leve/neutra (-2 a 2 · caixas 4 e 5) é ignorada.
 _DEFAULT_ACCELERATION_ZONES = [
-    {'name': 'Aceleração Máx',  'min_ms2': 4.0,   'max_ms2': 10.0,  'color': '#00C853'},
-    {'name': 'Alta Aceleração', 'min_ms2': 3.0,   'max_ms2': 4.0,   'color': '#43A047'},
-    {'name': 'Aceleração',      'min_ms2': 2.0,   'max_ms2': 3.0,   'color': '#69F0AE'},
-    {'name': 'Aceleração Leve', 'min_ms2': 0.0,   'max_ms2': 2.0,   'color': '#B9F6CA'},
-    {'name': 'Desacel. Leve',   'min_ms2': -2.0,  'max_ms2': 0.0,   'color': '#FFD180'},
-    {'name': 'Desaceleração',   'min_ms2': -3.0,  'max_ms2': -2.0,  'color': '#FF6D00'},
-    {'name': 'Alta Desacel.',   'min_ms2': -4.0,  'max_ms2': -3.0,  'color': '#DD2C00'},
-    {'name': 'Desacel. Máx',    'min_ms2': -10.0, 'max_ms2': -4.0,  'color': '#B71C1C'},
+    {'name': 'Aceleração B1',    'min_ms2': 2.0,   'max_ms2': 3.0,   'color': '#69F0AE'},
+    {'name': 'Aceleração B2',    'min_ms2': 3.0,   'max_ms2': 4.0,   'color': '#43A047'},
+    {'name': 'Aceleração B3',    'min_ms2': 4.0,   'max_ms2': 10.0,  'color': '#00C853'},
+    {'name': 'Desaceleração B1', 'min_ms2': -3.0,  'max_ms2': -2.0,  'color': '#FFD180'},
+    {'name': 'Desaceleração B2', 'min_ms2': -4.0,  'max_ms2': -3.0,  'color': '#FF6D00'},
+    {'name': 'Desaceleração B3', 'min_ms2': -10.0, 'max_ms2': -4.0,  'color': '#B71C1C'},
 ]
 
 
@@ -1341,11 +1343,13 @@ def _rotulo_banda_vel(band_raw) -> str:
     return f"{n} — {faixa}" + (f" ({nome})" if nome else "")
 
 
-# API de aceleração: band ±1..±4 → chaves internas A1..A4 / D1..D4
-# (Gen2Acceleration usa 8 bandas; mantém compatibilidade com ±3 anteriores)
-_ACC_BAND_MAP = {1: 'A1', 2: 'A2', 3: 'A3', 4: 'A4',
-                 -1: 'D1', -2: 'D2', -3: 'D3', -4: 'D4'}
-# Mapa inverso (chave interna → número da banda), usado no fallback local.
+# API de aceleração: número da caixa Gen2Acceleration (1..8) → chave interna.
+#   Aceleração   → caixas 6,7,8 = A1,A2,A3
+#   Desaceleração → caixas 3,2,1 = D1,D2,D3
+# As caixas 4 e 5 (zona leve/neutra) não têm chave (não são exibidas).
+_ACC_BAND_MAP = {6: 'A1', 7: 'A2', 8: 'A3',
+                 3: 'D1', 2: 'D2', 1: 'D3'}
+# Mapa inverso (chave interna → número da caixa), usado no fallback local.
 _ACC_KEY_TO_NUM = {v: k for k, v in _ACC_BAND_MAP.items()}
 
 
@@ -1388,27 +1392,27 @@ def _bandas_acc_ativas() -> dict:
         return str(int(fv)) if fv == int(fv) else f"{fv:g}"
 
     result = {}
-    # Acelerações (positivas) → A1 (maior) … An (mais leve);
-    # desacelerações (negativas) → D1 (mais leve) … Dn (maior).
+    # ACELERAÇÃO (positivas): B1 = mais leve (menor) … B3 = máxima (maior).
+    #   ordena por min crescente → A1, A2, A3.
+    # DESACELERAÇÃO (negativas): B1 = mais leve (perto de zero) … B3 = máxima.
+    #   ordena por max decrescente (mais perto de zero primeiro) → D1, D2, D3.
     pos_z = sorted([z for z in zones if z.get('min_ms2', 0) >= 0],
                    key=lambda z: z['min_ms2'])
     neg_z = sorted([z for z in zones if z.get('max_ms2', 0) <= 0],
                    key=lambda z: z['max_ms2'], reverse=True)
-    for i, z in enumerate(reversed(pos_z), start=1):
+    for i, z in enumerate(pos_z, start=1):
         _mn, _mx = z['min_ms2'], z['max_ms2']
-        _nome = (z.get('name') or '').strip()
-        _rng  = f"{_fa(_mn)} a {_fa(_mx)} m/s²"
+        _nome = (z.get('name') or '').strip() or f'Aceleração B{i}'
         result[f'A{i}'] = {
-            'label': f"{_rng} ({_nome})" if _nome else _rng,
+            'label': f"{_nome} — {_fa(_mn)} a {_fa(_mx)} m/s²",
             'min':   _mn, 'max': _mx,
             'color': z.get('color', '#69F0AE'),
         }
     for i, z in enumerate(neg_z, start=1):
         _mn, _mx = z['min_ms2'], z['max_ms2']
-        _nome = (z.get('name') or '').strip()
-        _rng  = f"{_fa(_mn)} a {_fa(_mx)} m/s²"
+        _nome = (z.get('name') or '').strip() or f'Desaceleração B{i}'
         result[f'D{i}'] = {
-            'label': f"{_rng} ({_nome})" if _nome else _rng,
+            'label': f"{_nome} — {_fa(_mn)} a {_fa(_mx)} m/s²",
             'min':   _mn, 'max': _mx,
             'color': z.get('color', '#FF6D00'),
         }
@@ -1473,13 +1477,16 @@ def _derivar_zonas_velocidade(efforts_por_atleta) -> list:
 def _derivar_zonas_aceleracao(efforts_por_atleta) -> list:
     """Reconstrói as bandas de aceleração (m/s²) da conta a partir dos efforts.
 
-    efforts_por_atleta: dict atleta -> lista de acceleration_efforts (cada um
-    com 'band' e 'acceleration' em m/s²). Ordena as bandas pela aceleração real
-    (do mais negativo ao mais positivo), independente da numeração da API.
-    Retorna lista no formato de _DEFAULT_ACCELERATION_ZONES, ou None.
+    Mantém SEMPRE a estrutura Aceleração B1/B2/B3 + Desaceleração B1/B2/B3,
+    mapeando o NÚMERO da caixa Gen2Acceleration (campo 'band' do effort) para a
+    banda correspondente via _ACC_BAND_MAP — caixas 6,7,8 → Aceleração B1,B2,B3
+    e caixas 3,2,1 → Desaceleração B1,B2,B3. As caixas 4 e 5 (zona leve/neutra)
+    são ignoradas. Os cortes de cada banda vêm das acelerações REAIS da conta.
+    Retorna lista no formato de _DEFAULT_ACCELERATION_ZONES, ou None se não houver
+    dados suficientes (nesse caso mantêm-se os valores padrão/manuais).
     """
-    import numpy as _np
     from collections import defaultdict
+    # Agrupa magnitudes (valor absoluto) por número de caixa mapeada.
     vals = defaultdict(list)
     for _efs in (efforts_por_atleta or {}).values():
         for _ef in (_efs or []):
@@ -1487,33 +1494,43 @@ def _derivar_zonas_aceleracao(efforts_por_atleta) -> list:
                 _b = int(float(_ef.get('band')))
             except (TypeError, ValueError):
                 continue
+            if _b not in _ACC_BAND_MAP:
+                continue
             try:
                 _fv = float(_ef.get('acceleration'))
             except (TypeError, ValueError):
                 continue
-            vals[_b].append(_fv)
-    bands = [b for b in vals if vals[b]]
-    if len(bands) < 2:
-        return None
-    bands = sorted(bands, key=lambda b: _np.median(vals[b]))
-    bounds = []
-    for i in range(len(bands) - 1):
-        bounds.append((max(vals[bands[i]]) + min(vals[bands[i + 1]])) / 2.0)
-    zones = []
-    for i, b in enumerate(bands):
-        _mn = bounds[i - 1] if i > 0 else min(vals[b])
-        _mx = bounds[i] if i < len(bands) - 1 else max(vals[b])
-        if _mx <= _mn:
-            _mx = _mn + 0.1
-        _med = float(_np.median(vals[b]))
-        _nome = 'Aceleração' if _med > 0 else ('Desaceleração' if _med < 0 else 'Neutra')
-        zones.append({
-            'name':    _nome,
-            'min_ms2': round(_mn, 3),
-            'max_ms2': round(_mx, 3),
-            'color':   '#69F0AE' if _med > 0 else '#FF6D00',
-        })
-    return zones
+            vals[_b].append(abs(_fv))
+
+    def _side(box_order, label_prefix, colors, positivo):
+        """box_order: caixas de B1 (mais leve) → B3 (máxima). Deriva os cortes
+        em espaço de magnitude e re-aplica o sinal."""
+        present = [b for b in box_order if vals.get(b)]
+        if not present:
+            return []
+        bounds = []
+        for i in range(len(present) - 1):
+            bounds.append((max(vals[present[i]]) + min(vals[present[i + 1]])) / 2.0)
+        out = []
+        for i, b in enumerate(present):
+            _lo = bounds[i - 1] if i > 0 else min(vals[b])
+            _hi = bounds[i] if i < len(present) - 1 else max(vals[b])
+            if _hi <= _lo:
+                _hi = _lo + 0.1
+            _mn, _mx = (_lo, _hi) if positivo else (-_hi, -_lo)
+            out.append({
+                'name':    f'{label_prefix} B{i + 1}',
+                'min_ms2': round(_mn, 3),
+                'max_ms2': round(_mx, 3),
+                'color':   colors[min(i, len(colors) - 1)],
+            })
+        return out
+
+    zones = (
+        _side([6, 7, 8], 'Aceleração', ['#69F0AE', '#43A047', '#00C853'], True)
+        + _side([3, 2, 1], 'Desaceleração', ['#FFD180', '#FF6D00', '#B71C1C'], False)
+    )
+    return zones if len(zones) >= 2 else None
 
 
 # ── Configuração dos tipos de eventos futebol ──────────────────────────────
@@ -7812,13 +7829,27 @@ Escolha um ou mais atletas para análise simultânea.
                                             key="ms_bv"
                                         )
                                     elif modo_viz == "🔁 Bandas de Aceleração":
-                                        bandas_acc_sel = st.multiselect(
-                                            "Bandas de aceleração a exibir:",
-                                            options=list(_ba_ui.keys()),
-                                            default=list(_ba_ui.keys()),
-                                            format_func=lambda k: _ba_ui[k]['label'],
-                                            key="ms_ba"
-                                        )
+                                        # Duas caixas separadas: Aceleração (A*) e Desaceleração (D*).
+                                        _acc_k = [k for k in _ba_ui if str(k).startswith('A')]
+                                        _dec_k = [k for k in _ba_ui if str(k).startswith('D')]
+                                        _cba, _cbd = st.columns(2)
+                                        with _cba:
+                                            _sel_a = st.multiselect(
+                                                "🚀 Aceleração:",
+                                                options=_acc_k,
+                                                default=_acc_k,
+                                                format_func=lambda k: _ba_ui[k]['label'],
+                                                key="ms_ba_pos"
+                                            )
+                                        with _cbd:
+                                            _sel_d = st.multiselect(
+                                                "🛑 Desaceleração:",
+                                                options=_dec_k,
+                                                default=_dec_k,
+                                                format_func=lambda k: _ba_ui[k]['label'],
+                                                key="ms_ba_neg"
+                                            )
+                                        bandas_acc_sel = list(_sel_a) + list(_sel_d)
 
                                     # ── Configuração da grade ─────────────────────────
                                     # ── Seletor de eventos para o campo ──────────────
@@ -12821,19 +12852,34 @@ Escolha um ou mais atletas para análise simultânea.
                                 st.info("Selecione ao menos uma banda de velocidade.")
                         elif _wcs2_metric == "💥 Aceleração (bandas)":
                             _ba_act = _bandas_acc_ativas()
-                            _ba_lbl = {f"{_bk} — {_bd.get('label', '')}": _bk
-                                       for _bk, _bd in _ba_act.items()}
-                            _ba_pick = st.multiselect(
-                                "🎚️ Bandas de aceleração a visualizar",
-                                list(_ba_lbl.keys()),
-                                default=list(_ba_lbl.keys()),
-                                key="wcs2_acc_bands",
-                                help="Conta as amostras (n) cuja aceleração cai dentro das "
-                                     "bandas selecionadas (inclui acelerações e desacelerações)."
+                            # Duas caixas separadas: Aceleração (A*) e Desaceleração (D*).
+                            _acc_lbl = {_ba_act[k]['label']: k
+                                        for k in _ba_act if str(k).startswith('A')}
+                            _dec_lbl = {_ba_act[k]['label']: k
+                                        for k in _ba_act if str(k).startswith('D')}
+                            _cwa, _cwd = st.columns(2)
+                            with _cwa:
+                                _acc_pick = st.multiselect(
+                                    "🚀 Aceleração",
+                                    list(_acc_lbl.keys()),
+                                    default=list(_acc_lbl.keys()),
+                                    key="wcs2_acc_bands_pos",
+                                    help="Bandas de aceleração (Gen2Acceleration · caixas 6,7,8)."
+                                )
+                            with _cwd:
+                                _dec_pick = st.multiselect(
+                                    "🛑 Desaceleração",
+                                    list(_dec_lbl.keys()),
+                                    default=list(_dec_lbl.keys()),
+                                    key="wcs2_acc_bands_neg",
+                                    help="Bandas de desaceleração (Gen2Acceleration · caixas 3,2,1)."
+                                )
+                            _sel_acc_bands = (
+                                [_ba_act[_acc_lbl[_s]] for _s in _acc_pick]
+                                + [_ba_act[_dec_lbl[_s]] for _s in _dec_pick]
                             )
-                            _sel_acc_bands = [_ba_act[_ba_lbl[_s]] for _s in _ba_pick]
                             if not _sel_acc_bands:
-                                st.info("Selecione ao menos uma banda de aceleração.")
+                                st.info("Selecione ao menos uma banda de aceleração ou desaceleração.")
 
                     # ── Detecta Hz real a partir dos timestamps ─────────────────────
                     def _detect_hz(_periodos_list, _dppp):
