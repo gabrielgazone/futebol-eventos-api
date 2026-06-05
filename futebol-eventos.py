@@ -3881,8 +3881,9 @@ def _tatica_anim_layout(fig, tempos, height=560, right_margin=80):
                   label=labels[i]) for i in range(len(tempos))]
     fig.update_layout(
         updatemenus=[dict(type='buttons', direction='right', showactive=False,
-                          x=0.02, y=1.10, xanchor='left',
-                          bgcolor='#1f2937', font=dict(color='white'),
+                          x=0.0, y=0, xanchor='left', yanchor='top',
+                          pad=dict(t=0, r=8),
+                          bgcolor='#1f2937', font=dict(color='white', size=11),
                           buttons=[
                               dict(label='▶ Play', method='animate',
                                    args=[None, dict(frame=dict(duration=dur, redraw=True),
@@ -3891,12 +3892,12 @@ def _tatica_anim_layout(fig, tempos, height=560, right_margin=80):
                                    args=[[None], dict(frame=dict(duration=0, redraw=True),
                                                       mode='immediate', transition=dict(duration=0))]),
                           ])],
-        sliders=[dict(active=0, x=0.02, len=0.96, y=0, xanchor='left', yanchor='top',
+        sliders=[dict(active=0, x=0.15, len=0.83, y=0, xanchor='left', yanchor='top',
                       currentvalue=dict(prefix='⏱️ ', font=dict(color='white')),
                       font=dict(color='#9ca3af', size=9),
                       steps=steps)],
         height=height, paper_bgcolor='#0e1117', plot_bgcolor='#1a3a18',
-        margin=dict(l=30, r=right_margin, t=55, b=40),
+        margin=dict(l=30, r=right_margin, t=45, b=45),
         font=dict(color='white'), showlegend=False,
     )
 
