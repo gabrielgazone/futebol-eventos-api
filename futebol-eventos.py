@@ -7371,21 +7371,26 @@ Escolha um ou mais atletas para análise simultânea.
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("🏃 Atletas", len(st.session_state.atletas_sel))
+            # Exclui o período sintético "Períodos Combinados" (que já é a soma
+            # dos períodos reais por atleta) para não contar cada atleta 2x e
+            # garantir que os totais batam com a Tabela Descritiva (_df_ov).
+            _res_iter = [(_p, _rs) for _p, _rs in resultados_por_periodo.items()
+                         if _p != _CHAVE_COMBINADO]
             with col2:
                 total_dist = 0
-                for resultados in resultados_por_periodo.values():
+                for _p, resultados in _res_iter:
                     for r in resultados:
                         total_dist += r.get('Distância (m)', 0)
                 st.metric("📏 Distância Total", f"{total_dist:,.0f} m")
             with col3:
                 total_pl = 0
-                for resultados in resultados_por_periodo.values():
+                for _p, resultados in _res_iter:
                     for r in resultados:
                         total_pl += r.get('PlayerLoad', 0)
                 st.metric("⚡ PlayerLoad Total", f"{total_pl:,.0f}", help="Catapult PlayerLoad™: raiz quadrada da soma das acelerações ao quadrado nos 3 eixos (inercial)")
             with col4:
                 max_vel = 0
-                for resultados in resultados_por_periodo.values():
+                for _p, resultados in _res_iter:
                     for r in resultados:
                         max_vel = max(max_vel, r.get('Velocidade Máx (km/h)', 0))
                 st.metric("💨 Velocidade Máx", f"{max_vel:.1f} km/h")
