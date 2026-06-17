@@ -4382,6 +4382,100 @@ def _tatica_view_distancias(tempos, nomes, equipes, PX, PY, PV, FL, FW):
     k_max = int(_np.nanargmax(mean_dist))
     k_min = int(_np.nanargmin(mean_dist))
 
+    # ── Campo animado com linhas de distância em tempo real ─────────────────
+    st.markdown("##### 🎥 Campo com distâncias em tempo real")
+    eq_validas = [e for e in dict.fromkeys(equipes) if e]
+    dois_times = len(eq_validas) >= 2
+    if dois_times:
+        cores_pl = ['#2196F3' if equipes[i] == eq_validas[0] else '#E53935' for i in range(natl)]
+    else:
+        cores_pl = [_tatica_cor_atleta(i) for i in range(natl)]
+
+    cmo1, cmo2 = st.columns([1.3, 1])
+    with cmo1:
+        modo_conn = st.radio("Conexões a desenhar",
+                             ["A partir de um atleta", "Vizinho mais próximo", "Todos os pares"],
+                             horizontal=True, key="tatica_dist_conn")
+    ref_idx = 0
+    if modo_conn == "A partir de um atleta":
+        with cmo2:
+            ref_nome = st.selectbox("Atleta de referência", nomes, key="tatica_dist_ref")
+            ref_idx = nomes.index(ref_nome)
+
+    def _pares_frame(k):
+        xs = PX[k]; ys = PY[k]
+        val = ~_np.isnan(xs) & ~_np.isnan(ys)
+        pares = []
+        if modo_conn == "Todos os pares":
+            for i in range(natl):
+                for j in range(i + 1, natl):
+                    if val[i] and val[j]:
+                        pares.append((i, j))
+        elif modo_conn == "Vizinho mais próximo":
+            s = set()
+            for i in range(natl):
+                if not val[i]:
+                    continue
+                best, bd = -1, 1e18
+                for j in range(natl):
+                    if j == i or not val[j]:
+                        continue
+                    dd = (xs[i] - xs[j]) ** 2 + (ys[i] - ys[j]) ** 2
+                    if dd < bd:
+                        bd, best = dd, j
+                if best >= 0:
+                    s.add(tuple(sorted((i, best))))
+            pares = list(s)
+        else:
+            if val[ref_idx]:
+                for j in range(natl):
+                    if j != ref_idx and val[j]:
+                        pares.append((ref_idx, j))
+        return pares
+
+    _rotular = (modo_conn != "Todos os pares")
+
+    def _line_data(k):
+        lx, ly, tx, ty, tt = [], [], [], [], []
+        for (i, j) in _pares_frame(k):
+            lx += [PX[k][i], PX[k][j], None]
+            ly += [PY[k][i], PY[k][j], None]
+            if _rotular:
+                tx.append((PX[k][i] + PX[k][j]) / 2.0)
+                ty.append((PY[k][i] + PY[k][j]) / 2.0)
+                tt.append(f"{D[k, i, j]:.0f}")
+        return lx, ly, tx, ty, tt
+
+    lx0, ly0, tx0, ty0, tt0 = _line_data(0)
+    line_tr = _go.Scatter(x=lx0, y=ly0, mode='lines',
+                          line=dict(color='rgba(255,255,255,0.5)', width=1.4),
+                          hoverinfo='skip', name='dist')
+    lab_tr = _go.Scatter(x=tx0, y=ty0, mode='text', text=tt0,
+                         textfont=dict(color='#FFD740', size=10), hoverinfo='skip', name='m')
+    pl_tr = _go.Scatter(x=PX[0], y=PY[0], mode='markers+text', text=ini,
+                        textposition='middle center', textfont=dict(color='white', size=8),
+                        marker=dict(size=15, color=cores_pl, line=dict(color='white', width=1.2)),
+                        hovertext=nomes, hoverinfo='text', name='atletas')
+    figc = _go.Figure(data=[line_tr, lab_tr, pl_tr])
+    _tatica_add_campo_shapes(figc, FL, FW)
+    figc.frames = []
+    _frs = []
+    for k in range(nf):
+        lx, ly, tx, ty, tt = _line_data(k)
+        _frs.append(_go.Frame(name=f"f{k}",
+                              data=[_go.Scatter(x=lx, y=ly),
+                                    _go.Scatter(x=tx, y=ty, text=tt),
+                                    _go.Scatter(x=PX[k], y=PY[k], text=ini)],
+                              traces=[0, 1, 2]))
+    figc.frames = _frs
+    figc.update_xaxes(range=[-3, FL + 3], showgrid=False, zeroline=False, visible=False)
+    figc.update_yaxes(range=[-3, FW + 3], showgrid=False, zeroline=False,
+                      scaleanchor='x', scaleratio=1, visible=False)
+    _tatica_anim_layout(figc, tempos, height=520)
+    st.plotly_chart(figc, use_container_width=True)
+    st.caption("As linhas conectam os atletas e os números mostram a distância (m) **a cada "
+               "instante**. Use ▶ Play (e o slider de velocidade acima) para ver em tempo real.")
+
     # ── Estado do instante selecionado ──────────────────────────────────────
     if ('tatica_dist_k' not in st.session_state
             or not isinstance(st.session_state.get('tatica_dist_k'), int)
@@ -4632,13 +4726,12 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
         st.caption(f"🎬 Janela: **período inteiro** ({_mmss(_total_s)}) · o slider abaixo do "
                    f"gráfico percorre a **partida toda** — arraste-o para qualquer momento.")
 
-    if not vis.startswith("📏"):
-        _vel_opts = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0]
-        st.select_slider(
-            "Velocidade da animação", options=_vel_opts, value=1.0, key="tatica_vel_mult",
-            format_func=lambda v: ("1× (tempo real)" if v == 1.0 else f"{v:g}×"),
-            help="1× reproduz no tempo real do jogo. Abaixo de 1× = câmera lenta; "
-                 "acima = acelerado. Aplica-se ao botão ▶ Play.")
+    _vel_opts = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0]
+    st.select_slider(
+        "Velocidade da animação", options=_vel_opts, value=1.0, key="tatica_vel_mult",
+        format_func=lambda v: ("1× (tempo real)" if v == 1.0 else f"{v:g}×"),
+        help="1× reproduz no tempo real do jogo. Abaixo de 1× = câmera lenta; "
+             "acima = acelerado. Aplica-se ao botão ▶ Play.")
 
     frames = _tatica_frames_sincronizados(dados_prep, atletas_sel,
                                           t_ini=_t_ini, t_fim=_t_fim, max_frames=400)
