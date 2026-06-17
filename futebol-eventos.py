@@ -4331,8 +4331,194 @@ def _tatica_view_replay3d(tempos, nomes, equipes, PX, PY, PV, FL, FW):
     st.plotly_chart(fig, use_container_width=True)
 
 
+def _tatica_view_distancias(tempos, nomes, equipes, PX, PY, PV, FL, FW):
+    """📏 Distância entre atletas: matriz de distância média, evolução temporal
+    da distância média entre pares e navegação por instante (maior/menor
+    distância) — tudo derivado das posições sincronizadas no campo."""
+    import numpy as _np
+    import plotly.graph_objects as _go
+    nf, natl = PX.shape
+    if natl < 2:
+        st.info("Selecione pelo menos 2 atletas para analisar distâncias.")
+        return
+
+    ini = [_tatica_iniciais(n) for n in nomes]
+    # rótulos únicos p/ eixos (evita iniciais repetidas se houver)
+    _seen = {}
+    rot = []
+    for s in ini:
+        if s in _seen:
+            _seen[s] += 1
+            rot.append(f"{s}{_seen[s]}")
+        else:
+            _seen[s] = 1
+            rot.append(s)
+
+    # ── Distâncias por frame: D[k,i,j] = dist no campo (m), NaN se faltar ──
+    dx = PX[:, :, None] - PX[:, None, :]
+    dy = PY[:, :, None] - PY[:, None, :]
+    D = _np.sqrt(dx * dx + dy * dy)                 # [nf, natl, natl]
+
+    iu = _np.triu_indices(natl, k=1)
+    pares_serie = D[:, iu[0], iu[1]]                # [nf, npares]
+    with _np.errstate(all='ignore'):
+        import warnings as _w
+        with _w.catch_warnings():
+            _w.simplefilter('ignore')
+            mean_dist = _np.nanmean(pares_serie, axis=1)        # média entre pares por frame
+            M_janela = _np.nanmean(D, axis=0)                   # matriz média na janela
+
+    if _np.all(_np.isnan(mean_dist)):
+        st.info("Sem pares de atletas com cobertura simultânea nesta janela.")
+        return
+
+    t0 = tempos[0]
+    tmin = (_np.asarray(tempos, dtype=float) - t0) / 60.0       # minutos relativos
+
+    def _mmss(seg):
+        seg = int(round(seg))
+        return f"{seg // 60:02d}:{seg % 60:02d}"
+
+    k_max = int(_np.nanargmax(mean_dist))
+    k_min = int(_np.nanargmin(mean_dist))
+
+    # ── Estado do instante selecionado ──────────────────────────────────────
+    if ('tatica_dist_k' not in st.session_state
+            or not isinstance(st.session_state.get('tatica_dist_k'), int)
+            or st.session_state['tatica_dist_k'] >= nf):
+        st.session_state['tatica_dist_k'] = k_max
+
+    # ── Cartões: momentos de maior e menor distância ────────────────────────
+    cM, cm = st.columns(2)
+    with cM:
+        st.metric("⤢ Maior distância média (equipe mais aberta)",
+                  f"{mean_dist[k_max]:.1f} m", f"aos {_mmss(tempos[k_max]-t0)}")
+        if st.button("Ver este instante ⤢", key="btn_dist_max", use_container_width=True):
+            st.session_state['tatica_dist_k'] = k_max
+            st.rerun()
+    with cm:
+        st.metric("⤡ Menor distância média (equipe mais compacta)",
+                  f"{mean_dist[k_min]:.1f} m", f"aos {_mmss(tempos[k_min]-t0)}", delta_color="inverse")
+        if st.button("Ver este instante ⤡", key="btn_dist_min", use_container_width=True):
+            st.session_state['tatica_dist_k'] = k_min
+            st.rerun()
+
+    # ── Slider de linha do tempo (instante) ─────────────────────────────────
+    if nf > 1:
+        k_sel = st.slider("Instante na linha do tempo", 0, nf - 1,
+                          key="tatica_dist_k",
+                          format="frame %d",
+                          help="Arraste para navegar; ou use os botões acima para pular "
+                               "aos momentos de maior/menor distância.")
+    else:
+        k_sel = 0
+    st.caption(f"⏱️ Instante selecionado: **{_mmss(tempos[k_sel]-t0)}** "
+               f"· distância média neste instante: **{mean_dist[k_sel]:.1f} m**")
+
+    # ── Evolução temporal da distância média entre pares ────────────────────
+    ev = _go.Figure()
+    ev.add_trace(_go.Scatter(x=tmin, y=mean_dist, mode='lines',
+                             line=dict(color='#42A5F5', width=2),
+                             name='Dist. média', hovertemplate='%{x:.1f} min — %{y:.1f} m<extra></extra>'))
+    ev.add_trace(_go.Scatter(x=[tmin[k_max]], y=[mean_dist[k_max]], mode='markers+text',
+                             marker=dict(color='#EF5350', size=11, symbol='triangle-up'),
+                             text=['máx'], textposition='top center',
+                             textfont=dict(color='#EF5350', size=10), hoverinfo='skip', showlegend=False))
+    ev.add_trace(_go.Scatter(x=[tmin[k_min]], y=[mean_dist[k_min]], mode='markers+text',
+                             marker=dict(color='#66BB6A', size=11, symbol='triangle-down'),
+                             text=['mín'], textposition='bottom center',
+                             textfont=dict(color='#66BB6A', size=10), hoverinfo='skip', showlegend=False))
+    ev.add_vline(x=tmin[k_sel], line_dash='dot', line_color='#FFD740', line_width=2)
+    ev.update_layout(
+        height=260, paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+        margin=dict(l=45, r=20, t=34, b=35), font=dict(color='white', size=10),
+        title=dict(text='📈 Distância média entre atletas ao longo do tempo',
+                   font=dict(color='white', size=12)),
+        xaxis=dict(title='minutos', gridcolor='#1f2937'),
+        yaxis=dict(title='metros', gridcolor='#1f2937'),
+        showlegend=False,
+    )
+    st.plotly_chart(ev, use_container_width=True)
+
+    # ── Matriz de distância (média da janela OU instante) ───────────────────
+    cmsel1, cmsel2 = st.columns([1, 1])
+    with cmsel1:
+        modo_mat = st.radio("Matriz de distância",
+                            ["Média da janela", "Instante selecionado"],
+                            horizontal=True, key="tatica_dist_modo")
+    if modo_mat == "Instante selecionado":
+        M = D[k_sel].copy()
+        sub = f"instante {_mmss(tempos[k_sel]-t0)}"
+    else:
+        M = M_janela.copy()
+        sub = f"média de {_mmss(dur := tempos[-1]-tempos[0])}"
+    _np.fill_diagonal(M, _np.nan)
+
+    txt = [[("" if _np.isnan(M[i, j]) else f"{M[i, j]:.0f}") for j in range(natl)]
+           for i in range(natl)]
+    heat = _go.Figure(data=_go.Heatmap(
+        z=M, x=rot, y=rot, text=txt, texttemplate="%{text}",
+        textfont=dict(size=9, color='white'),
+        colorscale='YlOrRd_r', reversescale=False,
+        colorbar=dict(title=dict(text='m', font=dict(color='white')),
+                      tickfont=dict(color='white'), thickness=12),
+        hovertemplate='%{y} ↔ %{x}: %{z:.1f} m<extra></extra>'))
+    heat.update_layout(
+        height=max(320, 26 * natl + 90), paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+        margin=dict(l=50, r=20, t=40, b=50), font=dict(color='white', size=10),
+        title=dict(text=f'🔲 Matriz de distância média entre atletas ({sub})',
+                   font=dict(color='white', size=12)),
+        xaxis=dict(side='top', tickfont=dict(size=9)),
+        yaxis=dict(autorange='reversed', tickfont=dict(size=9)),
+    )
+    st.plotly_chart(heat, use_container_width=True)
+
+    # ── Tabelas: pares + por atleta ─────────────────────────────────────────
+    pares = [(rot[i], rot[j], nomes[i], nomes[j], M_janela[i, j])
+             for i in range(natl) for j in range(i + 1, natl)
+             if not _np.isnan(M_janela[i, j])]
+    pares.sort(key=lambda p: p[4])
+
+    cP1, cP2 = st.columns(2)
+    with cP1:
+        st.markdown("##### 🤝 Pares mais próximos (média)")
+        _df_perto = pd.DataFrame(
+            [{'Atleta A': p[2], 'Atleta B': p[3], 'Dist. média (m)': round(p[4], 1)}
+             for p in pares[:6]])
+        st.dataframe(_df_perto, use_container_width=True, hide_index=True)
+    with cP2:
+        st.markdown("##### ↔️ Pares mais distantes (média)")
+        _df_longe = pd.DataFrame(
+            [{'Atleta A': p[2], 'Atleta B': p[3], 'Dist. média (m)': round(p[4], 1)}
+             for p in pares[::-1][:6]])
+        st.dataframe(_df_longe, use_container_width=True, hide_index=True)
+
+    with _np.errstate(all='ignore'):
+        import warnings as _w2
+        with _w2.catch_warnings():
+            _w2.simplefilter('ignore')
+            _Mna = M_janela.copy()
+            _np.fill_diagonal(_Mna, _np.nan)
+            media_por_atl = _np.nanmean(_Mna, axis=1)
+    _df_atl = pd.DataFrame({
+        'Atleta': nomes,
+        'Posição': posicoes,
+        'Dist. média aos demais (m)': [round(float(v), 1) if not _np.isnan(v) else None
+                                       for v in media_por_atl],
+    }).sort_values('Dist. média aos demais (m)', na_position='last')
+    st.markdown("##### 🧍 Distância média de cada atleta aos demais")
+    st.dataframe(_df_atl, use_container_width=True, hide_index=True)
+
+    # ── Export da matriz (média da janela) ──────────────────────────────────
+    _df_mat = pd.DataFrame(M_janela, index=nomes, columns=nomes).round(1)
+    st.download_button(
+        "📥 Exportar matriz de distância média (CSV)",
+        _df_mat.to_csv().encode('utf-8'),
+        "matriz_distancia_atletas.csv", mime='text/csv')
+
+
 def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atletas_sel):
-    """Aba 🧠 Tática Coletiva — orquestra as 4 visões coletivas."""
+    """Aba 🧠 Tática Coletiva — orquestra as 5 visões coletivas."""
     import numpy as _np
 
     st.markdown("### 🧠 Tática Coletiva")
@@ -4363,7 +4549,8 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
                                key="tatica_periodo")
     with c2:
         vis = st.radio("Visualização",
-                       ["🎯 Pitch Control", "🫁 Respiração da equipe", "🔷 Voronoi", "🎥 Replay 3D"],
+                       ["🎯 Pitch Control", "🫁 Respiração da equipe", "🔷 Voronoi",
+                        "🎥 Replay 3D", "📏 Distância entre atletas"],
                        horizontal=True, key="tatica_vis")
 
     dados_periodo = dados_posicao_por_periodo.get(per_sel, {})
@@ -4434,12 +4621,13 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
         st.caption(f"🎬 Janela: **período inteiro** ({_mmss(_total_s)}) · o slider abaixo do "
                    f"gráfico percorre a **partida toda** — arraste-o para qualquer momento.")
 
-    _vel_opts = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0]
-    st.select_slider(
-        "Velocidade da animação", options=_vel_opts, value=1.0, key="tatica_vel_mult",
-        format_func=lambda v: ("1× (tempo real)" if v == 1.0 else f"{v:g}×"),
-        help="1× reproduz no tempo real do jogo. Abaixo de 1× = câmera lenta; "
-             "acima = acelerado. Aplica-se ao botão ▶ Play.")
+    if not vis.startswith("📏"):
+        _vel_opts = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0]
+        st.select_slider(
+            "Velocidade da animação", options=_vel_opts, value=1.0, key="tatica_vel_mult",
+            format_func=lambda v: ("1× (tempo real)" if v == 1.0 else f"{v:g}×"),
+            help="1× reproduz no tempo real do jogo. Abaixo de 1× = câmera lenta; "
+                 "acima = acelerado. Aplica-se ao botão ▶ Play.")
 
     frames = _tatica_frames_sincronizados(dados_prep, atletas_sel,
                                           t_ini=_t_ini, t_fim=_t_fim, max_frames=400)
@@ -4480,10 +4668,16 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
         st.caption("🔷 **Voronoi**: cada célula do campo é colorida pelo jogador **mais próximo**. "
                    "Células grandes = jogador cobrindo muito espaço; zonas sem dono = buracos "
                    "de cobertura.")
-    else:
+    elif vis.startswith("🎥"):
         _tatica_view_replay3d(tempos, nomes, equipes, PX, PY, PV, FL, FW)
         st.caption("🎥 **Replay 3D**: 'broadcast sintético' reconstruído só das coordenadas. "
                    "Arraste para girar a câmera, role para dar zoom e use Play para animar.")
+    else:
+        _tatica_view_distancias(tempos, nomes, equipes, PX, PY, PV, FL, FW)
+        st.caption("📏 **Distância entre atletas**: a matriz mostra a distância média (em metros) "
+                   "entre cada par; o gráfico e o slider permitem achar os instantes de **maior** "
+                   "(equipe aberta) e **menor** distância (equipe compacta). Útil para ler "
+                   "compactação, linhas e relações entre setores.")
 
 
 def combinar_periodos_continuo(dados_sensor_por_atleta_por_periodo: dict, atleta: str) -> list:
