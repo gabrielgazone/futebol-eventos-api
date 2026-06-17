@@ -4456,20 +4456,31 @@ def _tatica_view_distancias(tempos, nomes, equipes, PX, PY, PV, FL, FW):
 
     txt = [[("" if _np.isnan(M[i, j]) else f"{M[i, j]:.0f}") for j in range(natl)]
            for i in range(natl)]
+    # rótulos = nomes dos atletas (garante unicidade p/ não fundir células)
+    _vis = {}
+    eixo = []
+    for n in nomes:
+        if n in _vis:
+            _vis[n] += 1
+            eixo.append(f"{n} ({_vis[n]})")
+        else:
+            _vis[n] = 1
+            eixo.append(n)
+    _maxlen = max((len(n) for n in eixo), default=8)
     heat = _go.Figure(data=_go.Heatmap(
-        z=M, x=rot, y=rot, text=txt, texttemplate="%{text}",
+        z=M, x=eixo, y=eixo, text=txt, texttemplate="%{text}",
         textfont=dict(size=9, color='white'),
         colorscale='YlOrRd_r', reversescale=False,
         colorbar=dict(title=dict(text='m', font=dict(color='white')),
                       tickfont=dict(color='white'), thickness=12),
         hovertemplate='%{y} ↔ %{x}: %{z:.1f} m<extra></extra>'))
     heat.update_layout(
-        height=max(320, 26 * natl + 90), paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
-        margin=dict(l=50, r=20, t=40, b=50), font=dict(color='white', size=10),
+        height=max(360, 30 * natl + 130), paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+        margin=dict(l=10, r=20, t=40, b=10), font=dict(color='white', size=10),
         title=dict(text=f'🔲 Matriz de distância média entre atletas ({sub})',
                    font=dict(color='white', size=12)),
-        xaxis=dict(side='top', tickfont=dict(size=9)),
-        yaxis=dict(autorange='reversed', tickfont=dict(size=9)),
+        xaxis=dict(side='top', tickangle=-40, tickfont=dict(size=9), automargin=True),
+        yaxis=dict(autorange='reversed', tickfont=dict(size=9), automargin=True),
     )
     st.plotly_chart(heat, use_container_width=True)
 
