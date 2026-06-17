@@ -4502,7 +4502,7 @@ def _tatica_view_distancias(tempos, nomes, equipes, PX, PY, PV, FL, FW):
             media_por_atl = _np.nanmean(_Mna, axis=1)
     _df_atl = pd.DataFrame({
         'Atleta': nomes,
-        'Posição': posicoes,
+        'Equipe': [e or '—' for e in equipes],
         'Dist. média aos demais (m)': [round(float(v), 1) if not _np.isnan(v) else None
                                        for v in media_por_atl],
     }).sort_values('Dist. média aos demais (m)', na_position='last')
