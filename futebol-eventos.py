@@ -3862,17 +3862,25 @@ def _tatica_add_campo_shapes(fig, FL, FW, line_color='rgba(255,255,255,0.85)'):
         fig.add_shape(type="rect", x0=x0, y0=cy - 9.16, x1=x1, y1=cy + 9.16, line=L, layer='above')
 
 
-def _tatica_anim_layout(fig, tempos, height=560, right_margin=80):
+def _tatica_anim_layout(fig, tempos, height=560, right_margin=80, redraw=True, tween=True):
     """Play/Pause + slider de tempo (mm:ss). A velocidade é controlada pelo
     slider de Velocidade da UI (st.session_state['tatica_vel_mult']): o Play roda
     no tempo real do jogo dividido pelo multiplicador, usando o espaçamento real
-    entre frames (assim '1×' = tempo real do mundo em qualquer janela)."""
+    entre frames (assim '1×' = tempo real do mundo em qualquer janela).
+
+    `tween=True` ativa a **interpolação** entre frames (o atleta desliza
+    suavemente entre as posições, em vez de teleportar). `redraw=False` é usado
+    nas views só-scatter (deslocamento mais fluido); heatmaps precisam de
+    `redraw=True`."""
     import numpy as _np
     t0 = tempos[0]
     difs = _np.diff(_np.asarray(tempos, dtype=float))
     dt = float(_np.median(difs)) if difs.size else 0.5      # segundos reais entre frames
     vel = float(st.session_state.get('tatica_vel_mult', 1.0))
     dur = int(max(20, round(dt * 1000.0 / max(0.1, vel))))  # ms por frame na reprodução
+    # Tween: interpola o movimento ao longo do tempo do frame (cap 1200 ms p/ não
+    # arrastar demais em janelas longas). Sem tween em 3D (não suporta bem).
+    tdur = int(min(dur, 1200)) if tween else 0
     labels = [f"{int((t - t0) // 60):02d}:{int((t - t0) % 60):02d}" for t in tempos]
     steps = [dict(method='animate',
                   args=[[f"f{i}"],
@@ -3886,8 +3894,9 @@ def _tatica_anim_layout(fig, tempos, height=560, right_margin=80):
                           bgcolor='#1f2937', font=dict(color='white', size=11),
                           buttons=[
                               dict(label='▶ Play', method='animate',
-                                   args=[None, dict(frame=dict(duration=dur, redraw=True),
-                                                    fromcurrent=True, transition=dict(duration=0))]),
+                                   args=[None, dict(frame=dict(duration=dur, redraw=redraw),
+                                                    fromcurrent=True,
+                                                    transition=dict(duration=tdur, easing='linear'))]),
                               dict(label='⏸ Pause', method='animate',
                                    args=[[None], dict(frame=dict(duration=0, redraw=True),
                                                       mode='immediate', transition=dict(duration=0))]),
@@ -4008,7 +4017,7 @@ def _tatica_view_pitch_control(tempos, nomes, equipes, PX, PY, PV, FL, FW):
     fig.update_xaxes(range=[-3, FL + 3], showgrid=False, zeroline=False, visible=False)
     fig.update_yaxes(range=[-3, FW + 3], showgrid=False, zeroline=False,
                      scaleanchor='x', scaleratio=1, visible=False)
-    _tatica_anim_layout(fig, tempos, right_margin=95)
+    _tatica_anim_layout(fig, tempos, right_margin=95, tween=False)  # heatmap: mantém sincronia
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -4164,7 +4173,7 @@ def _tatica_view_voronoi(tempos, nomes, equipes, PX, PY, PV, FL, FW):
     fig.update_xaxes(range=[-3, FL + 3], showgrid=False, zeroline=False, visible=False)
     fig.update_yaxes(range=[-3, FW + 3], showgrid=False, zeroline=False,
                      scaleanchor='x', scaleratio=1, visible=False)
-    _tatica_anim_layout(fig, tempos)
+    _tatica_anim_layout(fig, tempos, tween=False)  # heatmap: mantém sincronia
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -4327,7 +4336,7 @@ def _tatica_view_replay3d(tempos, nomes, equipes, PX, PY, PV, FL, FW):
             bgcolor='#0e1117',
         ),
     )
-    _tatica_anim_layout(fig, tempos, height=620)
+    _tatica_anim_layout(fig, tempos, height=620, tween=False)
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -9647,7 +9656,7 @@ Escolha um ou mais atletas para análise simultânea.
                                                             'args': [None, {
                                                                 'frame': {'duration': _frame_dur, 'redraw': True},
                                                                 'fromcurrent': True,
-                                                                'transition': {'duration': 0},
+                                                                'transition': {'duration': _frame_dur, 'easing': 'linear'},
                                                             }],
                                                             'label': '▶  Play',
                                                             'method': 'animate',
@@ -12050,6 +12059,9 @@ Escolha um ou mais atletas para análise simultânea.
                                                                         duration=100,
                                                                         redraw=True),
                                                                     fromcurrent=True,
+                                                                    transition=dict(
+                                                                        duration=100,
+                                                                        easing='linear'),
                                                                     mode='immediate')]),
                                                             dict(
                                                                 label='⏸ Pause',
@@ -14021,7 +14033,7 @@ Escolha um ou mais atletas para análise simultânea.
                                             args=[None, {
                                                 "frame": {"duration": _frame_dur_ms, "redraw": True},
                                                 "fromcurrent": True,
-                                                "transition": {"duration": 0},
+                                                "transition": {"duration": min(_frame_dur_ms, 1200), "easing": "linear"},
                                             }],
                                         ),
                                         dict(
@@ -15471,7 +15483,7 @@ Escolha um ou mais atletas para análise simultânea.
                                                 'args': [None, {
                                                     'frame': {'duration': 60, 'redraw': True},
                                                     'fromcurrent': True,
-                                                    'transition': {'duration': 0},
+                                                    'transition': {'duration': 60, 'easing': 'linear'},
                                                 }],
                                             },
                                             {
