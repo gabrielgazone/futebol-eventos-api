@@ -14402,7 +14402,7 @@ Escolha um ou mais atletas para análise simultânea.
                             "🏃 Velocidade (bandas)",
                             "💥 Ações Acel/Desacel (efforts)",
                             "Dist. >14 km/h (m)",
-                            "Dist. >19 km/h (m)  — Alta Intensidade",
+                            "Dist. em Alta Intensidade (banda)",
                             "Dist. >24 km/h (m)  — Sprint",
                             "Velocidade Máx (km/h)",
                             "PlayerLoad",
@@ -14423,6 +14423,7 @@ Escolha um ou mais atletas para análise simultânea.
                         # ── Seleção de bandas (aparece ao escolher Velocidade/Aceleração) ──
                         _sel_vel_bands = []   # lista de dicts {min,max} das bandas de velocidade marcadas
                         _sel_acc_bands = []   # idem para aceleração
+                        _wcs2_hi_thr = 19.0   # limiar (km/h) de alta intensidade definido pelo usuário
                         if _wcs2_metric == "🏃 Velocidade (bandas)":
                             _bv_act = _bandas_vel_ativas()
                             _bv_lbl = {}
@@ -14478,23 +14479,55 @@ Escolha um ou mais atletas para análise simultânea.
                             )
                             if not _sel_acc_bands:
                                 st.info("Selecione ao menos uma banda de aceleração ou desaceleração.")
+                        elif _wcs2_metric == "Dist. em Alta Intensidade (banda)":
+                            # O usuário define o que é "alta intensidade" a partir das SUAS
+                            # bandas de velocidade (vindas da conta Catapult).
+                            _bv_hi = _bandas_vel_ativas()
+                            _bands_sorted = sorted(_bv_hi.items(),
+                                                   key=lambda kv: float(kv[1].get('min', 0)))
+                            _opt_lbl = {}
+                            for _bk, _bd in _bands_sorted:
+                                _mn = float(_bd.get('min', 0))
+                                _opt_lbl[f"B{_bk} — ≥ {_fmt_num_banda(_mn)} km/h"] = _mn
+                            _labels_hi = list(_opt_lbl.keys())
+                            if _labels_hi:
+                                _mins_hi = list(_opt_lbl.values())
+                                _def_i = next((i for i, m in enumerate(_mins_hi) if m >= 19),
+                                              len(_mins_hi) - 1)
+                                _pick_hi = st.selectbox(
+                                    "🎚️ Banda que define Alta Intensidade",
+                                    _labels_hi, index=_def_i, key="wcs2_hi_band",
+                                    help="A distância é acumulada quando a velocidade fica **acima "
+                                         "do início desta banda** — definido a partir das SUAS "
+                                         "bandas de velocidade (conta Catapult).")
+                                _wcs2_hi_thr = _opt_lbl[_pick_hi]
+                            else:
+                                _wcs2_hi_thr = st.number_input(
+                                    "Limiar de alta intensidade (km/h)", min_value=5.0,
+                                    max_value=40.0, value=19.0, step=0.5, key="wcs2_hi_thr_num")
+                            st.caption(f"Alta intensidade = velocidade ≥ **{_wcs2_hi_thr:.1f} km/h**.")
 
                     # ── Detecta Hz real a partir dos timestamps ─────────────────────
                     def _detect_hz(_periodos_list, _dppp):
-                        """Estima frequência de amostragem (Hz) a partir dos ts_pos."""
-                        _diffs = []
-                        for _pnn in _periodos_list[:3]:
-                            for _adat in list(_dppp.get(_pnn, {}).values())[:2]:
+                        """Estima a frequência de amostragem (Hz) como nº de amostras ÷ duração.
+
+                        Usar contagem/duração (em vez da mediana das diferenças) é robusto
+                        quando os timestamps vêm arredondados para segundos inteiros mas há
+                        vários pontos por segundo — caso em que a mediana das diferenças daria
+                        1 Hz erroneamente e a integração de distância superestimaria ~Nx."""
+                        _ests = []
+                        for _pnn in _periodos_list[:5]:
+                            for _adat in list(_dppp.get(_pnn, {}).values())[:5]:
                                 _tss = _adat.get('ts_pos', [])
-                                if len(_tss) > 10:
-                                    _diffs += [abs(_tss[_i+1] - _tss[_i])
-                                               for _i in range(1, min(20, len(_tss)-1))
-                                               if abs(_tss[_i+1] - _tss[_i]) > 0]
-                        if _diffs:
+                                if len(_tss) > 20:
+                                    _span = float(_tss[-1]) - float(_tss[0])
+                                    if _span > 1.0:
+                                        _ests.append((len(_tss) - 1) / _span)
+                        if _ests:
                             import statistics as _st
-                            _med_dt = _st.median(_diffs)
-                            if _med_dt > 0:
-                                return round(1.0 / _med_dt, 1)
+                            _hz = _st.median(_ests)
+                            if _hz > 0:
+                                return round(_hz, 1)
                         return 10.0  # fallback conservador
 
                     _wcs2_periodos_tmp = [
@@ -14682,8 +14715,8 @@ Escolha um ou mais atletas para análise simultânea.
                                         _sv[_ix] += 1.0
                         elif _m == "Dist. >14 km/h (m)":
                             _sv = [v / (3.6 * _Hz) if v > 14 else 0.0 for v in _wv]
-                        elif "19" in _m:
-                            _sv = [v / (3.6 * _Hz) if v > 19 else 0.0 for v in _wv]
+                        elif "Alta Intensidade" in _m:
+                            _sv = [v / (3.6 * _Hz) if v >= _wcs2_hi_thr else 0.0 for v in _wv]
                         elif "24" in _m:
                             _sv = [v / (3.6 * _Hz) if v > 24 else 0.0 for v in _wv]
                         elif _m == "Velocidade Máx (km/h)":
