@@ -8188,18 +8188,18 @@ Escolha um ou mais atletas para análise simultânea.
             with _main_tabs[1]:
                 _sub_campo = st.tabs(["🗺️ Campo de Futebol", "⚡ WCS"])
             with _main_tabs[2]:
-                _sub_carga = st.tabs(["⏱️ Esforços", "📊 Janelas Temporais", "💪 Neuromuscular", "🏎️ Acc-Vel", "❤️ FC"])
+                _sub_carga = st.tabs(["💪 Esforços Neuromusculares", "📊 Janelas Temporais", "🏎️ Acc-Vel", "❤️ FC"])
             with _main_tabs[3]:
                 render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, st.session_state.atletas_sel)
 
             # Mapeamento: abas[N] aponta para o container correto na nova estrutura
             abas = [
                 _sub_campo[0],    # 0: Campo de Futebol        → Campo & GPS
-                _sub_carga[0],    # 1: Esforços                → Carga Física
+                _sub_carga[0],    # 1: Esforços                → Esforços Neuromusculares
                 _sub_carga[1],    # 2: Janelas Temporais       → Carga Física
-                _sub_carga[2],    # 3: Neuromuscular           → Carga Física
-                _sub_carga[3],    # 4: Acc-Vel                 → Carga Física
-                _sub_carga[4],    # 5: FC (TRIMP + Zonas)      → Carga Física
+                _sub_carga[0],    # 3: Neuromuscular           → mesma aba (Esforços Neuromusculares)
+                _sub_carga[2],    # 4: Acc-Vel                 → Carga Física
+                _sub_carga[3],    # 5: FC (TRIMP + Zonas)      → Carga Física
                 _sub_resumo[1],   # 6: Por Posição             → Resumo ✓
                 _sub_campo[0],    # 7: (removido — antiga História do Jogo)
                 _main_tabs[4],    # 8: Ao Vivo                → Ao Vivo (tab principal)
@@ -12160,6 +12160,7 @@ Escolha um ou mais atletas para análise simultânea.
 
             # ==================== ABA 4: CARGA NEUROMUSCULAR ====================
             with abas[3]:
+                st.divider()
                 st.subheader("💪 Análise de Carga Neuromuscular")
                 st.markdown("""
                 Esforços de **aceleração** e **desaceleração** intensa são indicadores críticos de
