@@ -8186,7 +8186,7 @@ Escolha um ou mais atletas para análise simultânea.
             with _main_tabs[0]:
                 _sub_resumo = st.tabs(["🏠 Visão Geral", "📊 Por Posição"])
             with _main_tabs[1]:
-                _sub_campo = st.tabs(["🗺️ Campo de Futebol", "🎬 História do Jogo", "⚡ WCS"])
+                _sub_campo = st.tabs(["🗺️ Campo de Futebol", "⚡ WCS"])
             with _main_tabs[2]:
                 _sub_carga = st.tabs(["⏱️ Esforços", "📊 Janelas Temporais", "💪 Neuromuscular", "🏎️ Acc-Vel", "❤️ FC"])
             with _main_tabs[3]:
@@ -8201,7 +8201,7 @@ Escolha um ou mais atletas para análise simultânea.
                 _sub_carga[3],    # 4: Acc-Vel                 → Carga Física
                 _sub_carga[4],    # 5: FC (TRIMP + Zonas)      → Carga Física
                 _sub_resumo[1],   # 6: Por Posição             → Resumo ✓
-                _sub_campo[1],    # 7: História do Jogo        → Campo & GPS
+                _sub_campo[0],    # 7: (removido — antiga História do Jogo)
                 _main_tabs[4],    # 8: Ao Vivo                → Ao Vivo (tab principal)
             ]
 
@@ -10685,48 +10685,7 @@ Escolha um ou mais atletas para análise simultânea.
                     st.info("Dados de sensor não disponíveis")
 
 
-                # ── FEATURE 8: PDF Export ────────────────────────────────────
-                st.markdown("---")
-                st.markdown("### 📄 Exportar Relatório PDF")
-                st.caption(
-                    "Gera um relatório A3 com heatmap, perfil de velocidade, aceleração e métricas biométricas."
-                )
-                if dados_sensor_por_atleta_por_periodo:
-                    _pdf_per_opts = list(dados_sensor_por_atleta_por_periodo.keys())
-                    _col_pdf1, _col_pdf2 = st.columns(2)
-                    with _col_pdf1:
-                        _pdf_per = st.selectbox("Período:", _pdf_per_opts, key="pdf_periodo")
-                    with _col_pdf2:
-                        _pdf_ats = list(dados_sensor_por_atleta_por_periodo.get(_pdf_per, {}).keys())
-                        _pdf_atl = st.selectbox("Atleta:", _pdf_ats, key="pdf_atleta") if _pdf_ats else None
-
-                    if _pdf_atl and st.button("📄 Gerar Relatório PDF", type="primary", key="btn_pdf"):
-                        with st.spinner("Gerando relatório PDF..."):
-                            _pdf_sp = dados_sensor_por_atleta_por_periodo[_pdf_per].get(_pdf_atl, [])
-                            _pdf_dp = dados_posicao_por_periodo.get(_pdf_per, {}).get(_pdf_atl, {})
-                            _pdf_met = {}
-                            for _r in resultados_por_periodo.get(_pdf_per, []):
-                                if _r.get('Atleta') == _pdf_atl:
-                                    _pdf_met = _r
-                                    break
-                            try:
-                                _pdf_bytes = gerar_pdf_relatorio(
-                                    atleta_nome=_pdf_atl,
-                                    periodo_nome=_pdf_per,
-                                    metricas=_pdf_met,
-                                    sensor_points=_pdf_sp,
-                                    dados_pos=_pdf_dp,
-                                )
-                                st.download_button(
-                                    label="⬇️ Baixar PDF",
-                                    data=_pdf_bytes,
-                                    file_name=f"relatorio_{_pdf_atl.replace(' ','_')}_{_pdf_per}.pdf",
-                                    mime="application/pdf",
-                                    key="dl_pdf"
-                                )
-                                st.success("✅ PDF gerado com sucesso! Clique em **⬇️ Baixar PDF** acima.")
-                            except Exception as _e:
-                                st.error(f"Erro ao gerar PDF: {_e}")
+                # ── FEATURE 8: PDF Export — REMOVIDO ──────────────────────────
 
             # ==================== ABA 3: JANELAS TEMPORAIS MÓVEIS ====================
             with abas[2]:
@@ -13466,9 +13425,8 @@ Escolha um ou mais atletas para análise simultânea.
                                 use_container_width=True, hide_index=True
                             )
 
-                            # ── FEATURE 11: Consulta /stats por posição (longitudinal) ──
-                            st.markdown("---")
-                            with st.expander("📊 Perfil Longitudinal por Posição via /stats (multi-sessão)", expanded=False):
+                            # ── Perfil Longitudinal /stats — REMOVIDO (código inativo) ──
+                            if False:
                                 st.caption(
                                     "Consulta o endpoint POST /stats da Catapult para agregar métricas "
                                     "por posição em múltiplas sessões. Requer dados históricos na plataforma."
@@ -13594,9 +13552,9 @@ Escolha um ou mais atletas para análise simultânea.
                     st.info("Carregue os dados para visualizar a análise por posição.")
 
             # ══════════════════════════════════════════════════════════════
-            # ABA 7: HISTÓRIA DO JOGO
+            # ABA 7: HISTÓRIA DO JOGO — REMOVIDA (mantida como código inativo)
             # ══════════════════════════════════════════════════════════════
-            with abas[7]:
+            if False:
                 st.subheader("🎬 História do Jogo")
                 st.caption("Animação top-down de todos os atletas movendo-se pelo campo ao longo do tempo.")
 
@@ -14470,7 +14428,7 @@ Escolha um ou mais atletas para análise simultânea.
             # ══════════════════════════════════════════════════════════════
             # WCS: WORST-CASE SCENARIO (sub-tab Campo & GPS)
             # ══════════════════════════════════════════════════════════════
-            with _sub_campo[2]:
+            with _sub_campo[1]:
                 st.subheader("⚡ Worst-Case Scenario")
                 st.caption(
                     "Identifica a **janela temporal de maior exigência física** de cada atleta "
@@ -15037,10 +14995,8 @@ Escolha um ou mais atletas para análise simultânea.
                             "**Picos ≥90%** = nº de janelas onde o atleta atingiu ≥90% do seu WCS."
                         )
 
-                        st.markdown("---")
-
-                        # ── Timeline do Rolling Window ──────────────────────────────
-                        with st.expander("📈 Timeline do Rolling Window", expanded=True):
+                        # ── Timeline do Rolling Window — REMOVIDO (código inativo) ──
+                        if False:
                             st.caption(
                                 "Valor da janela rolante ao longo de toda a sessão. "
                                 "⭐ = pico (WCS). Linha tracejada = 90% do WCS de cada atleta."
