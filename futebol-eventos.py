@@ -14460,15 +14460,8 @@ Escolha um ou mais atletas para análise simultânea.
                             "Distância (m)",
                             "🏃 Velocidade (bandas)",
                             "💥 Ações Acel/Desacel (efforts)",
-                            "Dist. >14 km/h (m)",
-                            "Dist. em Alta Intensidade (banda)",
-                            "Dist. >24 km/h (m)  — Sprint",
                             "Velocidade Máx (km/h)",
                             "PlayerLoad",
-                            "Acelerações >2 m/s² (n)",
-                            "Acelerações >3 m/s² (n)",
-                            "Desacelerações <-2 m/s² (n)",
-                            "Desacelerações <-3 m/s² (n)",
                         ]
                         _wcs2_metric = st.selectbox(
                             "📊 Variável", _wcs2_metric_opts,
