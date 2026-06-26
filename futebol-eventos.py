@@ -1303,6 +1303,68 @@ def _parse_api_acceleration_zones(api_response):
         return _DEFAULT_ACCELERATION_ZONES[:]
 
 
+def _resp_tem_zonas(resp) -> bool:
+    """True se a resposta da API realmente traz uma lista de zonas (não vazia).
+    Evita aceitar como 'da conta' uma resposta vazia que o parser converteria
+    nos valores padrão."""
+    if isinstance(resp, list):
+        return len(resp) > 0
+    if isinstance(resp, dict):
+        for _k in ('data', 'velocity_zones', 'acceleration_zones', 'zones', 'items'):
+            _v = resp.get(_k)
+            if isinstance(_v, list) and _v:
+                return True
+    return False
+
+
+def _zonas_conta_via_api(api, team_ids):
+    """Busca as bandas configuradas NA CONTA via API (fonte primária).
+
+    Tenta o nível de conta e, como alternativa, o nível de equipe (onde a
+    Catapult costuma expor as 'Bandas Globais'). Retorna (vel_zones, acc_zones);
+    cada um é None quando a API não expõe os cortes (cai-se então na derivação
+    por efforts). Nunca lança exceção."""
+    vel = acc = None
+    try:
+        _rv = api.get_velocity_zones()
+        if _resp_tem_zonas(_rv):
+            _z = _parse_api_velocity_zones(_rv)
+            if _z and len(_z) >= 2:
+                vel = _z
+    except Exception:
+        pass
+    try:
+        _ra = api.get_acceleration_zones()
+        if _resp_tem_zonas(_ra):
+            _z = _parse_api_acceleration_zones(_ra)
+            if _z and len(_z) >= 2:
+                acc = _z
+    except Exception:
+        pass
+    for _tid in (team_ids or []):
+        if vel and acc:
+            break
+        if vel is None:
+            try:
+                _rv = api.get_team_velocity_zones(_tid)
+                if _resp_tem_zonas(_rv):
+                    _z = _parse_api_velocity_zones(_rv)
+                    if _z and len(_z) >= 2:
+                        vel = _z
+            except Exception:
+                pass
+        if acc is None:
+            try:
+                _ra = api.get_team_acceleration_zones(_tid)
+                if _resp_tem_zonas(_ra):
+                    _z = _parse_api_acceleration_zones(_ra)
+                    if _z and len(_z) >= 2:
+                        acc = _z
+            except Exception:
+                pass
+    return vel, acc
+
+
 # ── Helpers para nomes/cores padrão por índice de banda ──────────────────────
 _NOMES_BANDA_VEL_DEFAULT = {
     1: 'Caminhada', 2: 'Trote', 3: 'Corrida',
@@ -6802,6 +6864,7 @@ Escolha um ou mais atletas para análise simultânea.
                     for _zk in ('velocity_zones_account', 'acceleration_zones_account',
                                 'velocity_zones_manual', 'acceleration_zones_manual',
                                 'velocity_zones_source', 'acceleration_zones_source',
+                                'velocity_zones_from_api', 'acceleration_zones_from_api',
                                 '_bandas_deriv_key'):
                         st.session_state.pop(_zk, None)
 
@@ -6811,6 +6874,25 @@ Escolha um ou mais atletas para análise simultânea.
                 if not st.session_state.get('acceleration_zones_account'):
                     st.session_state['acceleration_zones_account'] = _DEFAULT_ACCELERATION_ZONES[:]
                     st.session_state['acceleration_zones_source'] = 'default'
+
+                # ── PRIMÁRIO: bandas configuradas na conta via API ────────────
+                # Se a API expuser as zonas (nível conta ou equipe), elas têm
+                # prioridade sobre a derivação por efforts. Caso contrário,
+                # mantém-se a derivação (bloco após o loop de períodos).
+                try:
+                    _team_ids_z = ([t.get('id') for t in teams_raw if t.get('id')]
+                                   if teams_raw else [])
+                    _vz_api, _az_api = _zonas_conta_via_api(api, _team_ids_z)
+                    if _vz_api and not st.session_state.get('velocity_zones_manual'):
+                        st.session_state['velocity_zones_account'] = _vz_api
+                        st.session_state['velocity_zones_source']  = 'api'
+                        st.session_state['velocity_zones_from_api'] = True
+                    if _az_api and not st.session_state.get('acceleration_zones_manual'):
+                        st.session_state['acceleration_zones_account'] = _az_api
+                        st.session_state['acceleration_zones_source']  = 'api'
+                        st.session_state['acceleration_zones_from_api'] = True
+                except Exception:
+                    pass
 
         if not st.session_state.df_activities.empty and token:
             st.markdown("---")
@@ -7315,17 +7397,19 @@ Escolha um ou mais atletas para análise simultânea.
             with st.expander("🏷️ Bandas de Velocidade", expanded=False):
                 _vz_src = st.session_state.get('velocity_zones_source', 'default')
                 _vz_src_txt = {
+                    'api':     "🛰️ **Buscado da sua conta via API** — bandas configuradas "
+                               "na conta Catapult (fonte primária).",
                     'efforts': "🟢 **Derivado dos efforts da sua conta** "
                                "(reconstruído a partir das velocidades reais por banda).",
                     'manual':  "✏️ **Ajustado manualmente** por você.",
-                    'default': "⚪ **Padrão** (carregue uma atividade para derivar os "
-                               "cortes reais da sua conta a partir dos efforts).",
+                    'default': "⚪ **Padrão** (carregue uma atividade para obter os cortes "
+                               "reais da sua conta).",
                 }.get(_vz_src, "")
                 st.caption(_vz_src_txt)
                 st.caption(
-                    "A API Connect v6 não fornece os cortes diretamente, então eles "
-                    "são **derivados dos efforts** da conta ao carregar uma atividade. "
-                    "Você pode ajustar manualmente abaixo."
+                    "Os cortes são **buscados da sua conta via API** quando disponíveis; "
+                    "caso a API não os exponha, são **derivados dos efforts** da conta. "
+                    "Você pode **ajustar manualmente** abaixo — todo o app é recalculado."
                 )
 
                 # Zonas atuais (sessão) ou defaults espelhando a conta Catapult.
@@ -7386,8 +7470,10 @@ Escolha um ou mais atletas para análise simultânea.
                     if st.button("🔄 Re-derivar da conta", key="btn_rederiv_vel_zones",
                                  use_container_width=True,
                                  help="Descarta o ajuste manual e volta a derivar os "
-                                      "cortes automaticamente dos efforts da conta."):
+                                      "cortes dos efforts da conta. Para rebuscar as "
+                                      "bandas via API, reconecte com o token."):
                         st.session_state.pop('velocity_zones_manual', None)
+                        st.session_state.pop('velocity_zones_from_api', None)
                         st.session_state.pop('_bandas_deriv_key', None)
                         st.rerun()
                 with _cc_vz_reset:
@@ -7399,12 +7485,12 @@ Escolha um ou mais atletas para análise simultânea.
                         st.session_state.pop('velocity_zones_manual', None)
                         st.rerun()
 
-                # ── Diagnóstico: prova de que a API não expõe os cortes ───────
+                # ── Diagnóstico da API ────────────────────────────────────────
                 st.divider()
                 st.caption(
-                    "ℹ️ A API Connect v6 **não** fornece os cortes das bandas "
-                    "(confirmado na documentação oficial). Use o botão abaixo "
-                    "para inspecionar a resposta crua da sua conta."
+                    "ℹ️ O app tenta **buscar as bandas via API** (zonas da conta/equipe). "
+                    "Se o seu token não expuser os cortes, ele usa a **derivação pelos "
+                    "efforts**. Use o botão abaixo para inspecionar a resposta crua."
                 )
                 _diag_api = st.session_state.get('api')
                 if _diag_api and st.button(
@@ -7429,18 +7515,20 @@ Escolha um ou mais atletas para análise simultânea.
             with st.expander("🏷️ Bandas de Aceleração", expanded=False):
                 _az_src = st.session_state.get('acceleration_zones_source', 'default')
                 _az_src_txt = {
+                    'api':     "🛰️ **Buscado da sua conta via API** — bandas configuradas "
+                               "na conta Catapult (fonte primária).",
                     'efforts': "🟢 **Derivado dos efforts da sua conta** "
                                "(reconstruído a partir das acelerações reais por banda).",
                     'manual':  "✏️ **Ajustado manualmente** por você.",
-                    'default': "⚪ **Padrão** (carregue uma atividade para derivar os "
-                               "cortes reais da sua conta a partir dos efforts).",
+                    'default': "⚪ **Padrão** (carregue uma atividade para obter os cortes "
+                               "reais da sua conta).",
                 }.get(_az_src, "")
                 st.caption(_az_src_txt)
                 st.caption(
                     "Valores da tela **Bandas Globais → Gen2Acceleration** (m/s²). "
-                    "A API Connect v6 não fornece estes cortes diretamente, então são "
-                    "**derivados dos efforts** da conta ao carregar uma atividade. "
-                    "Você pode ajustar manualmente abaixo."
+                    "São **buscados da sua conta via API** quando disponíveis; caso "
+                    "contrário, **derivados dos efforts** da conta. Você pode **ajustar "
+                    "manualmente** abaixo — todo o app é recalculado."
                 )
 
                 _cur_az = (
@@ -7499,8 +7587,10 @@ Escolha um ou mais atletas para análise simultânea.
                     if st.button("🔄 Re-derivar da conta", key="btn_rederiv_acc_zones",
                                  use_container_width=True,
                                  help="Descarta o ajuste manual e volta a derivar os "
-                                      "cortes automaticamente dos efforts da conta."):
+                                      "cortes dos efforts da conta. Para rebuscar as "
+                                      "bandas via API, reconecte com o token."):
                         st.session_state.pop('acceleration_zones_manual', None)
+                        st.session_state.pop('acceleration_zones_from_api', None)
                         st.session_state.pop('_bandas_deriv_key', None)
                         st.rerun()
                 with _cc_az_reset:
@@ -7933,10 +8023,14 @@ Escolha um ou mais atletas para análise simultânea.
 
                 _dz_vel = _derivar_zonas_velocidade(_all_vel_eff)
                 _dz_acc = _derivar_zonas_aceleracao(_all_acc_eff)
-                if _dz_vel and not st.session_state.get('velocity_zones_manual'):
+                # Só deriva dos efforts quando a API NÃO forneceu as zonas e o
+                # usuário não ajustou manualmente (a conta/API tem prioridade).
+                if (_dz_vel and not st.session_state.get('velocity_zones_manual')
+                        and not st.session_state.get('velocity_zones_from_api')):
                     st.session_state['velocity_zones_account'] = _dz_vel
                     st.session_state['velocity_zones_source']  = 'efforts'
-                if _dz_acc and not st.session_state.get('acceleration_zones_manual'):
+                if (_dz_acc and not st.session_state.get('acceleration_zones_manual')
+                        and not st.session_state.get('acceleration_zones_from_api')):
                     st.session_state['acceleration_zones_account'] = _dz_acc
                     st.session_state['acceleration_zones_source']  = 'efforts'
                 st.session_state['_bandas_deriv_key'] = _deriv_key
