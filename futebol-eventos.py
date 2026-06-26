@@ -4154,7 +4154,7 @@ def _tatica_view_respiracao(tempos, nomes, equipes, PX, PY, PV, FL, FW):
     fig.update_xaxes(range=[-3, FL + 3], showgrid=False, zeroline=False, visible=False)
     fig.update_yaxes(range=[-3, FW + 3], showgrid=False, zeroline=False,
                      scaleanchor='x', scaleratio=1, visible=False)
-    _tatica_anim_layout(fig, tempos)
+    _tatica_anim_layout(fig, tempos, redraw=False)  # só-scatter: jogadores deslizam
     fig.update_layout(title=dict(text=_hud(0), font=dict(color='white', size=12)))
     st.plotly_chart(fig, use_container_width=True)
 
@@ -4542,7 +4542,7 @@ def _tatica_view_distancias(tempos, nomes, equipes, PX, PY, PV, FL, FW):
     figc.update_xaxes(range=[-3, FL + 3], showgrid=False, zeroline=False, visible=False)
     figc.update_yaxes(range=[-3, FW + 3], showgrid=False, zeroline=False,
                       scaleanchor='x', scaleratio=1, visible=False)
-    _tatica_anim_layout(figc, tempos, height=520)
+    _tatica_anim_layout(figc, tempos, height=520, redraw=False)  # só-scatter: jogadores deslizam
     st.plotly_chart(figc, use_container_width=True)
     st.caption("As linhas conectam os atletas e os números mostram a distância (m) **a cada "
                "instante**. Use ▶ Play (e o slider de velocidade acima) para ver em tempo real.")
@@ -4832,17 +4832,22 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
                    "quão **dominado** está cada ponto do campo — calculado pelo tempo de chegada "
                    "do jogador mais próximo, com a posição projetada pela velocidade atual. "
                    "Quente = espaço sob controle; transparente = espaço livre. "
-                   "Com 2 equipes nos dados, vira controle **contestado** (azul × vermelho).")
+                   "Com 2 equipes nos dados, vira controle **contestado** (azul × vermelho). "
+                   "⚠️ O mapa de calor avança **em passos** (é uma sequência de fotos do campo, "
+                   "não desliza). Para ver os atletas **deslizando**, use 🫁 Respiração ou "
+                   "📏 Distância; e reduza a janela (1–2 min) para passos menores.")
     elif vis.startswith("🫁"):
         _tatica_view_respiracao(tempos, nomes, equipes, PX, PY, PV, FL, FW)
         st.caption("🫁 **Respiração da equipe**: o polígono (casco convexo) e o centroide (✕) "
                    "mostram o bloco **comprimindo** na marcação e **expandindo** na posse. "
+                   "▶ No Play os atletas **deslizam** de forma contínua. "
                    "O gráfico abaixo acompanha largura, comprimento e área ao longo do tempo.")
     elif vis.startswith("🔷"):
         _tatica_view_voronoi(tempos, nomes, equipes, PX, PY, PV, FL, FW)
         st.caption("🔷 **Voronoi**: cada célula do campo é colorida pelo jogador **mais próximo**. "
                    "Células grandes = jogador cobrindo muito espaço; zonas sem dono = buracos "
-                   "de cobertura.")
+                   "de cobertura. ⚠️ Como o Pitch Control, o 'vitral' avança **em passos**; "
+                   "para deslizamento contínuo use 🫁 Respiração ou 📏 Distância.")
     elif vis.startswith("🎥"):
         _tatica_view_replay3d(tempos, nomes, equipes, PX, PY, PV, FL, FW)
         st.caption("🎥 **Replay 3D**: 'broadcast sintético' reconstruído só das coordenadas. "
@@ -4852,7 +4857,8 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
         st.caption("📏 **Distância entre atletas**: a matriz mostra a distância média (em metros) "
                    "entre cada par; o gráfico e o slider permitem achar os instantes de **maior** "
                    "(equipe aberta) e **menor** distância (equipe compacta). Útil para ler "
-                   "compactação, linhas e relações entre setores.")
+                   "compactação, linhas e relações entre setores. "
+                   "▶ No campo animado os atletas **deslizam** de forma contínua.")
 
 
 def combinar_periodos_continuo(dados_sensor_por_atleta_por_periodo: dict, atleta: str) -> list:
