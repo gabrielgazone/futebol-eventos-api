@@ -8193,7 +8193,7 @@ Escolha um ou mais atletas para análise simultânea.
             with _main_tabs[1]:
                 # Campo & GPS agora abriga também as antigas sub-abas de Carga Física
                 _sub_campo = st.tabs(["🗺️ Campo de Futebol", "⚡ WCS",
-                                      "💪 Esforços Neuromusculares", "📊 Janelas Temporais",
+                                      "💪 Neuromuscular", "📊 Janelas Temporais",
                                       "🏎️ Acc-Vel", "❤️ FC"])
             with _main_tabs[2]:
                 render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, st.session_state.atletas_sel)
