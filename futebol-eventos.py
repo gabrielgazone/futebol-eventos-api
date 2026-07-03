@@ -11088,13 +11088,13 @@ Escolha um ou mais atletas para análise simultânea.
                         _wts, _wac, _wv = [], [], []
                         for _pn in _ps:
                             _da = dados_posicao_por_periodo.get(_pn, {}).get(_atl, {})
-                            _xs = _da.get('xs', [])
-                            _ys = _da.get('ys', [])
-                            _ts = _da.get('ts_pos', [])
+                            # Nativo usa ts_pos/vel; GPS-only (sem x/y nem ts_pos) usa a
+                            # trajetória GPS (ts_gps/vels_gps) — os timestamps Unix bastam
+                            # para posicionar os efforts na janela.
+                            _ts = _da.get('ts_pos', []) or _da.get('ts_gps', [])
+                            _vl = _da.get('vel', []) or _da.get('vels_gps', [])
                             _ac = _da.get('acc', [])
-                            _vl = _da.get('vel', [])
-                            _nn = (min(len(_xs), len(_ys))
-                                   if (_xs and _ys) else len(_ts))
+                            _nn = len(_ts)
                             if _nn == 0:
                                 continue
                             _ts_pad = list(_ts[:_nn]) + [0.0] * max(0, _nn - len(_ts))
@@ -11194,13 +11194,12 @@ Escolha um ou mais atletas para análise simultânea.
                         _wts, _wv = [], []
                         for _pn in _ps:
                             _da = dados_posicao_por_periodo.get(_pn, {}).get(_atl, {})
-                            _ts = _da.get('ts_pos', [])
-                            _vl = _da.get('vel', [])       # km/h
-                            _nn = min(len(_ts), len(_vl)) if (_ts and _vl) else len(_vl)
+                            # Nativo: ts_pos/vel · GPS-only: ts_gps/vels_gps
+                            _ts = _da.get('ts_pos', []) or _da.get('ts_gps', [])
+                            _vl = _da.get('vel', []) or _da.get('vels_gps', [])   # km/h
+                            _nn = min(len(_ts), len(_vl))
                             if _nn == 0:
                                 continue
-                            if len(_ts) < _nn:
-                                _ts = list(range(_nn))
                             _wts += list(_ts[:_nn])
                             _wv += list(_vl[:_nn])
                         _Hz = _hz_jan
