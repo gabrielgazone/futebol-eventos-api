@@ -27,8 +27,9 @@ _campo_component = st.components.v1.declare_component("campo_interativo_v1", pat
 
 SERVERS = {
     "Américas (US)": "https://connect-us.catapultsports.com/api/v6",
-    "Europa/África (EU)": "https://connect-eu.catapultsports.com/api/v6",
+    "Europa/Oriente Médio/África (EU)": "https://connect-eu.catapultsports.com/api/v6",
     "Ásia-Pacífico (AU)": "https://connect-au.catapultsports.com/api/v6",
+    "China (CN)": "https://connect-cn.catapultsports-cn.com/api/v6",
 }
 
 # ==================== SISTEMA DE IDIOMAS ====================
