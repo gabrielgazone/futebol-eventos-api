@@ -190,3 +190,49 @@ class TestRollingSum:
     def test_nan_tratado_como_zero(self):
         roll = m.rolling_sum([1.0, float('nan'), 1.0], 3)
         assert roll == [2.0]
+
+
+# ── monitoramento (P10): ACWR, monotonia, strain ────────────────────────────
+class TestMonitoramento:
+    def test_ewma_constante(self):
+        assert m.ewma([100.0] * 30, 7) == [100.0] * 30
+
+    def test_acwr_constante_e_um(self):
+        acwr = m.acwr_ewma([300.0] * 40)
+        assert all(a == pytest.approx(1.0) for a in acwr)
+
+    def test_acwr_spike_sobe(self):
+        daily = [300.0] * 28 + [900.0] * 7
+        acwr = m.acwr_ewma(daily)
+        assert acwr[-1] > 1.3
+
+    def test_acwr_descanso_cai(self):
+        daily = [300.0] * 28 + [0.0] * 7
+        acwr = m.acwr_ewma(daily)
+        assert acwr[-1] < 0.8
+
+    def test_acwr_semanal_estavel(self):
+        acwr = m.acwr_semanal([2000.0] * 6)
+        assert acwr[0] is None
+        assert acwr[-1] == pytest.approx(1.0)
+
+    def test_acwr_semanal_salto(self):
+        acwr = m.acwr_semanal([1000.0, 1000.0, 1000.0, 1000.0, 2000.0])
+        assert acwr[-1] == pytest.approx(2.0)
+
+    def test_monotonia_conhecida(self):
+        # média 400, DP 200 → monotonia 2.0; strain = 2800 × 2 = 5600
+        semana = [200.0, 400.0, 600.0, 200.0, 400.0, 600.0, 400.0]
+        mono, strain = m.monotonia_strain(semana)
+        assert mono == pytest.approx(np.mean(semana) / np.std(semana, ddof=1))
+        assert strain == pytest.approx(sum(semana) * mono)
+
+    def test_monotonia_constante_indefinida(self):
+        assert m.monotonia_strain([500.0] * 7) == (None, None)
+
+    def test_classificar_zonas(self):
+        assert m.classificar_acwr(None) == '—'
+        assert m.classificar_acwr(0.5) == 'subcarga'
+        assert m.classificar_acwr(1.0) == 'ideal'
+        assert m.classificar_acwr(1.4) == 'atenção'
+        assert m.classificar_acwr(1.8) == 'alto risco'

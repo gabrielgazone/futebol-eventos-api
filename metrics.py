@@ -253,3 +253,82 @@ def rolling_sum(values, n: int):
     cs = np.cumsum(np.insert(np.nan_to_num(v), 0, 0.0))
     out = cs[n:] - cs[:-n]
     return [float(x) for x in out]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Monitoramento longitudinal (P10) — ACWR, monotonia e strain
+# ══════════════════════════════════════════════════════════════════════════
+
+def ewma(values, span: int):
+    """Média móvel exponencial com alpha = 2/(span+1) (Williams et al., 2017)."""
+    alpha = 2.0 / (float(span) + 1.0)
+    out = []
+    prev = None
+    for v in (values or []):
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            fv = 0.0
+        prev = fv if prev is None else alpha * fv + (1.0 - alpha) * prev
+        out.append(prev)
+    return out
+
+
+def acwr_ewma(daily_loads, acute_span: int = 7, chronic_span: int = 28):
+    """ACWR diário (método EWMA): agudo (7 d) ÷ crônico (28 d).
+
+    Retorna uma lista alinhada às cargas diárias; None onde o crônico ≈ 0.
+    """
+    ac = ewma(daily_loads, acute_span)
+    ch = ewma(daily_loads, chronic_span)
+    return [(a / c if c > 1e-9 else None) for a, c in zip(ac, ch)]
+
+
+def acwr_semanal(weekly_loads, n_chronic: int = 4):
+    """ACWR semanal acoplado: carga da semana ÷ média das n semanas anteriores.
+
+    Primeira(s) semana(s) sem histórico → None.
+    """
+    out = []
+    loads = [float(w or 0) for w in (weekly_loads or [])]
+    for i, w in enumerate(loads):
+        prev = loads[max(0, i - n_chronic):i]
+        out.append((w / (sum(prev) / len(prev)))
+                   if prev and sum(prev) > 0 else None)
+    return out
+
+
+def monotonia_strain(daily_loads):
+    """Monotonia e strain de Foster para UMA semana de cargas diárias.
+
+    monotonia = média diária ÷ DP diário; strain = carga total × monotonia.
+    Retorna (None, None) com <2 dias ou DP ≈ 0 (monotonia indefinida).
+    """
+    arr = np.asarray([float(v or 0) for v in (daily_loads or [])], dtype=float)
+    if arr.size < 2:
+        return None, None
+    sd = float(np.std(arr, ddof=1))
+    if sd < 1e-9:
+        return None, None
+    mono = float(np.mean(arr)) / sd
+    return mono, float(arr.sum()) * mono
+
+
+def classificar_acwr(acwr):
+    """Zona de risco do ACWR (Gabbett, 2016): <0,8 subcarga · 0,8–1,3 ideal ·
+    1,3–1,5 atenção · >1,5 alto risco. '—' quando indisponível."""
+    if acwr is None:
+        return '—'
+    try:
+        a = float(acwr)
+    except (TypeError, ValueError):
+        return '—'
+    if not np.isfinite(a):
+        return '—'
+    if a < 0.8:
+        return 'subcarga'
+    if a <= 1.3:
+        return 'ideal'
+    if a <= 1.5:
+        return 'atenção'
+    return 'alto risco'
