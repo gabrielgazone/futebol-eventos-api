@@ -10954,33 +10954,45 @@ Escolha um ou mais atletas para análise simultânea.
                             key="jan_window"
                         )
                     _MET_ACOES = '💥 Ações Acel/Desacel'
+                    _MET_VEL_BANDAS = '🏃 Velocidade (bandas)'
                     with _col_m:
                         tipo_metrica = st.selectbox(
                             "Métrica:",
-                            ['Distância', 'PlayerLoad', _MET_ACOES],
+                            ['Distância', 'PlayerLoad', _MET_VEL_BANDAS, _MET_ACOES],
                             key="jan_metrica",
-                            help="💥 Ações Acel/Desacel = nº de esforços (ações reais da "
-                                 "Catapult) de aceleração/desaceleração no pior minuto — "
-                                 "mesmo cálculo da aba 'Pior Cenário (WCS)'."
+                            help="🏃 Velocidade (bandas) = distância (m) percorrida nas bandas "
+                                 "de velocidade selecionadas, por janela (igual ao WCS). "
+                                 "💥 Ações Acel/Desacel = nº de esforços (ações reais da "
+                                 "Catapult) de acel/desacel — mesmo cálculo do WCS."
                         )
+                    # ── Bandas de VELOCIDADE (para a métrica '🏃 Velocidade (bandas)') ──
+                    sel_vel_bands = []   # dicts {min,max} das bandas de velocidade marcadas
                     with _col_extra:
-                        if tipo_metrica == 'Velocidade':
-                            bandas_vel = st.multiselect(
-                                "Bandas de Velocidade:",
-                                options=[1, 2, 3, 4, 5, 6, 7, 8],
-                                default=[3, 4, 5, 6, 7, 8], key="jan_bv"
+                        if tipo_metrica == _MET_VEL_BANDAS:
+                            _bv_act_j = _bandas_vel_ativas()
+                            _bv_lbl_j = {}
+                            for _bk, _bd in _bv_act_j.items():
+                                _mx = float(_bd.get('max', 9999))
+                                _faixa = (f">{_fmt_num_banda(_bd.get('min', 0))}"
+                                          if _mx >= 9000
+                                          else f"{_fmt_num_banda(_bd.get('min', 0))}-"
+                                               f"{_fmt_num_banda(_mx)}")
+                                _bv_lbl_j[f"B{_bk} — {_faixa} km/h"] = _bk
+                            _bv_pick_j = st.multiselect(
+                                "🎚️ Bandas de velocidade",
+                                list(_bv_lbl_j.keys()),
+                                default=list(_bv_lbl_j.keys()),
+                                key="jan_vel_bands",
+                                help="A distância (m) é acumulada apenas enquanto a velocidade "
+                                     "está dentro das bandas selecionadas — igual ao WCS."
                             )
-                        elif tipo_metrica == 'Aceleração':
-                            bandas_acc = st.multiselect(
-                                "Bandas de Aceleração:",
-                                options=[-3, -2, -1, 0, 1, 2, 3],
-                                default=[1, 2, 3], key="jan_ba"
-                            )
+                            sel_vel_bands = [_bv_act_j[_bv_lbl_j[_s]] for _s in _bv_pick_j]
+                            if not sel_vel_bands:
+                                st.info("Selecione ao menos uma banda de velocidade.")
 
                     _unidade_jan = {
                         'Distância': 'm/min', 'PlayerLoad': 'PL/min',
-                        'Velocidade': 'km/h', 'Aceleração': 'm/s²',
-                        _MET_ACOES: 'ações',
+                        _MET_VEL_BANDAS: 'm', _MET_ACOES: 'ações',
                     }.get(tipo_metrica, '')
 
                     # ── Bandas de AÇÕES (efforts) — duas caixas accel/decel ────────
@@ -11169,11 +11181,72 @@ Escolha um ou mais atletas para análise simultânea.
                             _v_out.insert(_pos, float(_roll[_imax]))
                         return _t_out, _v_out
 
+                    # ── Helper: VELOCIDADE (bandas) — distância (m) nas bandas por janela ─
+                    def _calc_rolling_vel_bandas(_atl):
+                        """Distância (m) percorrida nas bandas de velocidade selecionadas,
+                        por janela rolante — MESMA lógica do WCS '🏃 Velocidade (bandas)':
+                        soma v/(3.6·Hz) por amostra quando a velocidade cai nas bandas."""
+                        if _jan_modo_todos:
+                            _ps = [k for k in dados_posicao_por_periodo
+                                   if k != _CHAVE_COMBINADO]
+                        else:
+                            _ps = [periodo_janela]
+                        _wts, _wv = [], []
+                        for _pn in _ps:
+                            _da = dados_posicao_por_periodo.get(_pn, {}).get(_atl, {})
+                            _ts = _da.get('ts_pos', [])
+                            _vl = _da.get('vel', [])       # km/h
+                            _nn = min(len(_ts), len(_vl)) if (_ts and _vl) else len(_vl)
+                            if _nn == 0:
+                                continue
+                            if len(_ts) < _nn:
+                                _ts = list(range(_nn))
+                            _wts += list(_ts[:_nn])
+                            _wv += list(_vl[:_nn])
+                        _Hz = _hz_jan
+                        _n = max(2, int(window_minutes * 60 * _Hz))
+                        if len(_wv) < _n:
+                            return [], []
+                        _faixas_v = [(float(b.get('min', 0)), float(b.get('max', 9999)))
+                                     for b in sel_vel_bands]
+                        if not _faixas_v:
+                            return [], []
+
+                        def _in_vband(_vv):
+                            for _lo, _hi in _faixas_v:
+                                if _lo <= _vv < _hi:
+                                    return True
+                            return False
+
+                        _sv = [(v / (3.6 * _Hz)) if _in_vband(v) else 0.0 for v in _wv]
+                        _csum = sum(_sv[:_n])
+                        _roll = [_csum]
+                        for _i in range(1, len(_sv) - _n + 1):
+                            _csum += _sv[_i + _n - 1] - _sv[_i - 1]
+                            _roll.append(_csum)
+                        if not _roll:
+                            return [], []
+                        _stepd = max(1, int(round(_Hz)))
+                        _t_out, _v_out = [], []
+                        for _i in range(0, len(_roll), _stepd):
+                            _t_out.append(_i / (_Hz * 60.0))
+                            _v_out.append(float(_roll[_i]))
+                        _imax = int(np.argmax(_roll))
+                        if _imax % _stepd != 0:
+                            import bisect as _bis
+                            _tp = _imax / (_Hz * 60.0)
+                            _pos = _bis.bisect_left(_t_out, _tp)
+                            _t_out.insert(_pos, _tp)
+                            _v_out.insert(_pos, float(_roll[_imax]))
+                        return _t_out, _v_out
+
                     # ── Helper: rolling window para um atleta ──────────────────────
                     def _calc_rolling(_atl):
                         """Retorna (tempos_min, valores) para o atleta e configuração atual."""
                         if tipo_metrica == _MET_ACOES:
                             return _calc_rolling_acoes(_atl)
+                        if tipo_metrica == _MET_VEL_BANDAS:
+                            return _calc_rolling_vel_bandas(_atl)
                         # ── Sensor helper (reutilizado no fallback de Distância) ────
                         def _get_sp():
                             if _jan_modo_todos:
