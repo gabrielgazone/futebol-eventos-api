@@ -4861,6 +4861,210 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
                    "▶ No campo animado os atletas **deslizam** de forma contínua.")
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# EXPORTAÇÃO PARA ARTIGO — tabela no formato do export OpenField/Catapult
+# ══════════════════════════════════════════════════════════════════════════
+_EXPORT_ARTIGO_COLS = [
+    "Name", "Date", "Total Distance (m)", "Minutos", "Metros por minuto",
+    "Total Player Load",
+    "Velocity Band 1 Total Distance (m)", "Velocity Band 2 Total Distance (m)",
+    "Velocity Band 3 Total Distance (m)", "Velocity Band 4 Total Distance (m)",
+    "Velocity Band 5 Total Distance (m)", "Velocity Band 6 Total Distance (m)",
+    "Max Acceleration", "Max Deceleration", "Maximum Velocity (km/h)",
+    "Acceleration B1 Efforts (Gen 2)", "Acceleration B2 Efforts (Gen 2)",
+    "Acceleration B3 Efforts (Gen 2)",
+    "Deceleration B1 Efforts (Gen 2)", "Deceleration B2 Efforts (Gen 2)",
+    "Deceleration B3 Efforts (Gen 2)",
+]
+
+
+def _fmt_data_br(valor) -> str:
+    """Formata a data da atividade para DD/MM/AAAA (aceita epoch, ISO ou str)."""
+    from datetime import datetime as _dt
+    if valor is None or valor == '':
+        return ''
+    try:
+        fv = float(valor)
+        if fv > 1e8:
+            return _dt.fromtimestamp(fv).strftime('%d/%m/%Y')
+    except (TypeError, ValueError):
+        pass
+    s = str(valor)
+    try:
+        return _dt.fromisoformat(s.replace('Z', '').split('.')[0]).strftime('%d/%m/%Y')
+    except Exception:
+        pass
+    for _f in ('%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y'):
+        try:
+            return _dt.strptime(s[:10], _f).strftime('%d/%m/%Y')
+        except ValueError:
+            continue
+    return s[:10]
+
+
+def _dist_por_banda_vel(sensor_points, n_bandas=6):
+    """Integra a distância (m) percorrida em cada banda de velocidade, usando as
+    bandas ativas (_bandas_vel_ativas, km/h). Retorna lista de n_bandas valores."""
+    bandas = _bandas_vel_ativas()
+    ordem = sorted(bandas.keys())[:n_bandas]
+    faixas = []
+    for idx, k in enumerate(ordem):
+        lo = float(bandas[k].get('min', 0))
+        hi = float(bandas[k].get('max', 9999))
+        if idx == len(ordem) - 1:
+            hi = 1e9            # última banda: sem teto (captura sprints altos)
+        faixas.append((lo, hi))
+    dists = [0.0] * n_bandas
+    prev = None
+    for p in sensor_points:
+        v = p.get('v')
+        if v is None:
+            continue
+        v_ms = float(v)
+        v_kmh = v_ms * 3.6
+        if prev is not None:
+            seg = ((prev + v_ms) / 2.0) * 0.1     # integração retangular a 10 Hz
+            for i, (lo, hi) in enumerate(faixas):
+                if lo <= v_kmh < hi:
+                    dists[i] += seg
+                    break
+        prev = v_ms
+    return dists
+
+
+def _contar_efforts_acc_por_caixa(acc_efforts) -> dict:
+    """Conta acceleration_efforts por caixa Gen2 (campo 'band', 1..8)."""
+    cont = {b: 0 for b in (1, 2, 3, 6, 7, 8)}
+    for ef in (acc_efforts or []):
+        try:
+            b = int(float(ef.get('band')))
+        except (TypeError, ValueError):
+            continue
+        if b in cont:
+            cont[b] += 1
+    return cont
+
+
+def render_export_artigo(resultados_por_periodo, dados_sensor_por_atleta_por_periodo,
+                         dados_efforts_acc_por_periodo):
+    """Aba 📤 Exportação para Artigo — tabela no formato do export Catapult."""
+    st.markdown("### 📤 Exportação para Artigo")
+    st.caption("Monta uma tabela no **mesmo formato do export OpenField/Catapult** "
+               "(21 colunas): totais para distâncias e esforços; máximos para "
+               "aceleração, desaceleração e velocidade. Selecione datas/períodos e "
+               "atletas e exporte em **CSV** pronto para o artigo.")
+
+    _periodos_reais = [p for p in resultados_por_periodo.keys() if p != _CHAVE_COMBINADO]
+    if not _periodos_reais:
+        st.info("Carregue uma atividade com dados para exportar.")
+        return
+
+    _act_nome = st.session_state.get('_atividade_sel_cached', '') or 'Atividade'
+    _act_data = ''
+    try:
+        _dfa = st.session_state.get('df_activities')
+        if _dfa is not None and not _dfa.empty and 'data' in _dfa.columns:
+            _match = _dfa[_dfa['nome'] == _act_nome]
+            if not _match.empty:
+                _act_data = _fmt_data_br(_match['data'].values[0])
+    except Exception:
+        pass
+
+    _atletas_disp = sorted({r.get('Atleta', '') for p in _periodos_reais
+                            for r in resultados_por_periodo.get(p, [])} - {''})
+    if not _atletas_disp:
+        st.info("Nenhum atleta com métricas neste conjunto.")
+        return
+
+    c1, c2 = st.columns(2)
+    with c1:
+        _per_sel = st.multiselect("Períodos / datas a incluir", _periodos_reais,
+                                  default=_periodos_reais, key="exp_art_periodos")
+    with c2:
+        _atl_sel = st.multiselect("Atletas", _atletas_disp,
+                                  default=_atletas_disp, key="exp_art_atletas")
+    _agregar = st.checkbox("Agregar períodos em 1 linha por atleta (recomendado)",
+                           value=True, key="exp_art_agg",
+                           help="Ligado: soma os períodos numa linha por atleta (uma "
+                                "sessão). Desligado: uma linha por período×atleta.")
+
+    if not _per_sel or not _atl_sel:
+        st.info("Selecione ao menos um período e um atleta.")
+        return
+
+    def _linha(atleta, periodos, nome_linha):
+        tot_d = tot_m = tot_pl = 0.0
+        bands = [0.0] * 6
+        max_acc = 0.0
+        min_dec = 0.0
+        max_vel = 0.0
+        cx = {1: 0, 2: 0, 3: 0, 6: 0, 7: 0, 8: 0}
+        for per in periodos:
+            _row = next((r for r in resultados_por_periodo.get(per, [])
+                         if r.get('Atleta') == atleta), None)
+            if _row:
+                tot_d += float(_row.get('Distância (m)', 0) or 0)
+                tot_m += float(_row.get('Duração (min)', 0) or 0)
+                tot_pl += float(_row.get('PlayerLoad', 0) or 0)
+                max_acc = max(max_acc, float(_row.get('Acc Max (m/s²)', 0) or 0))
+                min_dec = min(min_dec, -abs(float(_row.get('Dcc Max (m/s²)', 0) or 0)))
+                max_vel = max(max_vel, float(_row.get('Velocidade Máx (km/h)', 0) or 0))
+            _sp = dados_sensor_por_atleta_por_periodo.get(per, {}).get(atleta, [])
+            if _sp:
+                _d6 = _dist_por_banda_vel(_sp)
+                for i in range(6):
+                    bands[i] += _d6[i] if i < len(_d6) else 0.0
+            _cc = _contar_efforts_acc_por_caixa(
+                dados_efforts_acc_por_periodo.get(per, {}).get(atleta, []))
+            for b in cx:
+                cx[b] += _cc.get(b, 0)
+        _mmin = (tot_d / tot_m) if tot_m > 0 else 0.0
+        return {
+            "Name": nome_linha,
+            "Date": _act_data,
+            "Total Distance (m)": round(tot_d, 5),
+            "Minutos": round(tot_m, 5),
+            "Metros por minuto": round(_mmin, 5),
+            "Total Player Load": round(tot_pl, 5),
+            "Velocity Band 1 Total Distance (m)": round(bands[0], 2),
+            "Velocity Band 2 Total Distance (m)": round(bands[1], 2),
+            "Velocity Band 3 Total Distance (m)": round(bands[2], 2),
+            "Velocity Band 4 Total Distance (m)": round(bands[3], 2),
+            "Velocity Band 5 Total Distance (m)": round(bands[4], 2),
+            "Velocity Band 6 Total Distance (m)": round(bands[5], 2),
+            "Max Acceleration": round(max_acc, 5),
+            "Max Deceleration": round(min_dec, 5),
+            "Maximum Velocity (km/h)": round(max_vel, 5),
+            "Acceleration B1 Efforts (Gen 2)": cx[6],
+            "Acceleration B2 Efforts (Gen 2)": cx[7],
+            "Acceleration B3 Efforts (Gen 2)": cx[8],
+            "Deceleration B1 Efforts (Gen 2)": cx[3],
+            "Deceleration B2 Efforts (Gen 2)": cx[2],
+            "Deceleration B3 Efforts (Gen 2)": cx[1],
+        }
+
+    _rows = []
+    if _agregar:
+        for _atl in _atl_sel:
+            _rows.append(_linha(_atl, _per_sel, f"{_act_nome} - {_atl}"))
+    else:
+        for _per in _per_sel:
+            for _atl in _atl_sel:
+                _rows.append(_linha(_atl, [_per], f"{_act_nome} {_per} - {_atl}"))
+
+    _df = pd.DataFrame(_rows, columns=_EXPORT_ARTIGO_COLS)
+    st.dataframe(_df, use_container_width=True, hide_index=True,
+                 height=min(560, 60 + len(_df) * 35))
+    st.caption(f"{len(_df)} linha(s) · 21 colunas · distâncias por banda **integradas do "
+               "sinal de velocidade**; esforços **contados dos efforts Gen2** da conta.")
+
+    st.download_button(
+        "📥 Exportar CSV (formato Catapult)",
+        _df.to_csv(index=False).encode('utf-8'),
+        file_name=f"export_artigo_{_act_nome.replace(' ', '_')[:40] or 'sessao'}.csv",
+        mime='text/csv')
+
+
 def combinar_periodos_continuo(dados_sensor_por_atleta_por_periodo: dict, atleta: str) -> list:
     """
     Combina sensor_points de múltiplos períodos em uma linha do tempo contínua.
@@ -8185,6 +8389,7 @@ Escolha um ou mais atletas para análise simultânea.
                 "🗺️ Campo & GPS",
                 "🧠 Tática Coletiva",
                 "📡 Ao Vivo",
+                "📤 Exportação para Artigo",
             ])
 
             # ── Criar sub-tabs dentro de cada aba principal ────────────────────
@@ -8197,6 +8402,10 @@ Escolha um ou mais atletas para análise simultânea.
                                       "🏎️ Acc-Vel", "❤️ FC"])
             with _main_tabs[2]:
                 render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, st.session_state.atletas_sel)
+            with _main_tabs[4]:
+                render_export_artigo(resultados_por_periodo,
+                                     dados_sensor_por_atleta_por_periodo,
+                                     dados_efforts_acc_por_periodo)
 
             # Mapeamento: abas[N] aponta para o container correto na nova estrutura
             abas = [
