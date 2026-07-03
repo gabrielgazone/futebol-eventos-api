@@ -15,10 +15,10 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Instala dependências de teste
-        run: pip install numpy pandas pytest
+      - name: Instala dependências (app completo + pytest)
+        run: pip install -r requirements.txt pytest
 
-      - name: Testes do motor de métricas e validação
+      - name: Testes (motor de métricas, validação e E2E do carregamento)
         run: python -m pytest tests/ -q
 
       - name: Smoke check de sintaxe do app
