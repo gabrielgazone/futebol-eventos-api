@@ -4861,6 +4861,10 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
                    "▶ No campo animado os atletas **deslizam** de forma contínua.")
 
 
+# Chave do período sintético "combinado" (também definida localmente em main;
+# aqui em nível de módulo para as funções de render a enxergarem).
+_CHAVE_COMBINADO = '📊 Períodos Combinados'
+
 # ══════════════════════════════════════════════════════════════════════════
 # EXPORTAÇÃO PARA ARTIGO — tabela no formato do export OpenField/Catapult
 # ══════════════════════════════════════════════════════════════════════════
