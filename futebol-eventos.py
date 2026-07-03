@@ -10963,8 +10963,9 @@ Escolha um ou mais atletas para análise simultânea.
                             key="jan_metrica",
                             help="🏃 Velocidade (bandas) = distância (m) percorrida nas bandas "
                                  "de velocidade selecionadas, por janela (igual ao WCS). "
-                                 "💥 Ações Acel/Desacel = nº de esforços (ações reais da "
-                                 "Catapult) de acel/desacel — mesmo cálculo do WCS."
+                                 "💥 Ações Acel/Desacel = nº de ações de acel/desacel nas "
+                                 "bandas, detectadas no sinal de aceleração do sensor (mesma "
+                                 "fonte da aba Neuromuscular)."
                         )
                     # ── Bandas de VELOCIDADE (para a métrica '🏃 Velocidade (bandas)') ──
                     sel_vel_bands = []   # dicts {min,max} das bandas de velocidade marcadas
@@ -11037,12 +11038,12 @@ Escolha um ou mais atletas para análise simultânea.
                                if _dec_lbl_j[_s] in _ACC_KEY_TO_NUM}
                         )
                         st.caption(
-                            "Conta o **nº de ações (efforts)** de acel/desacel da Catapult "
-                            "cujo instante cai na janela — o pior minuto é a janela com mais "
-                            "ações nas bandas selecionadas. Para **bater com a aba "
-                            "'Pior Cenário (WCS)'** (individual), selecione "
-                            "**🔵 Individual** + **🔀 Todos os períodos (combinado)** e a "
-                            "mesma janela em minutos."
+                            "Conta o **nº de ações** de acel/desacel nas bandas selecionadas "
+                            "por janela — detectadas no **sinal de aceleração do sensor** "
+                            "(mesma fonte da aba **Neuromuscular**), sustentadas pela duração "
+                            "mínima da sidebar. O pior minuto é a janela com mais ações. "
+                            "Quando a API traz *acceleration_efforts* (modo por período), usa "
+                            "a contagem oficial por caixa Gen2."
                         )
                         if not sel_acc_bands:
                             st.info("Selecione ao menos uma banda de aceleração ou desaceleração.")
@@ -11077,85 +11078,68 @@ Escolha um ou mais atletas para análise simultânea.
                         Assim o pico individual coincide com o WCS.
                         Retorna (tempos_min, valores) — valores = nº de ações na janela.
                         """
-                        # Períodos: combinado = todos (exceto a chave combinada),
-                        # igual ao WCS; individual = só o período escolhido.
+                        # Períodos reais (para efforts oficiais da API, quando existirem).
+                        _ps = ([k for k in dados_posicao_por_periodo
+                                if k != _CHAVE_COMBINADO]
+                               if _jan_modo_todos else [periodo_janela])
+
+                        # ── FONTE: sinal de aceleração do SENSOR (nativo 'a', 10 Hz) ──
+                        # Mesma fonte da aba Neuromuscular (que conta 200+ ações). Antes
+                        # usava a trajetória GPS + derivação por velocidade, que zerava
+                        # em dispositivos só-GPS. O sinal do sensor é sempre confiável.
                         if _jan_modo_todos:
-                            _ps = [k for k in dados_posicao_por_periodo
-                                   if k != _CHAVE_COMBINADO]
+                            _sp = combinar_periodos_continuo(
+                                dados_sensor_por_atleta_por_periodo, _atl)
                         else:
-                            _ps = [periodo_janela]
+                            _sp = dados_sensor_por_atleta_por_periodo.get(
+                                periodo_janela, {}).get(_atl, [])
+                        if not _sp or not sel_acc_bands:
+                            return [], []
 
-                        # Timeline concatenada (ts_pos + vel + acc), idêntica à do WCS
-                        _wts, _wac, _wv = [], [], []
-                        for _pn in _ps:
-                            _da = dados_posicao_por_periodo.get(_pn, {}).get(_atl, {})
-                            # Nativo usa ts_pos/vel; GPS-only (sem x/y nem ts_pos) usa a
-                            # trajetória GPS (ts_gps/vels_gps) — os timestamps Unix bastam
-                            # para posicionar os efforts na janela.
-                            _ts = _da.get('ts_pos', []) or _da.get('ts_gps', [])
-                            _vl = _da.get('vel', []) or _da.get('vels_gps', [])
-                            _ac = _da.get('acc', [])
-                            _nn = len(_ts)
-                            if _nn == 0:
-                                continue
-                            _ts_pad = list(_ts[:_nn]) + [0.0] * max(0, _nn - len(_ts))
-                            _ac_pad = list(_ac[:_nn]) + [0.0] * max(0, _nn - len(_ac))
-                            _vl_pad = list(_vl[:_nn]) + [0.0] * max(0, _nn - len(_vl))
-                            _wts += _ts_pad
-                            _wac += _ac_pad
-                            _wv += _vl_pad
-
-                        _Hz = _hz_jan
+                        _Hz = float(_SENSOR_HZ)                 # sensor uniforme 10 Hz
                         _n = max(2, int(window_minutes * 60 * _Hz))
-                        if len(_wts) < _n:
+                        _nsp = len(_sp)
+                        if _nsp < _n:
                             return [], []
 
-                        _faixas_a = [(float(b.get('min', -9999)),
-                                      float(b.get('max', 9999))) for b in sel_acc_bands]
-                        if not _faixas_a:
-                            return [], []
+                        # Sinal de aceleração (m/s²): nativo 'a'; se ausente (só-GPS sem
+                        # IMU), deriva de dv/dt da velocidade do próprio sensor.
+                        _acc_sig = [float(_p.get('a') or 0.0) for _p in _sp]
+                        _ts_raw = [float(_p.get('ts') or 0.0) for _p in _sp]
+                        if not any(abs(_a) > 0.05 for _a in _acc_sig):
+                            _vel_sig = [float(_p.get('v') or 0.0) * 3.6 for _p in _sp]
+                            _acc_sig = acc_series_from_vel(_vel_sig, _ts_raw, _Hz)
 
-                        def _in_aband(_aa):
-                            for _lo, _hi in _faixas_a:
-                                if _lo <= _aa < _hi:
-                                    return True
-                            return False
-
-                        _sv = [0.0] * len(_wts)
-                        _wts_np = np.array(_wts, dtype=float)
-                        _ts_unix_ok = (_wts_np.size > 0
-                                       and float(np.median(_wts_np)) > 1e6)
+                        _sv = [0.0] * _nsp
+                        _ts_np = np.array(_ts_raw, dtype=float)
+                        _ts_unix_ok = (_ts_np.size > 0
+                                       and float(np.median(_ts_np)) > 1e6)
                         _has_api_eff = any(
                             len(dados_efforts_acc_por_periodo
                                 .get(_pn, {}).get(_atl, []) or []) > 0
                             for _pn in _ps)
-                        if _ts_unix_ok and _has_api_eff:
-                            # AÇÕES reais (efforts da Catapult)
+                        # Efforts oficiais da API (contagem por caixa Gen2) só quando há
+                        # timestamps Unix — o modo combinado reescreve os ts, então usa o
+                        # sinal. Ambos contam AÇÕES; o sinal garante que nunca zere.
+                        if _has_api_eff and _ts_unix_ok and not _jan_modo_todos:
                             for _pn in _ps:
-                                _effs = (dados_efforts_acc_por_periodo
-                                         .get(_pn, {}).get(_atl, []) or [])
-                                for _ef in _effs:
+                                for _ef in (dados_efforts_acc_por_periodo
+                                            .get(_pn, {}).get(_atl, []) or []):
                                     try:
-                                        _bx  = int(round(float(_ef.get('band'))))
+                                        _bx = int(round(float(_ef.get('band'))))
                                         _stt = float(_ef.get('start_time') or 0)
                                     except (TypeError, ValueError):
                                         continue
                                     if _stt <= 0 or _bx not in sel_acc_boxes:
                                         continue
-                                    _idx = int(np.argmin(np.abs(_wts_np - _stt)))
-                                    if 0 <= _idx < len(_sv):
+                                    _idx = int(np.argmin(np.abs(_ts_np - _stt)))
+                                    if 0 <= _idx < _nsp:
                                         _sv[_idx] += 1.0
                         else:
-                            # Fallback (API sem efforts): AÇÕES discretas do sinal de
-                            # aceleração. Mesma lógica/parâmetros do WCS → bate.
-                            # Deriva acc por dv/dt da velocidade (fonte confiável).
-                            _wac_fb = _wac
-                            if any(abs(_v) > 0.1 for _v in _wv):
-                                _wac_fb = acc_series_from_vel(_wv, _wts, _Hz)
                             _idxs_acc = detectar_acoes_acc_idx(
-                                _wac_fb, sel_acc_bands, freq_hz=_Hz)
+                                _acc_sig, sel_acc_bands, freq_hz=_Hz)
                             for _ix in _idxs_acc:
-                                if 0 <= _ix < len(_sv):
+                                if 0 <= _ix < _nsp:
                                     _sv[_ix] += 1.0
 
                         # Soma rolante de N amostras (passo 1) → série de contagem
