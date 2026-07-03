@@ -31,6 +31,48 @@ _campo_component = st.components.v1.declare_component("campo_interativo_v1", pat
 import metrics as _mtr          # noqa: E402
 import validation as _valmod    # noqa: E402
 
+
+# ── P4: selo de proveniência do dado ─────────────────────────────────────────
+# Toda métrica sensível mostra DE ONDE veio o número (o app escolhe a fonte
+# automaticamente; o usuário precisa saber qual foi usada).
+_PROV_LABELS = {
+    'efforts':  ('🟢', "Ações oficiais da API Catapult (*acceleration_efforts*, caixa Gen2)"),
+    'sensor':   ('🔵', "Sinal nativo do sensor (10 Hz)"),
+    'derivado': ('🟡', "Derivado do sinal de velocidade (dv/dt) — menor confiança"),
+    'gps':      ('🟣', "Velocidade da trajetória GPS (field-filtered)"),
+    'summary':  ('⚪', "Resumo pré-calculado OpenField"),
+}
+
+
+def _selo_fonte(fonte, extra: str = ""):
+    """(P4) Selo de proveniência: informa a fonte do número exibido."""
+    icone, desc = _PROV_LABELS.get(fonte, ('⚪', str(fonte)))
+    st.caption(f"{icone} **Fonte do dado:** {desc}"
+               + (f" · {extra}" if extra else ""))
+
+
+# ── P5: diagnóstico da sessão (falhas silenciosas viram eventos visíveis) ───
+def _diag_log(categoria: str, msg: str):
+    """(P5) Registra um evento de diagnóstico (dado descartado / fallback)."""
+    try:
+        _lst = st.session_state.setdefault('_diag_eventos', [])
+        _item = f"**[{categoria}]** {msg}"
+        if _item not in _lst:
+            _lst.append(_item)
+            if len(_lst) > 200:
+                del _lst[:-200]
+    except Exception:
+        pass
+
+
+def _diag_reset():
+    """(P5) Limpa o diagnóstico no início de um novo carregamento."""
+    try:
+        st.session_state['_diag_eventos'] = []
+        st.session_state.pop('_api_last_err', None)
+    except Exception:
+        pass
+
 SERVERS = {
     "Américas (US)": "https://connect-us.catapultsports.com/api/v6",
     "Europa/Oriente Médio/África (EU)": "https://connect-eu.catapultsports.com/api/v6",
@@ -3831,6 +3873,8 @@ def _tatica_preparar_dados(dados_periodo: dict, atletas_sel):
                 try:
                     fx, fy = gps_para_campo_coords(list(lats[:n]), list(lons[:n]), cfg)
                 except Exception:
+                    _diag_log('Tática', f"{a}: falha ao projetar GPS→campo — "
+                                        "atleta ignorado nas visões coletivas")
                     continue
                 dd = dict(d)
                 dd['xs'] = fx
@@ -4629,6 +4673,20 @@ def _tatica_view_distancias(tempos, nomes, equipes, PX, PY, PV, FL, FW):
         "matriz_distancia_atletas.csv", mime='text/csv')
 
 
+@st.cache_data(show_spinner=False, max_entries=24)
+def _tatica_frames_cached(cache_key, _dados_prep, atletas_sel, t_ini, t_fim,
+                          max_frames):
+    """(P6) Cache dos frames sincronizados da Tática Coletiva.
+
+    Os mesmos frames alimentam as 5 visões — sem cache, cada interação (troca
+    de visão, velocidade, slider) reinterpolava todos os atletas. Os dados
+    grandes (_dados_prep) ficam fora da chave; a chave pequena identifica
+    token/atividade/período/atletas/campo/janela."""
+    return _tatica_frames_sincronizados(_dados_prep, list(atletas_sel),
+                                        t_ini=t_ini, t_fim=t_fim,
+                                        max_frames=max_frames)
+
+
 def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atletas_sel):
     """Aba 🧠 Tática Coletiva — orquestra as 5 visões coletivas."""
     import numpy as _np
@@ -4740,8 +4798,13 @@ def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atl
         help="1× reproduz no tempo real do jogo. Abaixo de 1× = câmera lenta; "
              "acima = acelerado. Aplica-se ao botão ▶ Play.")
 
-    frames = _tatica_frames_sincronizados(dados_prep, atletas_sel,
-                                          t_ini=_t_ini, t_fim=_t_fim, max_frames=400)
+    # (P6) frames em cache — chave pequena; dados grandes fora da chave
+    _fr_key = (str(st.session_state.get('_token_marker', '')),
+               str(st.session_state.get('activity_id', '')),
+               str(per_sel), tuple(atletas_sel or []), str(_fonte_pos),
+               round(float(FL), 1), round(float(FW), 1))
+    frames = _tatica_frames_cached(_fr_key, dados_prep, tuple(atletas_sel or []),
+                                   float(_t_ini), float(_t_fim), 400)
     if frames is None:
         st.warning("Janela sem sobreposição temporal suficiente — ajuste o início ou a duração.")
         return
@@ -6276,6 +6339,15 @@ def calcular_carga_neuromuscular(sensor_points, limiar=2.0, min_dur_s=None):
     }
 
 
+@st.cache_data(show_spinner=False, max_entries=16)
+def _neuro_cached(cache_key, _sensor_points, limiar, min_dur_s):
+    """(P6) Cache da análise neuromuscular: os ~50k pontos ficam FORA da chave
+    (prefixo _); a chave pequena identifica token/atividade/período/atleta/
+    parâmetros. Evita redetectar eventos a cada interação de widget."""
+    return calcular_carga_neuromuscular(_sensor_points, limiar=limiar,
+                                        min_dur_s=min_dur_s)
+
+
 def plotar_carga_neuromuscular(dados, atleta_nome):
     """Painel Plotly 2×2 com análise de carga neuromuscular."""
     lim      = dados['limiar']
@@ -6935,6 +7007,7 @@ Escolha um ou mais atletas para análise simultânea.
         
         if token and st.button("🔄 Carregar Dados", type="primary"):
             with st.spinner("Carregando..."):
+                _diag_reset()   # (P5) novo carregamento → diagnóstico limpo
                 api = CatapultAPI(base_url, token)
                 
                 st.subheader("📋 Carregando Equipes...")
@@ -7117,6 +7190,23 @@ Escolha um ou mais atletas para análise simultânea.
                     pass
 
         if not st.session_state.df_activities.empty and token:
+            # ── P5: Diagnóstico da sessão — nada falha em silêncio ────────────
+            _diag_ev = st.session_state.get('_diag_eventos', [])
+            _api_err = st.session_state.get('_api_last_err')
+            _diag_n = len(_diag_ev) + (1 if _api_err else 0)
+            with st.expander(f"🔍 Diagnóstico da sessão ({_diag_n})",
+                             expanded=False):
+                if _api_err:
+                    st.warning(f"Último erro da API: `{_api_err}`")
+                if not _diag_ev:
+                    st.caption("✅ Nenhum dado descartado nem fallback registrado.")
+                else:
+                    st.caption("Eventos registrados no processamento (dados "
+                               "descartados, fallbacks de fonte, falhas de "
+                               "projeção). Atualiza a cada interação:")
+                    for _ev in _diag_ev[-60:]:
+                        st.markdown(f"- {_ev}")
+
             st.markdown("---")
             st.header("🎯 Filtros")
             
@@ -8262,6 +8352,9 @@ Escolha um ou mais atletas para análise simultânea.
         # Apagar container de loading e mostrar resumo compacto
         _ld_box.empty()
         _warn_ld_n = _n_atl_ld - _ok_ld
+        if _warn_ld_n > 0:
+            _diag_log('Carga', f"{_warn_ld_n} atleta(s) sem dados de sensor "
+                               "nesta atividade/períodos (excluídos das análises)")
         _per_label = ', '.join(periodos_selecionados)
         st.markdown(
             f"<div style='display:flex;align-items:center;gap:12px;padding:10px 16px;"
@@ -11106,9 +11199,13 @@ Escolha um ou mais atletas para análise simultânea.
                         # IMU), deriva de dv/dt da velocidade do próprio sensor.
                         _acc_sig = [float(_p.get('a') or 0.0) for _p in _sp]
                         _ts_raw = [float(_p.get('ts') or 0.0) for _p in _sp]
+                        st.session_state['_prov_jan_acoes'] = 'sensor'   # (P4)
                         if not any(abs(_a) > 0.05 for _a in _acc_sig):
                             _vel_sig = [float(_p.get('v') or 0.0) * 3.6 for _p in _sp]
                             _acc_sig = acc_series_from_vel(_vel_sig, _ts_raw, _Hz)
+                            st.session_state['_prov_jan_acoes'] = 'derivado'
+                            _diag_log('Janelas', f"{_atl}: sem aceleração nativa — "
+                                                 "ações derivadas por dv/dt da velocidade")
 
                         _sv = [0.0] * _nsp
                         _ts_np = np.array(_ts_raw, dtype=float)
@@ -11122,6 +11219,7 @@ Escolha um ou mais atletas para análise simultânea.
                         # timestamps Unix — o modo combinado reescreve os ts, então usa o
                         # sinal. Ambos contam AÇÕES; o sinal garante que nunca zere.
                         if _has_api_eff and _ts_unix_ok and not _jan_modo_todos:
+                            st.session_state['_prov_jan_acoes'] = 'efforts'   # (P4)
                             for _pn in _ps:
                                 for _ef in (dados_efforts_acc_por_periodo
                                             .get(_pn, {}).get(_atl, []) or []):
@@ -11241,10 +11339,12 @@ Escolha um ou mais atletas para análise simultânea.
                                     _res_gps = calcular_distancia_janelas_por_vel_posicao(
                                         _vj, _tj, window_minutes, _hz_jan)
                                     if _res_gps[0]:   # GPS devolveu dados válidos
+                                        st.session_state['_prov_jan_dist'] = 'gps'   # (P4)
                                         return _res_gps
                             # 2ª tentativa: sensor IMU (fallback)
                             _sp = _get_sp()
                             if _sp:
+                                st.session_state['_prov_jan_dist'] = 'sensor'   # (P4)
                                 return calcular_distancia_janelas_discretas_10s(
                                     _sp, window_minutes)
                             return [], []
@@ -11320,6 +11420,17 @@ Escolha um ou mais atletas para análise simultânea.
                                 with st.spinner("Calculando janelas temporais..."):
                                     _tj, _vj = _calc_rolling(atleta_janela)
                                     if _tj:
+                                        # (P4) selo de proveniência da métrica exibida
+                                        if tipo_metrica == _MET_ACOES:
+                                            _selo_fonte(st.session_state.get(
+                                                '_prov_jan_acoes', 'sensor'))
+                                        elif tipo_metrica == 'Distância':
+                                            _selo_fonte(st.session_state.get(
+                                                '_prov_jan_dist', 'gps'))
+                                        elif tipo_metrica == _MET_VEL_BANDAS:
+                                            _selo_fonte('gps')
+                                        elif tipo_metrica == 'PlayerLoad':
+                                            _selo_fonte('sensor')
                                         exibir_resultados_janela(
                                             _tj, _vj, tipo_metrica, atleta_janela,
                                             window_minutes, _unidade_jan, _period_boundaries)
@@ -12482,9 +12593,16 @@ Escolha um ou mais atletas para análise simultânea.
                         else:
                             _nm_sp = dados_sensor_por_atleta_por_periodo[_nm_per].get(_nm_atl, [])
 
-                        _nm_dados = calcular_carga_neuromuscular(_nm_sp, limiar=_nm_lim, min_dur_s=_nm_dur_s)
+                        # (P6) cache: evita recomputar masks/EPM de ~50k amostras
+                        # a cada interação de widget (dados grandes fora da chave).
+                        _nm_key = (str(st.session_state.get('_token_marker', '')),
+                                   str(st.session_state.get('activity_id', '')),
+                                   str(_nm_per), str(_nm_atl),
+                                   float(_nm_lim), float(_nm_dur_s), len(_nm_sp))
+                        _nm_dados = _neuro_cached(_nm_key, _nm_sp, _nm_lim, _nm_dur_s)
 
                         if _nm_dados:
+                            _selo_fonte('sensor')   # (P4) acc/dec do sinal nativo
                             # Métricas resumo
                             c1, c2, c3, c4 = st.columns(4)
                             c1.metric(f"🟢 Acels. ≥{_nm_lim} m/s²", _nm_dados['total_hi_acc'])
@@ -14872,6 +14990,7 @@ Escolha um ou mais atletas para análise simultânea.
                     # ── Cálculo do WCS por atleta ───────────────────────────────────
                     _wcs2_rows = []
                     _wcs2_segs = {}  # atleta → {xn, yn, vel} para animação
+                    _wcs2_prov = {}  # (P4) fonte das ações → nº de atletas
 
                     _wcs2_periodos = _wcs2_periodos_tmp
                     _wcs2_athletes = sorted(set(
@@ -14948,6 +15067,8 @@ Escolha um ou mais atletas para análise simultânea.
                                         _nn = min(len(_xs), len(_ys))
                                     except Exception:
                                         _nn = 0
+                                        _diag_log('WCS', f"{_wa}: falha ao projetar "
+                                                         f"GPS→campo no período {_pn}")
 
                             if _nn > 0:
                                 # Preenche vel/acc/ts com zeros se ausentes ou mais curtos
@@ -15000,6 +15121,7 @@ Escolha um ou mais atletas para análise simultânea.
                                 for _pn in _wcs2_periodos)
                             if _faixas_a and _ts_unix_ok and _has_api_eff:
                                 # Caminho preferido: AÇÕES reais (efforts da Catapult).
+                                _wcs2_prov['efforts'] = _wcs2_prov.get('efforts', 0) + 1  # (P4)
                                 for _pn in _wcs2_periodos:
                                     _effs = (dados_efforts_acc_por_periodo
                                              .get(_pn, {}).get(_wa, []) or [])
@@ -15030,6 +15152,11 @@ Escolha um ou mais atletas para análise simultânea.
                                     _vw = [float(_p.get('v') or 0.0) * 3.6 for _p in _sp_w]
                                     _tw = [float(_p.get('ts') or 0.0) for _p in _sp_w]
                                     _acc_w = acc_series_from_vel(_vw, _tw, _SENSOR_HZ)
+                                    _wcs2_prov['derivado'] = _wcs2_prov.get('derivado', 0) + 1  # (P4)
+                                    _diag_log('WCS', f"{_wa}: sem aceleração nativa — "
+                                                     "ações derivadas por dv/dt da velocidade")
+                                elif _acc_w:
+                                    _wcs2_prov['sensor'] = _wcs2_prov.get('sensor', 0) + 1  # (P4)
                                 if _acc_w:
                                     _idxs_acc = detectar_acoes_acc_idx(
                                         _acc_w, _sel_acc_bands, freq_hz=_SENSOR_HZ)
@@ -15245,6 +15372,16 @@ Escolha um ou mais atletas para análise simultânea.
                         st.markdown("---")
 
                         # Tabela
+                        # (P4) selo de proveniência das ações (pode variar por atleta)
+                        if (_wcs2_metric == "💥 Ações Acel/Desacel (efforts)"
+                                and _wcs2_prov):
+                            _prov_txt = " · ".join(
+                                f"{_PROV_LABELS.get(_k, ('⚪', _k))[0]} "
+                                f"{_PROV_LABELS.get(_k, ('', str(_k)))[1]}: "
+                                f"**{_v} atleta(s)**"
+                                for _k, _v in sorted(_wcs2_prov.items()))
+                            st.caption(f"**Fonte das ações** — {_prov_txt}")
+
                         _df_all_tmp = pd.DataFrame(_wcs2_rows)
                         _mw_avail   = [c for c in ['1 min', '3 min', '5 min']
                                        if c in _df_all_tmp.columns
