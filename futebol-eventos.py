@@ -5834,12 +5834,12 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
     valores_array = np.array(valores_janela)
 
     # ── Limiares como % do valor máximo da sessão ─────────────────────────────
-    # Alta Intensidade  : ≥ 75 % do máximo
-    # Média-Alta        : ≥ 50 % e < 75 % do máximo
-    # Baixa             : < 50 % do máximo
+    # Alta Intensidade  : > 90 % do máximo
+    # Média-Alta        : ≥ 75 % e ≤ 90 % do máximo
+    # Baixa             : < 75 % do máximo
     _max_val      = float(valores_array.max()) if len(valores_array) > 0 else 1.0
-    _limiar_alta  = round(_max_val * 0.75, 1)
-    _limiar_media = round(_max_val * 0.50, 1)
+    _limiar_alta  = round(_max_val * 0.90, 1)
+    _limiar_media = round(_max_val * 0.75, 1)
 
     cores, classificacoes = classificar_intensidade(valores_janela, _limiar_alta, _limiar_media)
 
@@ -5877,7 +5877,7 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
                   text-shadow:0 0 24px rgba(248,113,113,0.5);">{alta_count}</div>
       <div style="font-size:12px;color:rgba(255,255,255,0.38);margin-top:14px;line-height:1.6;">
         janelas distintas com <strong style="color:rgba(248,113,113,0.8);">{nome_metrica} ≥ {_limiar_alta} {unidade}</strong><br>
-        ≥ 75% do máximo ({_max_val:.1f} {unidade})
+        &gt; 90% do máximo ({_max_val:.1f} {unidade})
       </div>
     </div>"""
 
@@ -5900,7 +5900,7 @@ def exibir_resultados_janela(tempos_janela, valores_janela, nome_metrica, atleta
                   text-shadow:0 0 24px rgba(251,191,36,0.5);">{media_alta_count}</div>
       <div style="font-size:12px;color:rgba(255,255,255,0.38);margin-top:14px;line-height:1.6;">
         janelas distintas com <strong style="color:rgba(251,191,36,0.8);">{_limiar_media} ≤ {nome_metrica} &lt; {_limiar_alta} {unidade}</strong><br>
-        50–75% do máximo ({_max_val:.1f} {unidade})
+        75–90% do máximo ({_max_val:.1f} {unidade})
       </div>
     </div>"""
 
@@ -10953,7 +10953,7 @@ Escolha um ou mais atletas para análise simultânea.
                     with _col_m:
                         tipo_metrica = st.selectbox(
                             "Métrica:",
-                            ['Distância', 'PlayerLoad', 'Velocidade', 'Aceleração', _MET_ACOES],
+                            ['Distância', 'PlayerLoad', _MET_ACOES],
                             key="jan_metrica",
                             help="💥 Ações Acel/Desacel = nº de esforços (ações reais da "
                                  "Catapult) de aceleração/desaceleração no pior minuto — "
@@ -10982,6 +10982,7 @@ Escolha um ou mais atletas para análise simultânea.
                     # ── Bandas de AÇÕES (efforts) — duas caixas accel/decel ────────
                     # Mesma seleção da aba WCS para que os valores batam.
                     sel_acc_bands = []
+                    sel_acc_boxes = set()   # caixas Gen2 (1..8) selecionadas
                     if tipo_metrica == _MET_ACOES:
                         _ba_act_j = _bandas_acc_ativas()
                         _acc_lbl_j = {_ba_act_j[k]['label']: k
@@ -11008,6 +11009,15 @@ Escolha um ou mais atletas para análise simultânea.
                         sel_acc_bands = (
                             [_ba_act_j[_acc_lbl_j[_s]] for _s in _acc_pick_j]
                             + [_ba_act_j[_dec_lbl_j[_s]] for _s in _dec_pick_j]
+                        )
+                        # Caixas Gen2 oficiais das bandas escolhidas (A1..A3→6,7,8;
+                        # D1..D3→3,2,1). Contar pela caixa é robusto — não depende do
+                        # valor médio do effort cair no intervalo derivado.
+                        sel_acc_boxes = (
+                            {_ACC_KEY_TO_NUM[_acc_lbl_j[_s]] for _s in _acc_pick_j
+                             if _acc_lbl_j[_s] in _ACC_KEY_TO_NUM}
+                            | {_ACC_KEY_TO_NUM[_dec_lbl_j[_s]] for _s in _dec_pick_j
+                               if _dec_lbl_j[_s] in _ACC_KEY_TO_NUM}
                         )
                         st.caption(
                             "Conta o **nº de ações (efforts)** de acel/desacel da Catapult "
@@ -11109,11 +11119,11 @@ Escolha um ou mais atletas para análise simultânea.
                                          .get(_pn, {}).get(_atl, []) or [])
                                 for _ef in _effs:
                                     try:
-                                        _acv = float(_ef.get('acceleration'))
+                                        _bx  = int(round(float(_ef.get('band'))))
                                         _stt = float(_ef.get('start_time') or 0)
                                     except (TypeError, ValueError):
                                         continue
-                                    if _stt <= 0 or not _in_aband(_acv):
+                                    if _stt <= 0 or _bx not in sel_acc_boxes:
                                         continue
                                     _idx = int(np.argmin(np.abs(_wts_np - _stt)))
                                     if 0 <= _idx < len(_sv):
@@ -11381,8 +11391,8 @@ Escolha um ou mais atletas para análise simultânea.
                                         _all_v_pos = np.concatenate(
                                             [v for _, v in _atl_res.values()])
                                         _gmax_pos = float(np.nanmax(_all_v_pos))
-                                        _la_pos = round(_gmax_pos * 0.75, 1)
-                                        _lm_pos = round(_gmax_pos * 0.50, 1)
+                                        _la_pos = round(_gmax_pos * 0.90, 1)
+                                        _lm_pos = round(_gmax_pos * 0.75, 1)
                                         fig_pos.add_hline(
                                             y=_la_pos, line_dash='dash',
                                             line_color='rgba(239,68,68,0.50)',
@@ -11825,8 +11835,8 @@ Escolha um ou mais atletas para análise simultânea.
                                     _tm_mean = np.nanmean(_raw_mat, axis=0)
                                     if not np.all(np.isnan(_tm_mean)):
                                         _tmx = float(np.nanmax(_tm_mean))
-                                        _tla = round(_tmx * 0.75, 1)
-                                        _tlm = round(_tmx * 0.50, 1)
+                                        _tla = round(_tmx * 0.90, 1)
+                                        _tlm = round(_tmx * 0.75, 1)
                                         _tm_cores = [
                                             '#ef4444' if v >= _tla
                                             else '#f59e0b' if v >= _tlm
@@ -11904,7 +11914,7 @@ Escolha um ou mais atletas para análise simultânea.
       <div style="font-size:12px;color:rgba(255,255,255,0.38);margin-top:14px;line-height:1.6;">
         janelas coletivas com <strong style="color:rgba(248,113,113,0.8);">
         {tipo_metrica} ≥ {_tla} {_unidade_jan}</strong><br>
-        ≥ 75% do pico coletivo ({_tmx:.1f} {_unidade_jan})
+        &gt; 90% do pico coletivo ({_tmx:.1f} {_unidade_jan})
       </div>
     </div>"""
 
@@ -11926,7 +11936,7 @@ Escolha um ou mais atletas para análise simultânea.
       <div style="font-size:12px;color:rgba(255,255,255,0.38);margin-top:14px;line-height:1.6;">
         janelas coletivas com <strong style="color:rgba(251,191,36,0.8);">
         {_tlm} ≤ {tipo_metrica} &lt; {_tla} {_unidade_jan}</strong><br>
-        50–75% do pico coletivo ({_tmx:.1f} {_unidade_jan})
+        75–90% do pico coletivo ({_tmx:.1f} {_unidade_jan})
       </div>
     </div>"""
 
@@ -14684,6 +14694,7 @@ Escolha um ou mais atletas para análise simultânea.
                         # ── Seleção de bandas (aparece ao escolher Velocidade/Aceleração) ──
                         _sel_vel_bands = []   # lista de dicts {min,max} das bandas de velocidade marcadas
                         _sel_acc_bands = []   # idem para aceleração
+                        _sel_acc_boxes = set()  # caixas Gen2 (1..8) selecionadas
                         _wcs2_hi_thr = 19.0   # limiar (km/h) de alta intensidade definido pelo usuário
                         if _wcs2_metric == "🏃 Velocidade (bandas)":
                             _bv_act = _bandas_vel_ativas()
@@ -14732,6 +14743,12 @@ Escolha um ou mais atletas para análise simultânea.
                             _sel_acc_bands = (
                                 [_ba_act[_acc_lbl[_s]] for _s in _acc_pick]
                                 + [_ba_act[_dec_lbl[_s]] for _s in _dec_pick]
+                            )
+                            _sel_acc_boxes = (
+                                {_ACC_KEY_TO_NUM[_acc_lbl[_s]] for _s in _acc_pick
+                                 if _acc_lbl[_s] in _ACC_KEY_TO_NUM}
+                                | {_ACC_KEY_TO_NUM[_dec_lbl[_s]] for _s in _dec_pick
+                                   if _dec_lbl[_s] in _ACC_KEY_TO_NUM}
                             )
                             st.caption(
                                 "Conta o **nº de ações (efforts)** de aceleração/desaceleração "
@@ -14950,11 +14967,11 @@ Escolha um ou mais atletas para análise simultânea.
                                              .get(_pn, {}).get(_wa, []) or [])
                                     for _ef in _effs:
                                         try:
-                                            _acv = float(_ef.get('acceleration'))
+                                            _bx  = int(round(float(_ef.get('band'))))
                                             _stt = float(_ef.get('start_time') or 0)
                                         except (TypeError, ValueError):
                                             continue
-                                        if _stt <= 0 or not _in_aband(_acv):
+                                        if _stt <= 0 or _bx not in _sel_acc_boxes:
                                             continue
                                         _idx = int(np.argmin(np.abs(_wts_np - _stt)))
                                         if 0 <= _idx < len(_sv):
