@@ -11048,24 +11048,23 @@ Escolha um ou mais atletas para análise simultânea.
                         if not sel_acc_bands:
                             st.info("Selecione ao menos uma banda de aceleração ou desaceleração.")
 
-                    # Detecta Hz GPS uma vez (usado por todos os modos)
+                    # Detecta Hz uma vez (nº de amostras ÷ duração — robusto a ts
+                    # arredondados; nativo usa ts_pos, GPS-only usa ts_gps).
                     _hz_jan = 10.0
                     if dados_posicao_por_periodo:
-                        _diffs_hz = []
-                        for _pn_hz in list(dados_posicao_por_periodo.keys())[:3]:
-                            for _an_hz in list(dados_posicao_por_periodo[_pn_hz].values())[:2]:
-                                _tss_hz = _an_hz.get('ts_pos', [])
-                                if len(_tss_hz) > 10:
-                                    _diffs_hz += [
-                                        abs(_tss_hz[_i+1] - _tss_hz[_i])
-                                        for _i in range(1, min(20, len(_tss_hz)-1))
-                                        if abs(_tss_hz[_i+1] - _tss_hz[_i]) > 0
-                                    ]
-                        if _diffs_hz:
+                        _ests_hz = []
+                        for _pn_hz in list(dados_posicao_por_periodo.keys())[:5]:
+                            for _an_hz in list(dados_posicao_por_periodo[_pn_hz].values())[:5]:
+                                _tss_hz = _an_hz.get('ts_pos', []) or _an_hz.get('ts_gps', [])
+                                if len(_tss_hz) > 20:
+                                    _span_hz = float(_tss_hz[-1]) - float(_tss_hz[0])
+                                    if _span_hz > 1.0:
+                                        _ests_hz.append((len(_tss_hz) - 1) / _span_hz)
+                        if _ests_hz:
                             import statistics as _sthz
-                            _med_hz = _sthz.median(_diffs_hz)
-                            if _med_hz > 0:
-                                _hz_jan = round(1.0 / _med_hz, 1)
+                            _hz_j = _sthz.median(_ests_hz)
+                            if _hz_j > 0:
+                                _hz_jan = round(_hz_j, 1)
 
                     # ── Helper: AÇÕES (efforts) — espelha exatamente o cálculo WCS ─
                     def _calc_rolling_acoes(_atl):
@@ -14812,9 +14811,10 @@ Escolha um ou mais atletas para análise simultânea.
                                    if _dec_lbl[_s] in _ACC_KEY_TO_NUM}
                             )
                             st.caption(
-                                "Conta o **nº de ações (efforts)** de aceleração/desaceleração "
-                                "registradas pela Catapult cujo instante cai na janela — o pior "
-                                "minuto é a janela com mais ações nas bandas selecionadas."
+                                "Conta o **nº de ações** de acel/desacel na janela — dos "
+                                "*acceleration_efforts* da Catapult quando disponíveis, senão "
+                                "detectadas no **sinal de aceleração do sensor** (mesma fonte da "
+                                "aba Neuromuscular). O pior minuto é a janela com mais ações."
                             )
                             if not _sel_acc_bands:
                                 st.info("Selecione ao menos uma banda de aceleração ou desaceleração.")
@@ -14857,7 +14857,8 @@ Escolha um ou mais atletas para análise simultânea.
                         _ests = []
                         for _pnn in _periodos_list[:5]:
                             for _adat in list(_dppp.get(_pnn, {}).values())[:5]:
-                                _tss = _adat.get('ts_pos', [])
+                                # Nativo: ts_pos · GPS-only: ts_gps
+                                _tss = _adat.get('ts_pos', []) or _adat.get('ts_gps', [])
                                 if len(_tss) > 20:
                                     _span = float(_tss[-1]) - float(_tss[0])
                                     if _span > 1.0:
@@ -14964,6 +14965,7 @@ Escolha um ou mais atletas para análise simultânea.
                                         _gx2, _gy2 = gps_para_campo_coords(_lp, _lo, _wcs2_cfg)
                                         _xs = _gx2;  _ys = _gy2
                                         _vl = _da.get('vels_gps', [0.0] * len(_gx2))
+                                        _ts = _da.get('ts_gps', []) or _ts   # timestamps Unix reais (GPS)
                                         _nn = min(len(_xs), len(_ys))
                                     except Exception:
                                         _nn = 0
@@ -15038,20 +15040,39 @@ Escolha um ou mais atletas para análise simultânea.
                                         if 0 <= _idx < len(_sv):
                                             _sv[_idx] += 1.0
                             elif _faixas_a:
-                                # Fallback (API sem efforts): deriva AÇÕES discretas do
-                                # sinal de aceleração — entradas sustentadas na zona por
-                                # ≥ min_dur_s, contadas UMA vez (não por amostra).
-                                # Sem efforts da API, a aceleração nativa é ausente/ruim;
-                                # se houver sinal de velocidade, derivamos a aceleração
-                                # (dv/dt) dela — fonte confiável para contar ações.
-                                _wac_fb = _wac
-                                if any(abs(_v) > 0.1 for _v in _wv):
-                                    _wac_fb = acc_series_from_vel(_wv, _wts, _Hz)
-                                _idxs_acc = detectar_acoes_acc_idx(
-                                    _wac_fb, _sel_acc_bands, freq_hz=_Hz)
-                                for _ix in _idxs_acc:
-                                    if 0 <= _ix < len(_sv):
-                                        _sv[_ix] += 1.0
+                                # Fallback (API sem efforts): detecta AÇÕES no SINAL DE
+                                # ACELERAÇÃO do sensor (nativo 'a', 10 Hz) — mesma fonte da
+                                # aba Neuromuscular/Janelas — e mapeia proporcionalmente para
+                                # a timeline de posição do WCS. Nunca zera por falta de 'acc'.
+                                _sp_w = (combinar_periodos_continuo(
+                                            dados_sensor_por_atleta_por_periodo, _wa)
+                                         if len(_wcs2_periodos) > 1 else
+                                         dados_sensor_por_atleta_por_periodo
+                                            .get(_wcs2_periodos[0], {}).get(_wa, [])) \
+                                        if _wcs2_periodos else []
+                                _acc_w = [float(_p.get('a') or 0.0) for _p in _sp_w]
+                                if _acc_w and not any(abs(_a) > 0.05 for _a in _acc_w):
+                                    _vw = [float(_p.get('v') or 0.0) * 3.6 for _p in _sp_w]
+                                    _tw = [float(_p.get('ts') or 0.0) for _p in _sp_w]
+                                    _acc_w = acc_series_from_vel(_vw, _tw, _SENSOR_HZ)
+                                if _acc_w:
+                                    _idxs_acc = detectar_acoes_acc_idx(
+                                        _acc_w, _sel_acc_bands, freq_hz=_SENSOR_HZ)
+                                    _Ls, _Lp = len(_acc_w), len(_sv)
+                                    for _ix in _idxs_acc:
+                                        _pi = int(_ix / _Ls * _Lp) if _Ls > 0 else 0
+                                        if 0 <= _pi < _Lp:
+                                            _sv[_pi] += 1.0
+                                else:
+                                    # Sem sensor (raro): mantém derivação posicional (dv/dt).
+                                    _wac_fb = _wac
+                                    if any(abs(_v) > 0.1 for _v in _wv):
+                                        _wac_fb = acc_series_from_vel(_wv, _wts, _Hz)
+                                    _idxs_acc = detectar_acoes_acc_idx(
+                                        _wac_fb, _sel_acc_bands, freq_hz=_Hz)
+                                    for _ix in _idxs_acc:
+                                        if 0 <= _ix < len(_sv):
+                                            _sv[_ix] += 1.0
                         elif _m == "Dist. >14 km/h (m)":
                             _sv = [v / (3.6 * _Hz) if v > 14 else 0.0 for v in _wv]
                         elif "Alta Intensidade" in _m:
