@@ -1,0 +1,28 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instala dependências de teste
+        run: pip install numpy pandas pytest
+
+      - name: Testes do motor de métricas e validação
+        run: python -m pytest tests/ -q
+
+      - name: Smoke check de sintaxe do app
+        run: |
+          python -m py_compile futebol-eventos.py
+          python -m py_compile metrics.py
+          python -m py_compile validation.py

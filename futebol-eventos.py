@@ -25,6 +25,12 @@ st.set_page_config(page_title="Futebol Eventos - Catapult", layout="wide")
 _CAMPO_COMP_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "_campo_component")
 _campo_component = st.components.v1.declare_component("campo_interativo_v1", path=_CAMPO_COMP_DIR)
 
+# ── P1/P3: motor único de métricas + validação de concordância ──────────────
+# Fonte canônica de cálculo (funções puras, cobertas por tests/): todas as
+# abas delegam para cá — o mesmo número em qualquer tela.
+import metrics as _mtr          # noqa: E402
+import validation as _valmod    # noqa: E402
+
 SERVERS = {
     "Américas (US)": "https://connect-us.catapultsports.com/api/v6",
     "Europa/Oriente Médio/África (EU)": "https://connect-eu.catapultsports.com/api/v6",
@@ -793,36 +799,10 @@ def detectar_eventos_acc(acc_arr, limiar, min_dur_s=0.6, acima=True, freq_hz=10)
 
 
 def acc_series_from_vel(vel_kmh, ts_list, freq_hz=10.0):
-    """
-    Deriva aceleração (m/s²) a partir de uma série de velocidade (km/h) +
-    timestamps — idêntico ao fallback dv/dt do carregamento (suaviza com média
-    móvel de 3 e satura em ±10 m/s²). Usado para contar ações de acel/desacel
-    quando o dispositivo não tem aceleração nativa e positions['acc'] está vazio.
-    """
-    n = len(vel_kmh)
-    if n < 2:
-        return [0.0] * n
-    import statistics as _stv
-    _vms = [float(v) / 3.6 for v in vel_kmh]   # km/h → m/s
-    _dts = []
-    for _i in range(1, min(len(ts_list), n)):
-        _d = ts_list[_i] - ts_list[_i - 1]
-        _dts.append(_d if (_d and 0 < _d < 2) else None)
-    _valid = [d for d in _dts if d]
-    _dt_med = (_stv.median(_valid) if _valid
-               else (1.0 / freq_hz if freq_hz else 0.1))
-    _acc = [0.0] * n
-    for _i in range(1, n):
-        _dt = (_dts[_i - 1] if (_i - 1 < len(_dts) and _dts[_i - 1]) else _dt_med)
-        if _dt and _dt > 0:
-            _acc[_i] = (_vms[_i] - _vms[_i - 1]) / _dt
-    _sm = []
-    for _i in range(n):
-        _lo = max(0, _i - 1)
-        _hi = min(n, _i + 2)
-        _mv = sum(_acc[_lo:_hi]) / (_hi - _lo)
-        _sm.append(max(-10.0, min(10.0, _mv)))
-    return _sm
+    """Deriva aceleração (m/s²) da velocidade (km/h) + timestamps.
+
+    (P1) Delegado ao motor único: metrics.derive_acc_from_vel."""
+    return _mtr.derive_acc_from_vel(vel_kmh, ts_list, freq_hz)
 
 
 def detectar_acoes_acc_idx(acc_arr, sel_acc_bands, min_dur_s=None, freq_hz=10):
@@ -836,56 +816,11 @@ def detectar_acoes_acc_idx(acc_arr, sel_acc_bands, min_dur_s=None, freq_hz=10):
     Retorna a lista de índices (frame de início de cada ação) — equivalente ao
     start_time dos efforts da Catapult, para ser somado na janela rolante.
     """
-    if acc_arr is None or len(acc_arr) == 0 or not sel_acc_bands:
-        return []
+    # (P1) Delegado ao motor único: metrics.detect_actions.
     if min_dur_s is None:
         min_dur_s = get_min_dur_s()
-    min_frames = max(1, int(round(min_dur_s * freq_hz)))
-
-    faixas_pos = [(float(b.get('min', 0)), float(b.get('max', 0)))
-                  for b in sel_acc_bands if float(b.get('min', 0)) >= 0]
-    faixas_neg = [(float(b.get('min', 0)), float(b.get('max', 0)))
-                  for b in sel_acc_bands if float(b.get('max', 0)) <= 0]
-
-    a = np.asarray(acc_arr, dtype=float)
-    n = len(a)
-    starts = []
-
-    def _scan(thr, positivo, faixas):
-        if not faixas:
-            return
-        _top_hi = max(hi for _, hi in faixas)   # banda extrema (inclusiva no topo)
-        run = 0
-        start_i = -1
-        peak = 0.0
-        counted = False
-        for i in range(n):
-            v = a[i]
-            cond = (v >= thr) if positivo else (v <= -thr)
-            if cond:
-                if run == 0:
-                    start_i = i
-                    peak = v
-                run += 1
-                if (v > peak) if positivo else (v < peak):
-                    peak = v
-                if run >= min_frames and not counted:
-                    _ok = any(lo <= peak < hi for lo, hi in faixas)
-                    if not _ok and positivo and peak >= _top_hi:
-                        _ok = True   # satura no topo (ex.: 10 m/s²)
-                    if _ok:
-                        starts.append(start_i)
-                    counted = True
-            else:
-                run = 0
-                counted = False
-                peak = 0.0
-
-    if faixas_pos:
-        _scan(min(lo for lo, _ in faixas_pos), True, faixas_pos)
-    if faixas_neg:
-        _scan(min(abs(hi) for _, hi in faixas_neg), False, faixas_neg)
-    return sorted(starts)
+    return _mtr.detect_actions(acc_arr, sel_acc_bands,
+                               min_dur_s=min_dur_s, hz=freq_hz)
 
 
 def get_min_dur_s():
@@ -4919,35 +4854,18 @@ def _dist_por_banda_vel(sensor_points, n_bandas=6):
         if idx == len(ordem) - 1:
             hi = 1e9            # última banda: sem teto (captura sprints altos)
         faixas.append((lo, hi))
-    dists = [0.0] * n_bandas
-    prev = None
-    for p in sensor_points:
-        v = p.get('v')
-        if v is None:
-            continue
-        v_ms = float(v)
-        v_kmh = v_ms * 3.6
-        if prev is not None:
-            seg = ((prev + v_ms) / 2.0) * 0.1     # integração retangular a 10 Hz
-            for i, (lo, hi) in enumerate(faixas):
-                if lo <= v_kmh < hi:
-                    dists[i] += seg
-                    break
-        prev = v_ms
-    return dists
+    # (P1) Delegado ao motor único: metrics.dist_by_velocity_bands.
+    vel_kmh = [float(p['v']) * 3.6 for p in sensor_points
+               if p.get('v') is not None]
+    d = _mtr.dist_by_velocity_bands(vel_kmh, faixas, hz=_mtr.SENSOR_HZ)
+    return (d + [0.0] * n_bandas)[:n_bandas]
 
 
 def _contar_efforts_acc_por_caixa(acc_efforts) -> dict:
-    """Conta acceleration_efforts por caixa Gen2 (campo 'band', 1..8)."""
-    cont = {b: 0 for b in (1, 2, 3, 6, 7, 8)}
-    for ef in (acc_efforts or []):
-        try:
-            b = int(float(ef.get('band')))
-        except (TypeError, ValueError):
-            continue
-        if b in cont:
-            cont[b] += 1
-    return cont
+    """Conta acceleration_efforts por caixa Gen2 (campo 'band', 1..8).
+
+    (P1) Delegado ao motor único: metrics.count_efforts_by_box."""
+    return _mtr.count_efforts_by_box(acc_efforts)
 
 
 def render_export_artigo(resultados_por_periodo, dados_sensor_por_atleta_por_periodo,
@@ -5068,6 +4986,95 @@ def render_export_artigo(resultados_por_periodo, dados_sensor_por_atleta_por_per
         _df.to_csv(index=False).encode('utf-8'),
         file_name=f"export_artigo_{_act_nome.replace(' ', '_')[:40] or 'sessao'}.csv",
         mime='text/csv')
+
+    # ── P3: Validação de concordância vs. export oficial (OpenField) ────────
+    st.divider()
+    with st.expander("🔬 Validação vs. export oficial (OpenField)", expanded=False):
+        st.caption(
+            "Carregue o **CSV oficial exportado do OpenField** (mesma atividade e "
+            "mesmos períodos da tabela acima) para medir a concordância do app: "
+            "viés, erro %, correlação e **Bland-Altman** por variável — o "
+            "instrumento do projeto de validação."
+        )
+        _up_val = st.file_uploader("CSV oficial (OpenField)", type=['csv'],
+                                   key="val_csv_up")
+        if _up_val is not None:
+            _df_off = None
+            try:
+                _df_off = pd.read_csv(_up_val)
+            except Exception as _e_v:
+                st.error(f"Não foi possível ler o CSV: {_e_v}")
+            if _df_off is not None:
+                _vars_num = [c for c in _EXPORT_ARTIGO_COLS
+                             if c not in ('Name', 'Date')]
+                _faltam = [c for c in ['Name'] + _vars_num
+                           if c not in _df_off.columns]
+                if _faltam:
+                    st.error("CSV sem as colunas esperadas: "
+                             + ", ".join(_faltam[:6])
+                             + ("…" if len(_faltam) > 6 else ""))
+                else:
+                    _merged, _stats = _valmod.comparar_exportacoes(
+                        _df, _df_off, _vars_num)
+                    if _merged.empty:
+                        st.warning("Nenhum atleta em comum entre a tabela do app "
+                                   "e o CSV oficial (o pareamento usa o nome após "
+                                   "o último ' - ' na coluna Name).")
+                    else:
+                        st.success(f"✅ {len(_merged)} atleta(s) pareado(s) por nome.")
+                        st.markdown("##### 📋 Concordância por variável")
+                        st.dataframe(_stats, use_container_width=True,
+                                     hide_index=True)
+                        st.caption("**Viés** = média (app − oficial); **Viés %** "
+                                   "relativo à média oficial; **r** = correlação "
+                                   "de Pearson. Interpretação usual: |viés %| < 5% "
+                                   "e r > 0,90 indicam boa concordância.")
+
+                        _var_ba = st.selectbox("Variável para Bland-Altman",
+                                               _vars_num, key="val_var_ba")
+                        _ba = _valmod.bland_altman(
+                            _merged[f"{_var_ba} (app)"],
+                            _merged[f"{_var_ba} (oficial)"])
+                        if _ba is None:
+                            st.info("Mínimo de 3 pares válidos para o Bland-Altman "
+                                    "desta variável.")
+                        else:
+                            _fig_ba = go.Figure()
+                            _fig_ba.add_trace(go.Scatter(
+                                x=_ba['mean'], y=_ba['diff'],
+                                mode='markers',
+                                marker=dict(size=10, color='#42A5F5',
+                                            line=dict(color='white', width=1)),
+                                text=list(_merged['Atleta']),
+                                hovertemplate='%{text}<br>média %{x:.1f} · '
+                                              'dif %{y:.2f}<extra></extra>',
+                                name='atletas'))
+                            for _yv, _lab, _cor, _dsh in [
+                                    (_ba['bias'], f"viés {_ba['bias']:.2f}",
+                                     '#FFD740', 'solid'),
+                                    (_ba['loa_high'], f"+1,96 DP {_ba['loa_high']:.2f}",
+                                     '#EF5350', 'dash'),
+                                    (_ba['loa_low'], f"−1,96 DP {_ba['loa_low']:.2f}",
+                                     '#EF5350', 'dash')]:
+                                _fig_ba.add_hline(y=_yv, line_dash=_dsh,
+                                                  line_color=_cor,
+                                                  annotation_text=_lab,
+                                                  annotation_font_color=_cor)
+                            _fig_ba.update_layout(
+                                title=f"Bland-Altman — {_var_ba} (n={_ba['n']})",
+                                xaxis_title='Média dos métodos (app, oficial)',
+                                yaxis_title='Diferença (app − oficial)',
+                                height=430, paper_bgcolor='#0e1117',
+                                plot_bgcolor='#0e1117', font=dict(color='white'),
+                                xaxis=dict(gridcolor='#1f2937'),
+                                yaxis=dict(gridcolor='#1f2937'))
+                            st.plotly_chart(_fig_ba, use_container_width=True)
+
+                        st.download_button(
+                            "📥 Exportar comparação completa (CSV)",
+                            _merged.to_csv(index=False).encode('utf-8'),
+                            "validacao_app_vs_oficial.csv", mime='text/csv',
+                            key="dl_val_csv")
 
 
 def combinar_periodos_continuo(dados_sensor_por_atleta_por_periodo: dict, atleta: str) -> list:
@@ -11048,23 +11055,17 @@ Escolha um ou mais atletas para análise simultânea.
                         if not sel_acc_bands:
                             st.info("Selecione ao menos uma banda de aceleração ou desaceleração.")
 
-                    # Detecta Hz uma vez (nº de amostras ÷ duração — robusto a ts
-                    # arredondados; nativo usa ts_pos, GPS-only usa ts_gps).
+                    # Detecta Hz uma vez — (P1) canônico: metrics.estimate_hz
+                    # (nativo usa ts_pos, GPS-only usa ts_gps).
                     _hz_jan = 10.0
                     if dados_posicao_por_periodo:
-                        _ests_hz = []
+                        _series_hz = []
                         for _pn_hz in list(dados_posicao_por_periodo.keys())[:5]:
                             for _an_hz in list(dados_posicao_por_periodo[_pn_hz].values())[:5]:
                                 _tss_hz = _an_hz.get('ts_pos', []) or _an_hz.get('ts_gps', [])
                                 if len(_tss_hz) > 20:
-                                    _span_hz = float(_tss_hz[-1]) - float(_tss_hz[0])
-                                    if _span_hz > 1.0:
-                                        _ests_hz.append((len(_tss_hz) - 1) / _span_hz)
-                        if _ests_hz:
-                            import statistics as _sthz
-                            _hz_j = _sthz.median(_ests_hz)
-                            if _hz_j > 0:
-                                _hz_jan = round(_hz_j, 1)
+                                    _series_hz.append(_tss_hz)
+                        _hz_jan = _mtr.estimate_hz(_series_hz, default=10.0)
 
                     # ── Helper: AÇÕES (efforts) — espelha exatamente o cálculo WCS ─
                     def _calc_rolling_acoes(_atl):
@@ -11141,12 +11142,8 @@ Escolha um ou mais atletas para análise simultânea.
                                 if 0 <= _ix < _nsp:
                                     _sv[_ix] += 1.0
 
-                        # Soma rolante de N amostras (passo 1) → série de contagem
-                        _csum = sum(_sv[:_n])
-                        _roll = [_csum]
-                        for _i in range(1, len(_sv) - _n + 1):
-                            _csum += _sv[_i + _n - 1] - _sv[_i - 1]
-                            _roll.append(_csum)
+                        # Soma rolante — (P1) canônico: metrics.rolling_sum
+                        _roll = _mtr.rolling_sum(_sv, _n)
                         if not _roll:
                             return [], []
 
@@ -11195,18 +11192,9 @@ Escolha um ou mais atletas para análise simultânea.
                         if not _faixas_v:
                             return [], []
 
-                        def _in_vband(_vv):
-                            for _lo, _hi in _faixas_v:
-                                if _lo <= _vv < _hi:
-                                    return True
-                            return False
-
-                        _sv = [(v / (3.6 * _Hz)) if _in_vband(v) else 0.0 for v in _wv]
-                        _csum = sum(_sv[:_n])
-                        _roll = [_csum]
-                        for _i in range(1, len(_sv) - _n + 1):
-                            _csum += _sv[_i + _n - 1] - _sv[_i - 1]
-                            _roll.append(_csum)
+                        # (P1) canônico: metrics.per_sample_distance_in_bands + rolling_sum
+                        _sv = _mtr.per_sample_distance_in_bands(_wv, _faixas_v, _Hz)
+                        _roll = _mtr.rolling_sum(_sv, _n)
                         if not _roll:
                             return [], []
                         _stepd = max(1, int(round(_Hz)))
@@ -14854,21 +14842,15 @@ Escolha um ou mais atletas para análise simultânea.
                         quando os timestamps vêm arredondados para segundos inteiros mas há
                         vários pontos por segundo — caso em que a mediana das diferenças daria
                         1 Hz erroneamente e a integração de distância superestimaria ~Nx."""
-                        _ests = []
+                        # (P1) Delegado ao motor único: metrics.estimate_hz.
+                        _series = []
                         for _pnn in _periodos_list[:5]:
                             for _adat in list(_dppp.get(_pnn, {}).values())[:5]:
                                 # Nativo: ts_pos · GPS-only: ts_gps
                                 _tss = _adat.get('ts_pos', []) or _adat.get('ts_gps', [])
                                 if len(_tss) > 20:
-                                    _span = float(_tss[-1]) - float(_tss[0])
-                                    if _span > 1.0:
-                                        _ests.append((len(_tss) - 1) / _span)
-                        if _ests:
-                            import statistics as _st
-                            _hz = _st.median(_ests)
-                            if _hz > 0:
-                                return round(_hz, 1)
-                        return 10.0  # fallback conservador
+                                    _series.append(_tss)
+                        return _mtr.estimate_hz(_series, default=10.0)
 
                     _wcs2_periodos_tmp = [
                         k for k in dados_posicao_por_periodo
@@ -14937,12 +14919,9 @@ Escolha um ou mais atletas para análise simultânea.
                                         _bvW = _cW
                             return _bvW
                         else:
-                            _cs = sum(_sv[:_n]); _bv = _cs
-                            for _i in range(1, len(_sv) - _n + 1):
-                                _cs += _sv[_i + _n - 1] - _sv[_i - 1]
-                                if _cs > _bv:
-                                    _bv = _cs
-                            return _bv
+                            # (P1) canônico: metrics.rolling_sum
+                            _rw = _mtr.rolling_sum(_sv, _n)
+                            return max(_rw) if _rw else 0.0
 
                     for _wa in _wcs2_athletes:
                         _wx, _wy, _wv, _wac, _wts, _wper = [], [], [], [], [], []
@@ -14994,12 +14973,8 @@ Escolha um ou mais atletas para análise simultânea.
                             # Distância (m) acumulada apenas nas bandas de velocidade marcadas.
                             _faixas_v = [(float(b.get('min', 0)), float(b.get('max', 9999)))
                                          for b in _sel_vel_bands]
-                            def _in_vband(_vv, _ff=_faixas_v):
-                                for _lo, _hi in _ff:
-                                    if _lo <= _vv < _hi:
-                                        return True
-                                return False
-                            _sv = ([v / (3.6 * _Hz) if _in_vband(v) else 0.0 for v in _wv]
+                            # (P1) canônico: metrics.per_sample_distance_in_bands
+                            _sv = (_mtr.per_sample_distance_in_bands(_wv, _faixas_v, _Hz)
                                    if _faixas_v else [0.0] * len(_wv))
                         elif _m == "💥 Ações Acel/Desacel (efforts)":
                             # Nº de AÇÕES (efforts da Catapult) de aceleração/desaceleração
@@ -15127,14 +15102,15 @@ Escolha um ou mais atletas para análise simultânea.
                                         _bsi3 = _bei3 - _wcs2_n
                             _best_val2, _best_si2, _best_ei2 = _bv3, _bsi3, _bei3
                         else:
-                            _csum = sum(_sv[:_wcs2_n])
-                            _best_val2, _best_si2, _best_ei2 = _csum, 0, _wcs2_n
-                            for _i3 in range(1, len(_sv) - _wcs2_n + 1):
-                                _csum += _sv[_i3 + _wcs2_n - 1] - _sv[_i3 - 1]
-                                if _csum > _best_val2:
-                                    _best_val2 = _csum
-                                    _best_si2  = _i3
-                                    _best_ei2  = _i3 + _wcs2_n
+                            # (P1) canônico: metrics.rolling_sum + argmax
+                            _rw2 = _mtr.rolling_sum(_sv, _wcs2_n)
+                            if _rw2:
+                                _bi2 = int(np.argmax(_rw2))
+                                _best_val2 = _rw2[_bi2]
+                                _best_si2  = _bi2
+                                _best_ei2  = _bi2 + _wcs2_n
+                            else:
+                                _best_val2, _best_si2, _best_ei2 = 0.0, 0, _wcs2_n
 
                         # Timestamps
                         _ts0 = _wts[_best_si2] if _best_si2 < len(_wts) else 0
@@ -15171,9 +15147,8 @@ Escolha um ou mais atletas para análise simultânea.
                                 if _iRL >= _wcs2_n - 1:
                                     _roll_full.append(_sv[_dqTL[0]])
                         else:
-                            _roll_full = list(np.convolve(
-                                np.array(_sv), np.ones(_wcs2_n), 'valid'
-                            ))
+                            # (P1) canônico: metrics.rolling_sum
+                            _roll_full = _mtr.rolling_sum(_sv, _wcs2_n)
 
                         # ── Densidade de Pico (janelas ≥ 90% do WCS) ───────────
                         _density_90 = (
