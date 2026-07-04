@@ -314,6 +314,141 @@ def monotonia_strain(daily_loads):
     return mono, float(arr.sum()) * mono
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# Validação vs. OpenField — PlayerLoad oficial, ações por caixa e calibração
+# ══════════════════════════════════════════════════════════════════════════
+
+def playerload_total(pl_series):
+    """PlayerLoad total a partir do parâmetro 'pl' do sensor (mesma fonte do
+    OpenField). Detecta série ACUMULADA (≥98% não-decrescente) → último −
+    primeiro; caso contrário soma os incrementos positivos. 0.0 sem dados."""
+    vals = []
+    for v in (pl_series if pl_series is not None else []):
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(fv):
+            vals.append(fv)
+    arr = np.asarray(vals, dtype=float)
+    if arr.size < 10:
+        return 0.0
+    difs = np.diff(arr)
+    if arr[-1] > arr[0] and float((difs >= -1e-6).mean()) > 0.98:
+        return float(arr[-1] - arr[0])          # acumulada
+    return float(np.clip(arr, 0.0, None).sum())  # incremental
+
+
+def count_actions_by_box(acc_arr, boxes, min_dur_s: float = 0.6, hz: float = 10.0):
+    """Conta AÇÕES sustentadas no sinal de aceleração e classifica cada uma
+    pela caixa Gen2 cujo intervalo [lo, hi) contém o PICO da ação (caixa
+    extrema aberta no topo/fundo). `boxes` = {nº_caixa: (lo, hi)} misturando
+    aceleração (lo ≥ 0) e desaceleração (hi ≤ 0).
+
+    Fallback do export quando a conta não retorna acceleration_efforts.
+    Retorna {nº_caixa: contagem}."""
+    out = {b: 0 for b in (boxes or {})}
+    if acc_arr is None or len(acc_arr) == 0 or not boxes:
+        return out
+    min_frames = max(1, int(round(float(min_dur_s) * float(hz))))
+    a = np.asarray(acc_arr, dtype=float)
+    n = len(a)
+
+    def _scan(pos):
+        sel = {b: (float(lo), float(hi)) for b, (lo, hi) in boxes.items()
+               if (lo >= 0 if pos else hi <= 0)}
+        if not sel:
+            return
+        if pos:
+            thr = min(lo for lo, _ in sel.values())
+            ext = max(sel, key=lambda b: sel[b][1])
+        else:
+            thr = min(abs(hi) for _, hi in sel.values())
+            ext = min(sel, key=lambda b: sel[b][0])
+
+        def _fechar(run, peak):
+            if run < min_frames:
+                return
+            box = None
+            for b, (lo, hi) in sel.items():
+                if lo <= peak < hi:
+                    box = b
+                    break
+            if box is None:
+                lo_e, hi_e = sel[ext]
+                if (pos and peak >= hi_e) or ((not pos) and peak < lo_e):
+                    box = ext
+            if box is not None:
+                out[box] += 1
+
+        run = 0
+        peak = 0.0
+        for i in range(n):
+            v = a[i]
+            if (v >= thr) if pos else (v <= -thr):
+                if run == 0:
+                    peak = v
+                run += 1
+                if (v > peak) if pos else (v < peak):
+                    peak = v
+            else:
+                _fechar(run, peak)
+                run = 0
+                peak = 0.0
+        _fechar(run, peak)
+
+    _scan(True)
+    _scan(False)
+    return out
+
+
+def calibrate_velocity_cutoffs(sessions, hz: float = 10.0, n_bands: int = 6,
+                               vmax_kmh: float = 45.0):
+    """Calibra os cortes das bandas de velocidade para REPRODUZIR o export
+    oficial do OpenField.
+
+    `sessions` = lista de (serie_vel_kmh, dist_bandas_oficiais[n_bands]) por
+    atleta. Para cada corte k, resolve por bisseção o limiar c tal que a
+    distância agregada acima de c (integrada do sinal) iguale a distância
+    oficial acumulada nas bandas > k. Retorna n_bands-1 cortes (km/h),
+    monotônicos."""
+    svs, csums, targets_of = [], [], []
+    for vel, bands in (sessions or []):
+        v = np.asarray([float(x) for x in vel if x is not None], dtype=float)
+        v = v[np.isfinite(v)]
+        if v.size < 10:
+            continue
+        v.sort()
+        svs.append(v)
+        csums.append(np.concatenate([[0.0], np.cumsum(v)]))
+        targets_of.append([float(x or 0) for x in bands])
+    if not svs:
+        return []
+
+    def _above(c):
+        tot = 0.0
+        for s, cs in zip(svs, csums):
+            i = int(np.searchsorted(s, c, side='left'))
+            tot += float(cs[-1] - cs[i]) / (3.6 * hz)
+        return tot
+
+    cuts = []
+    for k in range(1, n_bands):
+        target = sum(sum(b[k:]) for b in targets_of)
+        lo, hi = 0.0, float(vmax_kmh)
+        for _ in range(50):
+            mid = (lo + hi) / 2.0
+            if _above(mid) > target:
+                lo = mid
+            else:
+                hi = mid
+        cuts.append(round((lo + hi) / 2.0, 2))
+    for i in range(1, len(cuts)):
+        if cuts[i] <= cuts[i - 1]:
+            cuts[i] = round(cuts[i - 1] + 0.1, 2)
+    return cuts
+
+
 def classificar_acwr(acwr):
     """Zona de risco do ACWR (Gabbett, 2016): <0,8 subcarga · 0,8–1,3 ideal ·
     1,3–1,5 atenção · >1,5 alto risco. '—' quando indisponível."""

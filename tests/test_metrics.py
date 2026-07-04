@@ -236,3 +236,74 @@ class TestMonitoramento:
         assert m.classificar_acwr(1.0) == 'ideal'
         assert m.classificar_acwr(1.4) == 'atenção'
         assert m.classificar_acwr(1.8) == 'alto risco'
+
+
+# ── validação vs OpenField: PL oficial, ações por caixa, calibração ─────────
+BOXES_GEN2 = {6: (2, 3), 7: (3, 4), 8: (4, 10),
+              3: (-3, -2), 2: (-4, -3), 1: (-10, -4)}
+
+
+class TestPlayerLoadTotal:
+    def test_serie_incremental_soma(self):
+        assert m.playerload_total([0.01] * 1000) == pytest.approx(10.0)
+
+    def test_serie_acumulada_ultimo_menos_primeiro(self):
+        serie = np.linspace(100.0, 600.0, 2000)
+        assert m.playerload_total(serie) == pytest.approx(500.0)
+
+    def test_incrementos_negativos_ignorados(self):
+        assert m.playerload_total([0.02, -0.5, 0.03] * 100) == pytest.approx(5.0)
+
+    def test_curta_ou_vazia_zero(self):
+        assert m.playerload_total([]) == 0.0
+        assert m.playerload_total([0.1] * 5) == 0.0
+
+
+class TestCountActionsByBox:
+    def _sinal(self, picos, dur=10, n=5000, gap=300):
+        acc = [0.0] * n
+        for j, pk in enumerate(picos):
+            ini = 200 + j * gap
+            for k in range(dur):
+                acc[ini + k] = pk
+        return acc
+
+    def test_classifica_pelo_pico(self):
+        acc = self._sinal([2.5, 3.5, 5.0, -2.5, -5.0])
+        c = m.count_actions_by_box(acc, BOXES_GEN2, min_dur_s=0.6, hz=10)
+        assert c[6] == 1 and c[7] == 1 and c[8] == 1
+        assert c[3] == 1 and c[1] == 1 and c[2] == 0
+
+    def test_pico_acima_do_teto_satura_na_extrema(self):
+        acc = self._sinal([12.0])
+        c = m.count_actions_by_box(acc, BOXES_GEN2, min_dur_s=0.6, hz=10)
+        assert c[8] == 1
+
+    def test_curta_nao_conta(self):
+        acc = self._sinal([3.5], dur=3)          # 0.3 s < 0.6 s
+        c = m.count_actions_by_box(acc, BOXES_GEN2, min_dur_s=0.6, hz=10)
+        assert sum(c.values()) == 0
+
+    def test_acao_no_fim_da_serie_fecha(self):
+        acc = [0.0] * 100 + [3.5] * 10           # termina dentro da ação
+        c = m.count_actions_by_box(acc, BOXES_GEN2, min_dur_s=0.6, hz=10)
+        assert c[7] == 1
+
+
+class TestCalibrateCutoffs:
+    def test_recupera_cortes_conhecidos(self):
+        rng = np.random.default_rng(3)
+        cortes_reais = [6.0, 11.0, 15.0, 20.0, 25.0]
+        faixas = [(0, 6), (6, 11), (11, 15), (15, 20), (20, 25), (25, 1e9)]
+        sessions = []
+        for _ in range(4):
+            vel = rng.uniform(0, 32, 40000).tolist()
+            of = m.dist_by_velocity_bands(vel, faixas, 10.0)
+            sessions.append((vel, of))
+        cuts = m.calibrate_velocity_cutoffs(sessions, hz=10.0)
+        assert len(cuts) == 5
+        for c, real in zip(cuts, cortes_reais):
+            assert abs(c - real) < 0.3, f"corte {c} != {real}"
+
+    def test_vazio(self):
+        assert m.calibrate_velocity_cutoffs([]) == []

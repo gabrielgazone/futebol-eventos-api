@@ -3195,6 +3195,7 @@ def calcular_metricas(sensor_points, athlete_name, min_dur_s=None, zones=None):
     dist_sprint = 0
     dist_z4 = 0          # Zone intermediária entre HSR e sprint
     player_load = 0
+    pl_vals = []          # parâmetro 'pl' do sensor (fonte oficial do PlayerLoad)
     velocidades = []
     fcs = []
     acc_list = []
@@ -3250,10 +3251,15 @@ def calcular_metricas(sensor_points, athlete_name, min_dur_s=None, zones=None):
 
         if ponto.get('a') is not None:
             acc = float(ponto['a'])
-            player_load += acc ** 2
             acc_list.append(acc)
         else:
             acc_list.append(0.0)
+
+        if ponto.get('pl') is not None:
+            try:
+                pl_vals.append(float(ponto['pl']))
+            except (TypeError, ValueError):
+                pass
 
         if ponto.get('hr') is not None:
             hr = float(ponto['hr'])
@@ -3294,6 +3300,18 @@ def calcular_metricas(sensor_points, athlete_name, min_dur_s=None, zones=None):
                 _cluster_size = 1
                 _in_cluster   = False
 
+    # (Validação vs OpenField) PlayerLoad OFICIAL: usa o parâmetro 'pl' do
+    # sensor — mesma fonte do OpenField. O Σa² antigo superestimava 15–54×
+    # com viés NÃO constante (CV 25% entre atletas); fica só como último
+    # fallback quando a conta não envia 'pl'.
+    _pl_oficial = _mtr.playerload_total(pl_vals)
+    if _pl_oficial > 0:
+        player_load = _pl_oficial
+    else:
+        player_load = float(sum(_a * _a for _a in acc_list))
+        _diag_log('Métricas', f"{athlete_name}: sensor sem parâmetro 'pl' — "
+                              "PlayerLoad aproximado por Σa² (escala difere do OpenField)")
+
     duracao_min = len(sensor_points) * 0.1 / 60
     m_min = round(distancia_total / duracao_min, 1) if duracao_min > 0 else 0.0
 
@@ -3304,7 +3322,7 @@ def calcular_metricas(sensor_points, athlete_name, min_dur_s=None, zones=None):
         'Dist. 19-24 km/h (m)': round(dist_z4, 0),
         'Dist. > 19 km/h (m)': round(dist_hi, 0),
         'Dist. > 24 km/h (m)': round(dist_sprint, 0),
-        'PlayerLoad': round(player_load, 0),
+        'PlayerLoad': round(player_load, 1),
         'Velocidade Máx (km/h)': round(max(velocidades), 1) if velocidades else 0,
         'Velocidade Média (km/h)': round(np.mean(velocidades), 1) if velocidades else 0,
         'M/min': m_min,
@@ -5037,8 +5055,28 @@ def render_export_artigo(resultados_por_periodo, dados_sensor_por_atleta_por_per
                 _d6 = _dist_por_banda_vel(_sp)
                 for i in range(6):
                     bands[i] += _d6[i] if i < len(_d6) else 0.0
-            _cc = _contar_efforts_acc_por_caixa(
-                dados_efforts_acc_por_periodo.get(per, {}).get(atleta, []))
+            _effs_api = dados_efforts_acc_por_periodo.get(per, {}).get(atleta, [])
+            if _effs_api:
+                _cc = _contar_efforts_acc_por_caixa(_effs_api)
+            else:
+                # (Validação) Conta sem acceleration_efforts na API → detecta
+                # AÇÕES no sinal do sensor e classifica pelo PICO na caixa Gen2
+                # (antes o export saía zerado nessas contas).
+                _cc = {}
+                if _sp:
+                    _acc_e = [float(_p.get('a') or 0.0) for _p in _sp]
+                    if not any(abs(_a) > 0.05 for _a in _acc_e):
+                        _vel_e = [float(_p.get('v') or 0.0) * 3.6 for _p in _sp]
+                        _ts_e = [float(_p.get('ts') or 0.0) for _p in _sp]
+                        _acc_e = acc_series_from_vel(_vel_e, _ts_e, 10.0)
+                    _boxes_cfg = {
+                        _ACC_KEY_TO_NUM[_k]: (float(_v.get('min')), float(_v.get('max')))
+                        for _k, _v in _bandas_acc_ativas().items()
+                        if _k in _ACC_KEY_TO_NUM}
+                    _cc = _mtr.count_actions_by_box(
+                        _acc_e, _boxes_cfg, min_dur_s=get_min_dur_s(), hz=10.0)
+                    _diag_log('Export', f"{atleta} ({per}): efforts ausentes na API — "
+                                        "ações detectadas no sinal do sensor")
             for b in cx:
                 cx[b] += _cc.get(b, 0)
         _mmin = (tot_d / tot_m) if tot_m > 0 else 0.0
@@ -5114,8 +5152,21 @@ def render_export_artigo(resultados_por_periodo, dados_sensor_por_atleta_por_per
                              + ", ".join(_faltam[:6])
                              + ("…" if len(_faltam) > 6 else ""))
                 else:
+                    # CSV oficial multi-sessão → filtra pela atividade para o
+                    # pareamento não somar sessões diferentes do mesmo atleta.
+                    _acts_of = sorted({str(_n).rsplit(' - ', 1)[0]
+                                       for _n in _df_off['Name'].dropna()})
+                    _df_off_f = _df_off
+                    if len(_acts_of) > 1:
+                        _act_pick = st.selectbox(
+                            "Atividade do CSV oficial (parear com a tabela acima)",
+                            ["(todas — soma por atleta)"] + _acts_of,
+                            key="val_act_pick")
+                        if _act_pick != "(todas — soma por atleta)":
+                            _df_off_f = _df_off[_df_off['Name'].astype(str)
+                                                .str.startswith(_act_pick)]
                     _merged, _stats = _valmod.comparar_exportacoes(
-                        _df, _df_off, _vars_num)
+                        _df, _df_off_f, _vars_num)
                     if _merged.empty:
                         st.warning("Nenhum atleta em comum entre a tabela do app "
                                    "e o CSV oficial (o pareamento usa o nome após "
@@ -5129,6 +5180,60 @@ def render_export_artigo(resultados_por_periodo, dados_sensor_por_atleta_por_per
                                    "relativo à média oficial; **r** = correlação "
                                    "de Pearson. Interpretação usual: |viés %| < 5% "
                                    "e r > 0,90 indicam boa concordância.")
+
+                        # ── 🎯 Calibração dos cortes de banda pelo CSV oficial ──
+                        st.markdown("###### 🎚️ Calibrar bandas de velocidade "
+                                    "pelo CSV oficial")
+                        st.caption("Resolve, a partir do **sinal bruto** desta "
+                                   "atividade, os cortes (km/h) que reproduzem as "
+                                   "distâncias por banda do OpenField — e aplica às "
+                                   "bandas da conta (todo o app passa a usá-los).")
+                        if st.button("Calcular cortes calibrados",
+                                     key="btn_calib_bands"):
+                            _sess_cal = []
+                            for _, _rw in _merged.iterrows():
+                                _atl_c = str(_rw['Atleta'])
+                                _vel_c = []
+                                for _per_c in _per_sel:
+                                    _sp_c = (dados_sensor_por_atleta_por_periodo
+                                             .get(_per_c, {}).get(_atl_c, []))
+                                    _vel_c += [float(_p.get('v') or 0.0) * 3.6
+                                               for _p in _sp_c]
+                                _of_b = [float(_rw.get(
+                                    f"Velocity Band {_i} Total Distance (m) "
+                                    f"(oficial)", 0) or 0) for _i in range(1, 7)]
+                                if len(_vel_c) > 3000 and sum(_of_b) > 500:
+                                    _sess_cal.append((_vel_c, _of_b))
+                            if len(_sess_cal) < 3:
+                                st.warning("Poucos atletas com sinal + dados "
+                                           "oficiais suficientes para calibrar "
+                                           "(mínimo 3).")
+                            else:
+                                st.session_state['_calib_cuts'] = \
+                                    _mtr.calibrate_velocity_cutoffs(_sess_cal)
+                                st.session_state['_calib_n'] = len(_sess_cal)
+                        _cuts_s = st.session_state.get('_calib_cuts')
+                        if _cuts_s:
+                            st.success(
+                                f"Cortes calibrados com "
+                                f"{st.session_state.get('_calib_n', '?')} atletas "
+                                "(km/h): **" +
+                                " | ".join(f"{_c:.1f}" for _c in _cuts_s) + "**")
+                            if st.button("✅ Aplicar às bandas da conta",
+                                         key="btn_calib_apply"):
+                                _edges = [0.0] + list(_cuts_s) + [45.0]
+                                _zones_new = [{
+                                    'name': _NOMES_BANDA_VEL_DEFAULT.get(
+                                        _i + 1, f'B{_i + 1}'),
+                                    'min_ms': _edges[_i] / 3.6,
+                                    'max_ms': _edges[_i + 1] / 3.6,
+                                    'color': _CORES_BANDA_VEL_DEFAULT.get(
+                                        _i + 1, '#888888'),
+                                } for _i in range(6)]
+                                st.session_state['velocity_zones_account'] = _zones_new
+                                st.session_state['velocity_zones_manual'] = True
+                                st.session_state['velocity_zones_source'] = 'manual'
+                                st.rerun()
 
                         _var_ba = st.selectbox("Variável para Bland-Altman",
                                                _vars_num, key="val_var_ba")
