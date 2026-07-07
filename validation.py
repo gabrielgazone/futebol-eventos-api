@@ -12,6 +12,9 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+# Versão do esquema (ver nota em metrics.SCHEMA_VERSION).
+SCHEMA_VERSION = 2
+
 # Regras de agregação quando um mesmo atleta tem várias linhas (multi-período):
 _MAX_COLS = {'Max Acceleration', 'Maximum Velocity (km/h)'}
 _MIN_COLS = {'Max Deceleration'}

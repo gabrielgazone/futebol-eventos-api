@@ -17,6 +17,13 @@ from __future__ import annotations
 
 import numpy as np
 
+# Versão do esquema deste módulo. O app confere este número no import e força
+# importlib.reload quando o Streamlit Cloud mantém em cache uma versão antiga
+# (sys.modules sobrevive ao hot-reload do script principal). Incrementar a
+# cada mudança na superfície pública; o teste de sincronia no CI garante que
+# o valor esperado no app acompanhe.
+SCHEMA_VERSION = 3
+
 # Frequência nominal do sensor Catapult (amostras/s).
 SENSOR_HZ = 10.0
 

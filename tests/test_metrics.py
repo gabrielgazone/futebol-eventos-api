@@ -307,3 +307,26 @@ class TestCalibrateCutoffs:
 
     def test_vazio(self):
         assert m.calibrate_velocity_cutoffs([]) == []
+
+
+class TestSchemaSync:
+    """Garante que o guard de reload do app acompanha os SCHEMA_VERSION dos
+    módulos locais — proteção contra o cache de módulos do Streamlit Cloud
+    (causa do AttributeError 'metrics has no attribute playerload_total')."""
+
+    def _const_do_app(self, nome):
+        import re
+        _app = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "futebol-eventos.py")
+        src = open(_app, encoding='utf-8').read()
+        m_ = re.search(rf"{nome}\s*=\s*(\d+)", src)
+        assert m_, f"constante {nome} não encontrada no app"
+        return int(m_.group(1))
+
+    def test_metrics_schema_sincronizado(self):
+        assert self._const_do_app('_METRICS_SCHEMA_ESPERADO') == m.SCHEMA_VERSION
+
+    def test_validation_schema_sincronizado(self):
+        import validation as val
+        assert (self._const_do_app('_VALIDATION_SCHEMA_ESPERADO')
+                == val.SCHEMA_VERSION)

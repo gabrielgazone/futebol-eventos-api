@@ -31,6 +31,22 @@ _campo_component = st.components.v1.declare_component("campo_interativo_v1", pat
 import metrics as _mtr          # noqa: E402
 import validation as _valmod    # noqa: E402
 
+# (Cloud) Após um deploy, o Streamlit Cloud reexecuta o script principal mas
+# pode manter os módulos locais ANTIGOS em cache no sys.modules — foi a causa
+# do AttributeError 'metrics has no attribute playerload_total'. Se a versão
+# do esquema não bater, força o reload; o teste de sincronia no CI garante
+# que estes números acompanham os SCHEMA_VERSION dos módulos.
+_METRICS_SCHEMA_ESPERADO = 3
+_VALIDATION_SCHEMA_ESPERADO = 2
+import importlib as _importlib  # noqa: E402
+if getattr(_mtr, 'SCHEMA_VERSION', 0) < _METRICS_SCHEMA_ESPERADO:
+    _mtr = _importlib.reload(_mtr)
+if getattr(_valmod, 'SCHEMA_VERSION', 0) < _VALIDATION_SCHEMA_ESPERADO:
+    _valmod = _importlib.reload(_valmod)
+if getattr(_mtr, 'SCHEMA_VERSION', 0) < _METRICS_SCHEMA_ESPERADO:
+    st.error("⚠️ O módulo `metrics.py` no servidor está desatualizado mesmo "
+             "após reload — reinicie o app (Manage app → Reboot).")
+
 
 # ── P4: selo de proveniência do dado ─────────────────────────────────────────
 # Toda métrica sensível mostra DE ONDE veio o número (o app escolhe a fonte
