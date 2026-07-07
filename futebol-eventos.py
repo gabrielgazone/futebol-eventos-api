@@ -8198,6 +8198,23 @@ Escolha um ou mais atletas para análise simultânea.
         for periodo_nome in periodos_selecionados:
             period_id = period_ids.get(periodo_nome)
 
+            # ── (Validação/Minutos) participantes oficiais do período ────────
+            # O OpenField só atribui o período aos atletas que participaram;
+            # dispositivos ligados no banco inflavam Minutos (+30%), m/min e a
+            # cauda do PlayerLoad. Carrega apenas quem está na lista oficial.
+            _part_ids = set()
+            if period_id:
+                try:
+                    _resp_part = api.get_athletes_in_period(period_id)
+                    _lst_part = (_resp_part if isinstance(_resp_part, list)
+                                 else (_resp_part or {}).get(
+                                     'data', (_resp_part or {}).get('items', [])))
+                    for _a_p in (_lst_part or []):
+                        if isinstance(_a_p, dict) and _a_p.get('id'):
+                            _part_ids.add(str(_a_p['id']))
+                except Exception:
+                    _part_ids = set()
+
             resultados = []
             dados_sensor_por_atleta = {}
             dados_efforts_vel = {}
@@ -8233,6 +8250,15 @@ Escolha um ou mais atletas para análise simultânea.
                     continue
                     
                 athlete_id = athlete_row['id'].values[0]
+
+                # (Validação/Minutos) atleta fora da lista oficial do período →
+                # não participou (dispositivo no banco); não carrega este período.
+                if _part_ids and str(athlete_id) not in _part_ids:
+                    _diag_log('Carga', f"{atleta_nome}: não participante do período "
+                                       f"'{periodo_nome}' — excluído (espelha o "
+                                       "Minutos do OpenField)")
+                    continue
+
                 athlete_posicao = athlete_row['posicao'].values[0] if 'posicao' in athlete_row.columns else ''
                 athlete_equipe = athlete_row['equipe'].values[0] if 'equipe' in athlete_row.columns else ''
 
