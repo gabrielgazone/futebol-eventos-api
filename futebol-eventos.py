@@ -596,6 +596,38 @@ def _excluir_venue(nome: str) -> None:
         pass
 
 
+# ── (Validação) bandas CALIBRADAS persistidas por organização ────────────────
+# A calibração contra o export oficial vivia só no session_state — calibrar
+# numa sessão e exportar em outra perdia os cortes. Agora persiste em disco
+# (escopo da conta) e recarrega automaticamente ao conectar.
+
+def _zones_calib_file() -> str:
+    _mk = str(st.session_state.get('_org_marker', '') or '').strip()
+    _base = _os.path.dirname(_os.path.abspath(__file__))
+    return _os.path.join(_base, f"zones_calibradas_{_mk or 'default'}.json")
+
+
+def _salvar_zonas_calibradas(zones: list) -> None:
+    try:
+        with open(_zones_calib_file(), 'w', encoding='utf-8') as f:
+            json.dump({'velocity_zones': zones,
+                       'saved_at': datetime.now().strftime('%Y-%m-%d %H:%M')},
+                      f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _carregar_zonas_calibradas():
+    """Retorna a lista de zonas calibradas salvas para esta conta, ou None."""
+    try:
+        with open(_zones_calib_file(), encoding='utf-8') as f:
+            _d = json.load(f)
+        _z = _d.get('velocity_zones')
+        return _z if isinstance(_z, list) and len(_z) >= 2 else None
+    except Exception:
+        return None
+
+
 class CatapultAPI:
     def __init__(self, base_url, token):
         self.base_url = base_url
@@ -5135,6 +5167,22 @@ def render_export_artigo(resultados_por_periodo, dados_sensor_por_atleta_por_per
     st.caption(f"{len(_df)} linha(s) · 21 colunas · distâncias por banda **integradas do "
                "sinal de velocidade**; esforços **contados dos efforts Gen2** da conta.")
 
+    # (Rastreabilidade/validação) cortes de banda ATIVOS neste export — confira
+    # aqui se as bandas calibradas estão em vigor antes de exportar.
+    try:
+        _bv_atv = _bandas_vel_ativas()
+        _cortes_txt = " | ".join(
+            _fmt_num_banda(_bv_atv[_k].get('min', 0))
+            for _k in sorted(_bv_atv.keys()))
+        _src_txt = {'manual': '🎚️ calibradas/manuais', 'api': '🛰️ API da conta',
+                    'efforts': '🟢 derivadas dos efforts',
+                    'default': '⚪ padrão'}.get(
+            st.session_state.get('velocity_zones_source', 'default'), '?')
+        st.caption(f"🎚️ **Cortes de banda usados** (início de B1..B6, km/h): "
+                   f"**{_cortes_txt}** · fonte: {_src_txt}")
+    except Exception:
+        pass
+
     st.download_button(
         "📥 Exportar CSV (formato Catapult)",
         _df.to_csv(index=False).encode('utf-8'),
@@ -5249,6 +5297,9 @@ def render_export_artigo(resultados_por_periodo, dados_sensor_por_atleta_por_per
                                 st.session_state['velocity_zones_account'] = _zones_new
                                 st.session_state['velocity_zones_manual'] = True
                                 st.session_state['velocity_zones_source'] = 'manual'
+                                # persiste em disco (escopo da organização):
+                                # sobrevive a novas sessões e recarrega ao conectar
+                                _salvar_zonas_calibradas(_zones_new)
                                 st.rerun()
 
                         _var_ba = st.selectbox("Variável para Bland-Altman",
@@ -7201,6 +7252,16 @@ Escolha um ou mais atletas para análise simultânea.
         st.header(t("language_header"))
         st.selectbox(t("language_select"), list(LANGUAGES.keys()), key="lang_selector")
 
+        # (Rastreabilidade) carimbo do build em execução — confirme aqui se o
+        # deploy mais recente já está ativo antes de exportar para validação.
+        try:
+            _build_ts = datetime.fromtimestamp(
+                _os.path.getmtime(_os.path.abspath(__file__)))
+            st.caption(f"🏗️ Build: **{_build_ts.strftime('%d/%m %H:%M')}** · "
+                       f"metrics v{getattr(_mtr, 'SCHEMA_VERSION', '?')}")
+        except Exception:
+            pass
+
         st.header("🔐 Token")
         # (P7) token mascarado (não fica visível na tela) + suporte a st.secrets
         _tok_secret = ''
@@ -7408,6 +7469,20 @@ Escolha um ou mais atletas para análise simultânea.
                         st.session_state['acceleration_zones_account'] = _az_api
                         st.session_state['acceleration_zones_source']  = 'api'
                         st.session_state['acceleration_zones_from_api'] = True
+                except Exception:
+                    pass
+
+                # ── (Validação) bandas CALIBRADAS da organização: prioridade
+                # máxima — sobrevivem a novas sessões e não são sobrescritas
+                # pela derivação por efforts nem pela API.
+                try:
+                    _zcal = _carregar_zonas_calibradas()
+                    if _zcal:
+                        st.session_state['velocity_zones_account'] = _zcal
+                        st.session_state['velocity_zones_manual'] = True
+                        st.session_state['velocity_zones_source'] = 'manual'
+                        st.success("🎚️ Bandas calibradas (validação) carregadas "
+                                   "do banco da organização.")
                 except Exception:
                     pass
 
@@ -8214,6 +8289,17 @@ Escolha um ou mais atletas para análise simultânea.
                             _part_ids.add(str(_a_p['id']))
                 except Exception:
                     _part_ids = set()
+                # Diagnóstico: quantos participantes a API declara p/ o período?
+                # Se == nº total de atletas, o endpoint não distingue banco de
+                # campo e o 'Minutos' NÃO baterá com o OpenField (limitação API).
+                if _part_ids:
+                    _diag_log('Carga', f"Período '{periodo_nome}': "
+                                       f"{len(_part_ids)} participantes oficiais "
+                                       "na API (filtro de Minutos ativo)")
+                else:
+                    _diag_log('Carga', f"Período '{periodo_nome}': API sem lista "
+                                       "de participantes — todos os atletas "
+                                       "carregados (Minutos pode divergir do OF)")
 
             resultados = []
             dados_sensor_por_atleta = {}
