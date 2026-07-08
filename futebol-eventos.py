@@ -6990,34 +6990,86 @@ button, input, select, textarea, label {
 }
 .main .block-container { animation: _fadeUp 0.35s ease-out; }
 
-/* ─ Tabs estilo pill ───────────────────────────────────────────── */
+/* ─ Tabs — navegação em 2 níveis (robusto a versões do Streamlit) ─ */
+/* Mira role="tab" (ARIA, estável) + data-baseweb (legado). Neutraliza  */
+/* o indicador/borda padrão do BaseWeb p/ não conflitar com o desenho.  */
+.stTabs [data-baseweb="tab-highlight"],
+.stTabs [data-baseweb="tab-border"] {
+    background: transparent !important; height: 0 !important;
+}
+
+/* NÍVEL 1 — barra principal: "segmented control" de vidro */
 .stTabs [data-baseweb="tab-list"] {
-    gap: 4px;
-    border-bottom: 1px solid rgba(255,255,255,0.07);
-    padding-bottom: 6px;
-    background: transparent;
+    gap: 5px; padding: 6px; margin-bottom: 8px;
+    border: 1px solid rgba(255,255,255,0.06); border-radius: 14px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.05) 0%,
+                rgba(255,255,255,0.015) 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05),
+                0 8px 24px rgba(0,0,0,0.30);
+    backdrop-filter: blur(8px);
     flex-wrap: wrap;
+    animation: _tabsIn 0.45s cubic-bezier(.2,.7,.3,1);
 }
-.stTabs [data-baseweb="tab"] {
-    border-radius: 20px !important;
-    padding: 5px 15px !important;
-    background: rgba(255,255,255,0.05) !important;
-    color: rgba(255,255,255,0.55) !important;
-    border: 1px solid rgba(255,255,255,0.08) !important;
-    font-size: 0.79rem !important;
-    font-weight: 500 !important;
-    transition: all 0.18s ease !important;
+@keyframes _tabsIn {
+    from { opacity: 0; transform: translateY(-5px); }
+    to   { opacity: 1; transform: translateY(0);    }
+}
+.stTabs button[role="tab"], .stTabs [data-baseweb="tab"] {
+    position: relative;
+    border-radius: 10px !important;
+    padding: 8px 17px !important;
+    background: transparent !important;
+    color: rgba(255,255,255,0.52) !important;
+    border: 1px solid transparent !important;
+    font-size: 0.82rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.2px !important;
     white-space: nowrap;
+    transition: color .2s, background .2s, box-shadow .25s, transform .12s !important;
 }
-.stTabs [data-baseweb="tab"]:hover {
-    background: rgba(46,134,193,0.15) !important;
-    color: rgba(255,255,255,0.88) !important;
+.stTabs button[role="tab"]:hover {
+    color: rgba(255,255,255,0.92) !important;
+    background: rgba(46,134,193,0.14) !important;
+    transform: translateY(-1px);
 }
-.stTabs [aria-selected="true"] {
-    background: linear-gradient(135deg, #1a5276 0%, #2471a3 100%) !important;
-    color: white !important;
-    border-color: rgba(46,134,193,0.45) !important;
-    box-shadow: 0 2px 10px rgba(36,113,163,0.38) !important;
+.stTabs button[role="tab"]:focus-visible {
+    outline: 2px solid rgba(93,173,226,0.7) !important; outline-offset: 2px;
+}
+.stTabs button[aria-selected="true"] {
+    color: #ffffff !important;
+    background: linear-gradient(135deg, #1a5276 0%, #2471a3 55%, #2e86c1 100%) !important;
+    border-color: rgba(93,173,226,0.45) !important;
+    box-shadow: 0 4px 18px rgba(36,113,163,0.45),
+                inset 0 1px 0 rgba(255,255,255,0.16) !important;
+}
+
+/* NÍVEL 2 — sub-abas: mais leves, hierarquia claramente secundária */
+.stTabs .stTabs [data-baseweb="tab-list"] {
+    gap: 3px; padding: 0; margin: 2px 0 12px 0;
+    border: none; border-radius: 0; background: transparent;
+    box-shadow: none; backdrop-filter: none;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    animation: none;
+}
+.stTabs .stTabs button[role="tab"] {
+    border-radius: 8px 8px 0 0 !important;
+    padding: 6px 14px !important;
+    font-size: 0.76rem !important;
+    font-weight: 500 !important;
+    color: rgba(255,255,255,0.45) !important;
+    border-bottom: 2px solid transparent !important;
+}
+.stTabs .stTabs button[role="tab"]:hover {
+    background: rgba(46,134,193,0.10) !important;
+    color: rgba(255,255,255,0.85) !important;
+    transform: none;
+}
+.stTabs .stTabs button[aria-selected="true"] {
+    color: #7cc4ef !important;
+    background: rgba(46,134,193,0.12) !important;
+    border-color: transparent !important;
+    border-bottom: 2px solid #2e86c1 !important;
+    box-shadow: none !important;
 }
 
 /* ─ Metric cards ───────────────────────────────────────────────── */
