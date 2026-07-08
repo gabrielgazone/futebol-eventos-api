@@ -8169,27 +8169,65 @@ Escolha um ou mais atletas para análise simultânea.
                         st.session_state.pop('velocity_zones_manual', None)
                         st.rerun()
 
-                # ── Diagnóstico da API ────────────────────────────────────────
+                # ── Diagnóstico da calibração automática ──────────────────────
                 st.divider()
                 st.caption(
-                    "ℹ️ O app tenta **buscar as bandas via API** (zonas da conta/equipe). "
-                    "Se o seu token não expuser os cortes, ele usa a **derivação pelos "
-                    "efforts**. Use o botão abaixo para inspecionar a resposta crua."
+                    "ℹ️ A Connect API v6 **não expõe a configuração dos cortes** "
+                    "(`/settings` só traz unidades). Por isso o app **recupera os "
+                    "cortes automaticamente** das distâncias por banda que o "
+                    "OpenField já calcula no **summary de cada atleta**. O teste "
+                    "abaixo mostra se a sua conta expõe esse dado."
                 )
                 _diag_api = st.session_state.get('api')
                 if _diag_api and st.button(
-                        "🔍 Diagnóstico da API (/settings)", key="btn_diag_settings"):
-                    try:
-                        _s = _diag_api.get_settings()
-                        st.write("**`GET /settings`** (preferências do usuário):")
-                        st.json(_s if _s else {"resultado": "vazio/None"})
-                    except Exception as _e_s:
-                        st.write(f"/settings → erro: {_e_s}")
-                    st.info(
-                        "Observe: aparecem chaves como `SpeedUnit`/`DistanceUnit` "
-                        "(unidades), mas **nenhum corte de banda** (7 / 14.4 / "
-                        "19.8 …). Por isso os limites são definidos aqui no editor."
-                    )
+                        "🔬 Testar calibração automática (summary da conta)",
+                        key="btn_diag_summary"):
+                    _atl_df = st.session_state.get('atletas_filtrados')
+                    _act_id = st.session_state.get('activity_id')
+                    _per_ids = st.session_state.get('period_ids', {}) or {}
+                    _per_sel = st.session_state.get('periodos_selecionados',
+                                                    ['Atividade Completa'])
+                    if _atl_df is None or getattr(_atl_df, 'empty', True) or not _act_id:
+                        st.warning("Selecione uma atividade e **carregue os atletas** "
+                                   "primeiro (o summary é buscado no carregamento).")
+                    else:
+                        _aid = _atl_df['id'].iloc[0]
+                        _anome = _atl_df['nome'].iloc[0] if 'nome' in _atl_df.columns else str(_aid)
+                        _pid = _per_ids.get(_per_sel[0]) if _per_sel else None
+                        try:
+                            _sm = (_diag_api.get_athlete_period_summary(_pid, _aid)
+                                   if _pid else
+                                   _diag_api.get_athlete_activity_summary(_act_id, _aid))
+                        except Exception as _e_sm:
+                            _sm = None
+                            st.write(f"summary → erro: {_e_sm}")
+                        _bd = _bandas_vel_oficiais_do_summary(_sm)
+                        st.write(f"**Atleta testado:** {_anome}")
+                        if _bd:
+                            st.success("✅ O summary da sua conta **expõe as distâncias "
+                                       "por banda** — a calibração automática é viável.")
+                            st.write("Distâncias por banda (m) que o OpenField calcula "
+                                     "para este atleta:")
+                            st.json({f"Banda {_i+1}": round(_bd[_i], 1)
+                                     for _i in range(6)})
+                        else:
+                            st.error("❌ O summary deste atleta **não traz as distâncias "
+                                     "por banda** nos nomes esperados. Veja abaixo as "
+                                     "chaves disponíveis e me envie — ajusto os slugs.")
+                        # Chaves cruas do summary (para descobrir slugs alternativos)
+                        try:
+                            _smd = (_sm if isinstance(_sm, dict)
+                                    else (_sm[0] if isinstance(_sm, list) and _sm else {}))
+                            _smp = _smd.get('parameters', _smd) if isinstance(_smd, dict) else {}
+                            _keys = sorted(_smp.keys()) if isinstance(_smp, dict) else []
+                            _band_keys = [k for k in _keys
+                                          if 'band' in k.lower() or 'velocity' in k.lower()]
+                            st.caption(f"Chaves do summary relacionadas a banda/velocidade "
+                                       f"({len(_band_keys)} de {len(_keys)} no total):")
+                            st.json(_band_keys if _band_keys else
+                                    {"aviso": "nenhuma chave com 'band'/'velocity'"})
+                        except Exception:
+                            pass
 
         # ── Bandas de Aceleração — editor "Gen2Acceleration" ──────────────
         # Mesmo raciocínio das bandas de velocidade: a API Connect v6 não expõe
