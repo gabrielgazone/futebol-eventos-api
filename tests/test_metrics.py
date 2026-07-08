@@ -309,6 +309,61 @@ class TestCalibrateCutoffs:
         assert m.calibrate_velocity_cutoffs([]) == []
 
 
+class TestBandDistancesFromSummary:
+    """Extração das distâncias oficiais por banda do summary do OpenField —
+    base da calibração AUTOMÁTICA dos cortes via API (sem CSV manual)."""
+
+    def _summary(self, **extra):
+        params = {f'velocity_band{i}_total_distance': d for i, d in
+                  enumerate([2000.0, 1500.0, 900.0, 400.0, 150.0, 60.0], start=1)}
+        params.update(extra)
+        return {'parameters': params}
+
+    def test_extrai_seis_bandas(self):
+        out = m.band_distances_from_summary(self._summary())
+        assert out == [2000.0, 1500.0, 900.0, 400.0, 150.0, 60.0]
+
+    def test_summary_como_lista(self):
+        out = m.band_distances_from_summary([self._summary()])
+        assert out and len(out) == 6
+
+    def test_parametros_no_topo_sem_wrapper(self):
+        flat = {f'velocity_band{i}_total_distance': float(i) for i in range(1, 7)}
+        assert m.band_distances_from_summary(flat) == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+
+    def test_banda_ausente_retorna_none(self):
+        s = self._summary()
+        del s['parameters']['velocity_band6_total_distance']
+        assert m.band_distances_from_summary(s) is None
+
+    def test_soma_zero_retorna_none(self):
+        z = {'parameters': {f'velocity_band{i}_total_distance': 0.0
+                            for i in range(1, 7)}}
+        assert m.band_distances_from_summary(z) is None
+
+    def test_none_e_vazio(self):
+        assert m.band_distances_from_summary(None) is None
+        assert m.band_distances_from_summary({}) is None
+        assert m.band_distances_from_summary([]) is None
+
+    def test_roundtrip_calibra_dos_cortes_reais(self):
+        # Summary "oficial" gerado com cortes conhecidos → calibração recupera.
+        rng = np.random.default_rng(7)
+        cortes = [6.0, 11.0, 15.0, 20.0, 25.0]
+        faixas = [(0, 6), (6, 11), (11, 15), (15, 20), (20, 25), (25, 1e9)]
+        sessions = []
+        for _ in range(4):
+            vel = rng.uniform(0, 32, 40000).tolist()
+            of = m.dist_by_velocity_bands(vel, faixas, 10.0)
+            summ = {'parameters': {f'velocity_band{i+1}_total_distance': of[i]
+                                   for i in range(6)}}
+            bandas = m.band_distances_from_summary(summ)
+            sessions.append((vel, bandas))
+        cuts = m.calibrate_velocity_cutoffs(sessions, hz=10.0)
+        for c, real in zip(cuts, cortes):
+            assert abs(c - real) < 0.3
+
+
 class TestSchemaSync:
     """Garante que o guard de reload do app acompanha os SCHEMA_VERSION dos
     módulos locais — proteção contra o cache de módulos do Streamlit Cloud

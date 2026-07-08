@@ -36,7 +36,7 @@ import validation as _valmod    # noqa: E402
 # do AttributeError 'metrics has no attribute playerload_total'. Se a versão
 # do esquema não bater, força o reload; o teste de sincronia no CI garante
 # que estes números acompanham os SCHEMA_VERSION dos módulos.
-_METRICS_SCHEMA_ESPERADO = 3
+_METRICS_SCHEMA_ESPERADO = 4
 _VALIDATION_SCHEMA_ESPERADO = 2
 import importlib as _importlib  # noqa: E402
 if getattr(_mtr, 'SCHEMA_VERSION', 0) < _METRICS_SCHEMA_ESPERADO:
@@ -1434,6 +1434,13 @@ def _zonas_conta_via_api(api, team_ids):
             except Exception:
                 pass
     return vel, acc
+
+
+# Extração das distâncias oficiais por banda do summary → motor único (testável).
+# getattr defensivo: se o Cloud servir um metrics.py em cache sem a função, o
+# app carrega e a calibração automática apenas no-op (não quebra o import).
+_bandas_vel_oficiais_do_summary = getattr(
+    _mtr, 'band_distances_from_summary', lambda *_a, **_k: None)
 
 
 # ── Helpers para nomes/cores padrão por índice de banda ──────────────────────
@@ -8014,19 +8021,23 @@ Escolha um ou mais atletas para análise simultânea.
             with st.expander("🏷️ Bandas de Velocidade", expanded=False):
                 _vz_src = st.session_state.get('velocity_zones_source', 'default')
                 _vz_src_txt = {
-                    'api':     "🛰️ **Buscado da sua conta via API** — bandas configuradas "
-                               "na conta Catapult (fonte primária).",
+                    'api':     "🛰️ **Calibrado automaticamente pela API** — os cortes "
+                               "foram recuperados dos resultados por banda que o próprio "
+                               "OpenField calcula para a sua conta (sem CSV manual).",
                     'efforts': "🟢 **Derivado dos efforts da sua conta** "
                                "(reconstruído a partir das velocidades reais por banda).",
-                    'manual':  "✏️ **Ajustado manualmente** por você.",
+                    'manual':  "✏️ **Ajustado manualmente / calibrado por CSV** por você.",
                     'default': "⚪ **Padrão** (carregue uma atividade para obter os cortes "
                                "reais da sua conta).",
                 }.get(_vz_src, "")
                 st.caption(_vz_src_txt)
                 st.caption(
-                    "Os cortes são **buscados da sua conta via API** quando disponíveis; "
-                    "caso a API não os exponha, são **derivados dos efforts** da conta. "
-                    "Você pode **ajustar manualmente** abaixo — todo o app é recalculado."
+                    "Ao carregar uma atividade, o app **calibra os cortes automaticamente "
+                    "pela API** (a partir das distâncias por banda que o OpenField calcula "
+                    "com os cortes reais da conta) e os **memoriza para as próximas sessões** "
+                    "— sem trabalho manual. Se a sua conta não expuser esses resultados, "
+                    "os cortes são **derivados dos efforts**. Você ainda pode **ajustar "
+                    "manualmente** abaixo."
                 )
 
                 # Zonas atuais (sessão) ou defaults espelhando a conta Catapult.
@@ -8660,6 +8671,67 @@ Escolha um ou mais atletas para análise simultânea.
             dados_step_efforts_por_periodo[periodo_nome] = dados_step_efforts
             dados_posicao_por_periodo[periodo_nome] = dados_posicao
             dados_eventos_por_periodo[periodo_nome] = dados_eventos
+
+        # ── PRIMÁRIO: calibra os cortes das bandas de velocidade a partir dos
+        # RESULTADOS oficiais do OpenField (summary pré-computado, já baixado
+        # por atleta neste load). A Connect API v6 não expõe a CONFIG dos
+        # cortes, mas expõe as distâncias por banda que o próprio OpenField
+        # calcula com os cortes reais da conta — então recuperamos os cortes
+        # resolvendo, do sinal bruto, os limiares que reproduzem essas
+        # distâncias. 100% automático, via API, sem CSV. Roda uma vez por
+        # (token, atividade, períodos); respeita ajuste manual/persistido.
+        try:
+            _cal_key = (f"{st.session_state.get('_token_marker','')}"
+                        f"|{st.session_state.get('activity_id','')}"
+                        f"|{','.join(periodos_selecionados)}")
+            if (st.session_state.get('_bandas_calib_key') != _cal_key
+                    and not st.session_state.get('velocity_zones_manual')):
+                _sess_api = []
+                for _per_k in periodos_selecionados:
+                    _sensor_per = dados_sensor_por_atleta_por_periodo.get(_per_k, {})
+                    _pos_per    = dados_posicao_por_periodo.get(_per_k, {})
+                    for _atl_k, _pts in (_sensor_per or {}).items():
+                        _of_b = _bandas_vel_oficiais_do_summary(
+                            (_pos_per.get(_atl_k, {}) or {}).get('openfield_summary'))
+                        if not _of_b:
+                            continue
+                        _vel_k = [float(_p.get('v') or 0.0) * 3.6 for _p in (_pts or [])]
+                        if len(_vel_k) > 3000 and sum(_of_b) > 500:
+                            _sess_api.append((_vel_k, _of_b))
+                if len(_sess_api) >= 3:
+                    _cuts_api = _mtr.calibrate_velocity_cutoffs(_sess_api)
+                    # Sanidade: 5 cortes monotônicos em faixa plausível (2–36 km/h).
+                    _ok_cuts = (len(_cuts_api) == 5
+                                and all(2.0 <= _c <= 36.0 for _c in _cuts_api)
+                                and all(_cuts_api[_i] > _cuts_api[_i-1]
+                                        for _i in range(1, 5)))
+                    if _ok_cuts:
+                        _edges_api = [0.0] + list(_cuts_api) + [45.0]
+                        _zones_api = [{
+                            'name':   _NOMES_BANDA_VEL_DEFAULT.get(_i + 1, f'B{_i+1}'),
+                            'min_ms': _edges_api[_i] / 3.6,
+                            'max_ms': _edges_api[_i + 1] / 3.6,
+                            'color':  _CORES_BANDA_VEL_DEFAULT.get(_i + 1, '#888888'),
+                        } for _i in range(6)]
+                        st.session_state['velocity_zones_account'] = _zones_api
+                        st.session_state['velocity_zones_source']  = 'api'
+                        st.session_state['velocity_zones_from_api'] = True
+                        _salvar_zonas_calibradas(_zones_api)  # persiste p/ próximas sessões
+                        _diag_log('Bandas', f"Cortes de velocidade calibrados "
+                                  f"AUTOMATICAMENTE via API ({len(_sess_api)} atletas): "
+                                  + " | ".join(f"{_c:.1f}" for _c in _cuts_api)
+                                  + " km/h (a partir do summary oficial da conta)")
+                    else:
+                        _diag_log('Bandas', "Calibração automática via API "
+                                  "descartada (cortes fora de faixa plausível) — "
+                                  "usando derivação por efforts")
+                elif st.session_state.get('velocity_zones_source', 'default') in ('default', 'efforts'):
+                    _diag_log('Bandas', "Summary da conta não expõe distâncias por "
+                              "banda — calibração automática indisponível; usando "
+                              "derivação por efforts")
+                st.session_state['_bandas_calib_key'] = _cal_key
+        except Exception:
+            pass
 
         # ── Deriva os cortes REAIS das bandas a partir dos efforts da conta ───
         # A API v6 não expõe os cortes; os efforts trazem nº da banda +

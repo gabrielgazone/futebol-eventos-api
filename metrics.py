@@ -22,7 +22,7 @@ import numpy as np
 # (sys.modules sobrevive ao hot-reload do script principal). Incrementar a
 # cada mudança na superfície pública; o teste de sincronia no CI garante que
 # o valor esperado no app acompanhe.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Frequência nominal do sensor Catapult (amostras/s).
 SENSOR_HZ = 10.0
@@ -454,6 +454,48 @@ def calibrate_velocity_cutoffs(sessions, hz: float = 10.0, n_bands: int = 6,
         if cuts[i] <= cuts[i - 1]:
             cuts[i] = round(cuts[i - 1] + 0.1, 2)
     return cuts
+
+
+def band_distances_from_summary(summary, n_bands: int = 6):
+    """Extrai [b1..b_n] = distância por banda de velocidade (m) de um summary
+    pré-computado do OpenField (GET .../summary), que usa os CORTES REAIS da
+    conta.
+
+    Base da calibração AUTOMÁTICA via API: a Connect API v6 não expõe a
+    configuração dos cortes, mas expõe (no summary) as distâncias por banda
+    que o próprio OpenField calcula com os cortes da conta. Recuperando essas
+    distâncias e resolvendo (em calibrate_velocity_cutoffs) os limiares que as
+    reproduzem, obtemos os cortes reais sem nenhum CSV manual.
+
+    Retorna None quando o summary não traz TODAS as bandas (conta sem esses
+    parâmetros no template) ou quando a soma é zero."""
+    if not summary:
+        return None
+    d = (summary if isinstance(summary, dict)
+         else (summary[0] if isinstance(summary, (list, tuple)) and summary else None))
+    if not isinstance(d, dict):
+        return None
+    p = d.get('parameters', d)
+    if not isinstance(p, dict):
+        return None
+    bandas = []
+    for i in range(1, n_bands + 1):
+        v = None
+        for k in (f'velocity_band{i}_total_distance',
+                  f'velocity_band_{i}_total_distance',
+                  f'total_distance_velocity_band{i}',
+                  f'velocity_band{i}_distance',
+                  f'velocity_band{i}_total_dist'):
+            if p.get(k) is not None:
+                v = p[k]
+                break
+        if v is None:
+            return None
+        try:
+            bandas.append(float(v))
+        except (TypeError, ValueError):
+            return None
+    return bandas if sum(bandas) > 0 else None
 
 
 def classificar_acwr(acwr):
