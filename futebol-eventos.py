@@ -8169,30 +8169,32 @@ Escolha um ou mais atletas para análise simultânea.
                         st.session_state.pop('velocity_zones_manual', None)
                         st.rerun()
 
-                # ── Diagnóstico da calibração automática ──────────────────────
+                # ── Diagnóstico completo das bandas via API ───────────────────
                 st.divider()
                 st.caption(
-                    "ℹ️ A Connect API v6 **não expõe a configuração dos cortes** "
-                    "(`/settings` só traz unidades). Por isso o app **recupera os "
-                    "cortes automaticamente** das distâncias por banda que o "
-                    "OpenField já calcula no **summary de cada atleta**. O teste "
-                    "abaixo mostra se a sua conta expõe esse dado."
+                    "ℹ️ A Connect API v6 **não expõe a configuração dos cortes**. O app "
+                    "os recupera das distâncias por banda que o OpenField já calcula. "
+                    "O teste abaixo sonda as 3 fontes possíveis (summary, `/parameters`, "
+                    "`/stats`) e mostra os nomes reais dos campos da sua conta."
                 )
                 _diag_api = st.session_state.get('api')
                 if _diag_api and st.button(
-                        "🔬 Testar calibração automática (summary da conta)",
-                        key="btn_diag_summary"):
+                        "🔬 Diagnóstico completo das bandas (API)",
+                        key="btn_diag_bandas"):
                     _atl_df = st.session_state.get('atletas_filtrados')
                     _act_id = st.session_state.get('activity_id')
                     _per_ids = st.session_state.get('period_ids', {}) or {}
                     _per_sel = st.session_state.get('periodos_selecionados',
                                                     ['Atividade Completa'])
+
+                    # 1) SUMMARY do atleta ────────────────────────────────────
+                    st.markdown("**1) Summary do atleta** (`.../summary`)")
                     if _atl_df is None or getattr(_atl_df, 'empty', True) or not _act_id:
-                        st.warning("Selecione uma atividade e **carregue os atletas** "
-                                   "primeiro (o summary é buscado no carregamento).")
+                        st.warning("Carregue uma atividade primeiro (summary vem no load).")
                     else:
                         _aid = _atl_df['id'].iloc[0]
-                        _anome = _atl_df['nome'].iloc[0] if 'nome' in _atl_df.columns else str(_aid)
+                        _anome = (_atl_df['nome'].iloc[0]
+                                  if 'nome' in _atl_df.columns else str(_aid))
                         _pid = _per_ids.get(_per_sel[0]) if _per_sel else None
                         try:
                             _sm = (_diag_api.get_athlete_period_summary(_pid, _aid)
@@ -8200,34 +8202,64 @@ Escolha um ou mais atletas para análise simultânea.
                                    _diag_api.get_athlete_activity_summary(_act_id, _aid))
                         except Exception as _e_sm:
                             _sm = None
-                            st.write(f"summary → erro: {_e_sm}")
-                        _bd = _bandas_vel_oficiais_do_summary(_sm)
-                        st.write(f"**Atleta testado:** {_anome}")
-                        if _bd:
-                            st.success("✅ O summary da sua conta **expõe as distâncias "
-                                       "por banda** — a calibração automática é viável.")
-                            st.write("Distâncias por banda (m) que o OpenField calcula "
-                                     "para este atleta:")
-                            st.json({f"Banda {_i+1}": round(_bd[_i], 1)
-                                     for _i in range(6)})
+                            st.write(f"erro: {_e_sm}")
+                        _smd = (_sm if isinstance(_sm, dict)
+                                else (_sm[0] if isinstance(_sm, list) and _sm else {}))
+                        _smp = (_smd.get('parameters', _smd)
+                                if isinstance(_smd, dict) else {})
+                        _nk = len(_smp) if isinstance(_smp, dict) else 0
+                        st.caption(f"Atleta **{_anome}** · summary com **{_nk}** chave(s).")
+                        if _nk == 0:
+                            st.write("Summary bruto:", _sm)
+
+                    # 2) /parameters — métricas de banda disponíveis ──────────
+                    st.markdown("**2) `/parameters`** — métricas configuradas na conta")
+                    try:
+                        _pr = _diag_api.get_parameters()
+                        _pr_list = (_pr if isinstance(_pr, list)
+                                    else (_pr or {}).get('data',
+                                          (_pr or {}).get('parameters', [])))
+                        _slugs = []
+                        for _it in (_pr_list or []):
+                            if isinstance(_it, dict):
+                                _slugs.append(str(_it.get('slug') or _it.get('name')
+                                                  or _it.get('parameter') or ''))
+                            else:
+                                _slugs.append(str(_it))
+                        _band_slugs = sorted(s for s in _slugs
+                                             if 'band' in s.lower() and s)
+                        st.caption(f"**{len(_slugs)}** métricas no total · "
+                                   f"**{len(_band_slugs)}** com 'band':")
+                        st.json(_band_slugs if _band_slugs
+                                else {"aviso": "nenhuma métrica com 'band' em /parameters"})
+                    except Exception as _e_pr:
+                        st.write(f"/parameters erro: {_e_pr}")
+
+                    # 3) /stats — distâncias por banda (fonte comprovada) ─────
+                    st.markdown("**3) `/stats`** — distâncias por banda por atleta")
+                    _cand = ["total_distance"] + [
+                        f"velocity_band{_i}_total_distance" for _i in range(1, 7)]
+                    try:
+                        _stt = _diag_api.get_stats({
+                            "group_by": ["athlete"],
+                            "parameters": _cand,
+                            "source": "cached_stats",
+                        })
+                        _stt_list = (_stt if isinstance(_stt, list)
+                                     else (_stt or {}).get('data', []))
+                        if _stt_list:
+                            _row0 = _stt_list[0]
+                            _row0p = (_row0.get('parameters', _row0)
+                                      if isinstance(_row0, dict) else _row0)
+                            st.caption(f"**{len(_stt_list)}** linha(s). "
+                                       "Chaves/valores da 1ª linha:")
+                            st.json(_row0p if isinstance(_row0p, dict) else _row0)
                         else:
-                            st.error("❌ O summary deste atleta **não traz as distâncias "
-                                     "por banda** nos nomes esperados. Veja abaixo as "
-                                     "chaves disponíveis e me envie — ajusto os slugs.")
-                        # Chaves cruas do summary (para descobrir slugs alternativos)
-                        try:
-                            _smd = (_sm if isinstance(_sm, dict)
-                                    else (_sm[0] if isinstance(_sm, list) and _sm else {}))
-                            _smp = _smd.get('parameters', _smd) if isinstance(_smd, dict) else {}
-                            _keys = sorted(_smp.keys()) if isinstance(_smp, dict) else []
-                            _band_keys = [k for k in _keys
-                                          if 'band' in k.lower() or 'velocity' in k.lower()]
-                            st.caption(f"Chaves do summary relacionadas a banda/velocidade "
-                                       f"({len(_band_keys)} de {len(_keys)} no total):")
-                            st.json(_band_keys if _band_keys else
-                                    {"aviso": "nenhuma chave com 'band'/'velocity'"})
-                        except Exception:
-                            pass
+                            st.warning("/stats não retornou linhas para esses parâmetros "
+                                       "(pode ser que os slugs de banda tenham outro nome "
+                                       "— veja o passo 2).")
+                    except Exception as _e_st:
+                        st.write(f"/stats erro: {_e_st}")
 
         # ── Bandas de Aceleração — editor "Gen2Acceleration" ──────────────
         # Mesmo raciocínio das bandas de velocidade: a API Connect v6 não expõe
