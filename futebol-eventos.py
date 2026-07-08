@@ -628,6 +628,14 @@ def _carregar_zonas_calibradas():
         return None
 
 
+def _excluir_zonas_calibradas() -> None:
+    """Remove a calibração persistida da conta (Restaurar/Re-derivar)."""
+    try:
+        _os.remove(_zones_calib_file())
+    except Exception:
+        pass
+
+
 class CatapultAPI:
     def __init__(self, base_url, token):
         self.base_url = base_url
@@ -8078,9 +8086,11 @@ Escolha um ou mais atletas para análise simultânea.
                 with _cc_vz_deriv:
                     if st.button("🔄 Re-derivar da conta", key="btn_rederiv_vel_zones",
                                  use_container_width=True,
-                                 help="Descarta o ajuste manual e volta a derivar os "
-                                      "cortes dos efforts da conta. Para rebuscar as "
-                                      "bandas via API, reconecte com o token."):
+                                 help="Descarta o ajuste manual E a calibração "
+                                      "persistida, voltando a derivar os cortes dos "
+                                      "efforts da conta. Para rebuscar via API, "
+                                      "reconecte com o token."):
+                        _excluir_zonas_calibradas()   # apaga calibração em disco
                         st.session_state.pop('velocity_zones_manual', None)
                         st.session_state.pop('velocity_zones_from_api', None)
                         st.session_state.pop('_bandas_deriv_key', None)
@@ -8088,7 +8098,9 @@ Escolha um ou mais atletas para análise simultânea.
                 with _cc_vz_reset:
                     if st.button("↩️ Restaurar Catapult", key="btn_reset_vel_zones",
                                  use_container_width=True,
-                                 help="Restaura os valores padrão das Bandas Globais Catapult."):
+                                 help="Restaura os valores padrão das Bandas Globais "
+                                      "Catapult e apaga a calibração persistida."):
+                        _excluir_zonas_calibradas()   # apaga calibração em disco
                         st.session_state['velocity_zones_account'] = _DEFAULT_VELOCITY_ZONES[:]
                         st.session_state['velocity_zones_source']  = 'default'
                         st.session_state.pop('velocity_zones_manual', None)
