@@ -8187,6 +8187,48 @@ Escolha um ou mais atletas para análise simultânea.
                     _per_sel = st.session_state.get('periodos_selecionados',
                                                     ['Atividade Completa'])
 
+                    # 0) ENDPOINTS DIRETOS DE ZONAS ───────────────────────────
+                    # O caminho ideal: a própria configuração das "Bandas
+                    # Globais". Se qualquer um retornar cortes, o app os busca
+                    # sozinho na conexão (sem opção manual).
+                    st.markdown("**0) Endpoints diretos de zonas de velocidade**")
+                    _tdf = st.session_state.get('df_teams')
+                    _tids = ([t for t in _tdf['id'].tolist()]
+                             if _tdf is not None and not getattr(_tdf, 'empty', True)
+                             and 'id' in getattr(_tdf, 'columns', []) else [])
+                    _aid0 = (_atl_df['id'].iloc[0] if _atl_df is not None
+                             and not getattr(_atl_df, 'empty', True) else None)
+                    _probes = [("GET /velocity_zones",
+                                lambda: _diag_api.get_velocity_zones())]
+                    for _tid in _tids[:3]:
+                        _probes.append((f"GET /teams/{_tid}/velocity_zones",
+                                        (lambda t=_tid: _diag_api.get_team_velocity_zones(t))))
+                    if _aid0 is not None:
+                        _probes.append((f"GET /athletes/{_aid0}/velocity_zones",
+                                        (lambda a=_aid0: _diag_api.get_athlete_velocity_zones(a))))
+                    _achou_zona = False
+                    for _label, _fn in _probes:
+                        try:
+                            _resp = _fn()
+                        except Exception as _e_z:
+                            st.write(f"`{_label}` → erro: {_e_z}")
+                            continue
+                        _tem = _resp_tem_zonas(_resp)
+                        _achou_zona = _achou_zona or _tem
+                        st.write(f"`{_label}` → "
+                                 + ("✅ **retornou zonas**" if _tem
+                                    else "vazio/sem zonas"))
+                        if _resp:
+                            st.json(_resp if _tem else
+                                    (_resp if len(str(_resp)) < 400 else
+                                     {"amostra": str(_resp)[:400]}))
+                    if _achou_zona:
+                        st.success("🎯 A API **expõe os cortes diretamente** — dá para "
+                                   "o app buscá-los sozinho na conexão.")
+                    else:
+                        st.info("Endpoints diretos vazios nesta conta. Veja os passos "
+                                "2 e 3 (/parameters e /stats) para a rota alternativa.")
+
                     # 1) SUMMARY do atleta ────────────────────────────────────
                     st.markdown("**1) Summary do atleta** (`.../summary`)")
                     if _atl_df is None or getattr(_atl_df, 'empty', True) or not _act_id:
