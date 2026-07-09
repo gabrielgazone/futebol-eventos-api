@@ -8255,61 +8255,63 @@ Escolha um ou mais atletas para análise simultânea.
                             st.write("Summary bruto:", _sm)
 
                     # 2) /parameters — métricas de banda disponíveis ──────────
-                    st.markdown("**2) `/parameters`** — DEFINIÇÃO das bandas de velocidade")
+                    st.markdown("**2) `/parameters`** — só a DISTÂNCIA por banda (limpo)")
                     _vb_slugs = []
                     try:
                         _pr = _diag_api.get_parameters()
                         _pr_list = (_pr if isinstance(_pr, list)
                                     else (_pr or {}).get('data',
                                           (_pr or {}).get('parameters', [])))
-                        # Objetos COMPLETOS das métricas 'velocity band ... distance'
-                        # — podem conter min/max de velocidade = os cortes reais.
-                        _vb_objs = []
-                        for _it in (_pr_list or []):
-                            if not isinstance(_it, dict):
-                                continue
-                            _nm = (str(_it.get('name', '')) + ' '
-                                   + str(_it.get('slug', ''))).lower()
-                            if ('velocity' in _nm and 'band' in _nm
-                                    and ('dist' in _nm or 'total' in _nm)):
-                                _vb_objs.append(_it)
-                        _vb_slugs = [str(o.get('slug') or o.get('name') or '')
-                                     for o in _vb_objs]
-                        st.caption(f"**{len(_pr_list or [])}** métricas · "
-                                   f"**{len(_vb_objs)}** de 'velocity band … distance'. "
-                                   "Objetos completos (procurando min/max = cortes):")
-                        st.json(_vb_objs[:8] if _vb_objs else
-                                {"aviso": "nenhuma métrica 'velocity band distance'"})
+                        # Filtro EXATO: base_name 'velocity_distance' + soma → a
+                        # distância total por banda (velocity_bandN_total_distance),
+                        # sem contagens de esforço nem métricas compostas.
+                        _vb_objs = [_it for _it in (_pr_list or [])
+                                    if isinstance(_it, dict)
+                                    and _it.get('base_name') == 'velocity_distance'
+                                    and _it.get('aggregation') == 'sum']
+                        _vb_objs.sort(key=lambda o: o.get('band', 0))
+                        _vb_slugs = [str(o.get('slug')) for o in _vb_objs
+                                     if o.get('slug')]
+                        st.caption(f"**{len(_vb_objs)}** bandas de distância "
+                                   "(base_name=velocity_distance, sum):")
+                        st.json({str(o.get('band')): o.get('slug') for o in _vb_objs}
+                                if _vb_objs else {"aviso": "nenhuma encontrada"})
                     except Exception as _e_pr:
                         st.write(f"/parameters erro: {_e_pr}")
 
-                    # 3) /stats — usando os slugs REAIS descobertos no passo 2 ─
-                    st.markdown("**3) `/stats`** — distâncias por banda (slugs reais)")
-                    _cand = (["total_distance"] + _vb_slugs[:6] if _vb_slugs
-                             else ["total_distance"] + [
-                                 f"velocity_band{_i}_total_distance"
-                                 for _i in range(1, 7)])
-                    st.caption("Parâmetros pedidos: " + ", ".join(f"`{c}`" for c in _cand))
-                    try:
-                        _stt = _diag_api.get_stats({
-                            "group_by": ["athlete"],
-                            "parameters": _cand,
-                            "source": "cached_stats",
-                        })
+                    # 3) /stats — só os slugs LIMPOS; testa com/sem cached_stats ─
+                    st.markdown("**3) `/stats`** — distância por banda (slugs limpos)")
+                    _cand = (["total_distance"] + _vb_slugs) if _vb_slugs else \
+                            (["total_distance"] + [f"velocity_band{_i}_total_distance"
+                                                   for _i in range(1, 8)])
+                    st.caption("Pedindo: " + ", ".join(f"`{c}`" for c in _cand))
+                    _variantes = [
+                        ("cached_stats", {"group_by": ["athlete"], "parameters": _cand,
+                                          "source": "cached_stats"}),
+                        ("sem source",   {"group_by": ["athlete"], "parameters": _cand}),
+                    ]
+                    _ok_stats = False
+                    for _vlabel, _payload in _variantes:
+                        try:
+                            _stt = _diag_api.get_stats(_payload)
+                        except Exception as _e_st:
+                            st.write(f"[{_vlabel}] erro: {_e_st}")
+                            continue
                         _stt_list = (_stt if isinstance(_stt, list)
                                      else (_stt or {}).get('data', []))
                         if _stt_list:
                             _row0 = _stt_list[0]
                             _row0p = (_row0.get('parameters', _row0)
                                       if isinstance(_row0, dict) else _row0)
-                            st.caption(f"✅ **{len(_stt_list)}** linha(s). "
-                                       "Chaves/valores da 1ª linha:")
+                            st.caption(f"✅ [{_vlabel}] **{len(_stt_list)}** linha(s):")
                             st.json(_row0p if isinstance(_row0p, dict) else _row0)
+                            _ok_stats = True
+                            break
                         else:
-                            st.warning("/stats ainda sem linhas — mande o print do passo 2 "
-                                       "que eu acerto o nome exato do parâmetro.")
-                    except Exception as _e_st:
-                        st.write(f"/stats erro: {_e_st}")
+                            st.write(f"[{_vlabel}] → 0 linhas")
+                    if not _ok_stats:
+                        st.warning("Nenhuma variante do /stats retornou linhas — então "
+                                   "as distâncias por banda também não vêm por aqui.")
 
         # ── Bandas de Aceleração — editor "Gen2Acceleration" ──────────────
         # Mesmo raciocínio das bandas de velocidade: a API Connect v6 não expõe
