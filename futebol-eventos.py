@@ -596,44 +596,9 @@ def _excluir_venue(nome: str) -> None:
         pass
 
 
-# ── (Validação) bandas CALIBRADAS persistidas por organização ────────────────
-# A calibração contra o export oficial vivia só no session_state — calibrar
-# numa sessão e exportar em outra perdia os cortes. Agora persiste em disco
-# (escopo da conta) e recarrega automaticamente ao conectar.
-
-def _zones_calib_file() -> str:
-    _mk = str(st.session_state.get('_org_marker', '') or '').strip()
-    _base = _os.path.dirname(_os.path.abspath(__file__))
-    return _os.path.join(_base, f"zones_calibradas_{_mk or 'default'}.json")
-
-
-def _salvar_zonas_calibradas(zones: list) -> None:
-    try:
-        with open(_zones_calib_file(), 'w', encoding='utf-8') as f:
-            json.dump({'velocity_zones': zones,
-                       'saved_at': datetime.now().strftime('%Y-%m-%d %H:%M')},
-                      f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-
-
-def _carregar_zonas_calibradas():
-    """Retorna a lista de zonas calibradas salvas para esta conta, ou None."""
-    try:
-        with open(_zones_calib_file(), encoding='utf-8') as f:
-            _d = json.load(f)
-        _z = _d.get('velocity_zones')
-        return _z if isinstance(_z, list) and len(_z) >= 2 else None
-    except Exception:
-        return None
-
-
-def _excluir_zonas_calibradas() -> None:
-    """Remove a calibração persistida da conta (Restaurar/Re-derivar)."""
-    try:
-        _os.remove(_zones_calib_file())
-    except Exception:
-        pass
+# (Removido) Persistência de bandas calibradas por organização. Não há mais
+# calibração pelo usuário: o app usa limiares fixos documentados (padrão da
+# literatura), com leitura das zonas via API quando a conta as expõe.
 
 
 class CatapultAPI:
@@ -1436,13 +1401,6 @@ def _zonas_conta_via_api(api, team_ids):
     return vel, acc
 
 
-# Extração das distâncias oficiais por banda do summary → motor único (testável).
-# getattr defensivo: se o Cloud servir um metrics.py em cache sem a função, o
-# app carrega e a calibração automática apenas no-op (não quebra o import).
-_bandas_vel_oficiais_do_summary = getattr(
-    _mtr, 'band_distances_from_summary', lambda *_a, **_k: None)
-
-
 # ── Helpers para nomes/cores padrão por índice de banda ──────────────────────
 _NOMES_BANDA_VEL_DEFAULT = {
     1: 'Caminhada', 2: 'Trote', 3: 'Corrida',
@@ -1661,118 +1619,9 @@ def _bandas_acc_ativas() -> dict:
     return result if result else BANDAS_ACC
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# DERIVAÇÃO DOS CORTES DAS BANDAS A PARTIR DOS EFFORTS DA CONTA
-# ══════════════════════════════════════════════════════════════════════════════
-# A API Connect v6 NÃO expõe os cortes das "Bandas Globais". Porém os endpoints
-# de efforts retornam, por esforço, o NÚMERO da banda + a velocidade/aceleração
-# REAIS (m/s, m/s²) daquele token. Como cada esforço entra/sai de uma banda
-# exatamente nos cortes, dá para reconstruir os limites específicos de cada conta
-# agregando os efforts. Assim os valores refletem SEMPRE a conta do token atual.
+# (Removido) Derivação dos cortes de banda a partir dos efforts. O app usa
+# limiares fixos documentados; zonas via API só por leitura de configuração.
 
-def _derivar_zonas_velocidade(efforts_por_atleta) -> list:
-    """Reconstrói as bandas de velocidade (m/s) da conta a partir dos efforts.
-
-    efforts_por_atleta: dict atleta -> lista de velocity_efforts (cada um com
-    'band' e velocidades em m/s). Retorna lista no formato de
-    _DEFAULT_VELOCITY_ZONES, ou None se não houver dados suficientes.
-    """
-    from collections import defaultdict
-    vals = defaultdict(list)
-    for _efs in (efforts_por_atleta or {}).values():
-        for _ef in (_efs or []):
-            try:
-                _b = int(float(_ef.get('band')))
-            except (TypeError, ValueError):
-                continue
-            if _b <= 0:
-                continue
-            for _k in ('start_velocity', 'end_velocity', 'max_velocity'):
-                try:
-                    _fv = float(_ef.get(_k))
-                except (TypeError, ValueError):
-                    continue
-                if _fv > 0:
-                    vals[_b].append(_fv)
-    bands = sorted(b for b in vals if vals[b])
-    if len(bands) < 2:
-        return None
-    # Corte entre banda i e i+1 = média(máx observado em i, mín observado em i+1).
-    bounds = []
-    for i in range(len(bands) - 1):
-        bounds.append((max(vals[bands[i]]) + min(vals[bands[i + 1]])) / 2.0)
-    zones = []
-    for i, b in enumerate(bands):
-        _mn = bounds[i - 1] if i > 0 else 0.0
-        _mx = bounds[i] if i < len(bands) - 1 else max(vals[b])
-        if _mx <= _mn:
-            _mx = _mn + 0.1
-        zones.append({
-            'name':   _NOMES_BANDA_VEL_DEFAULT.get(b, f'B{b}'),
-            'min_ms': round(_mn, 3),
-            'max_ms': round(_mx, 3),
-            'color':  _CORES_BANDA_VEL_DEFAULT.get(b, '#888888'),
-        })
-    return zones
-
-
-def _derivar_zonas_aceleracao(efforts_por_atleta) -> list:
-    """Reconstrói as bandas de aceleração (m/s²) da conta a partir dos efforts.
-
-    Mantém SEMPRE a estrutura Aceleração B1/B2/B3 + Desaceleração B1/B2/B3,
-    mapeando o NÚMERO da caixa Gen2Acceleration (campo 'band' do effort) para a
-    banda correspondente via _ACC_BAND_MAP — caixas 6,7,8 → Aceleração B1,B2,B3
-    e caixas 3,2,1 → Desaceleração B1,B2,B3. As caixas 4 e 5 (zona leve/neutra)
-    são ignoradas. Os cortes de cada banda vêm das acelerações REAIS da conta.
-    Retorna lista no formato de _DEFAULT_ACCELERATION_ZONES, ou None se não houver
-    dados suficientes (nesse caso mantêm-se os valores padrão/manuais).
-    """
-    from collections import defaultdict
-    # Agrupa magnitudes (valor absoluto) por número de caixa mapeada.
-    vals = defaultdict(list)
-    for _efs in (efforts_por_atleta or {}).values():
-        for _ef in (_efs or []):
-            try:
-                _b = int(float(_ef.get('band')))
-            except (TypeError, ValueError):
-                continue
-            if _b not in _ACC_BAND_MAP:
-                continue
-            try:
-                _fv = float(_ef.get('acceleration'))
-            except (TypeError, ValueError):
-                continue
-            vals[_b].append(abs(_fv))
-
-    def _side(box_order, label_prefix, colors, positivo):
-        """box_order: caixas de B1 (mais leve) → B3 (máxima). Deriva os cortes
-        em espaço de magnitude e re-aplica o sinal."""
-        present = [b for b in box_order if vals.get(b)]
-        if not present:
-            return []
-        bounds = []
-        for i in range(len(present) - 1):
-            bounds.append((max(vals[present[i]]) + min(vals[present[i + 1]])) / 2.0)
-        out = []
-        for i, b in enumerate(present):
-            _lo = bounds[i - 1] if i > 0 else min(vals[b])
-            _hi = bounds[i] if i < len(present) - 1 else max(vals[b])
-            if _hi <= _lo:
-                _hi = _lo + 0.1
-            _mn, _mx = (_lo, _hi) if positivo else (-_hi, -_lo)
-            out.append({
-                'name':    f'{label_prefix} B{i + 1}',
-                'min_ms2': round(_mn, 3),
-                'max_ms2': round(_mx, 3),
-                'color':   colors[min(i, len(colors) - 1)],
-            })
-        return out
-
-    zones = (
-        _side([6, 7, 8], 'Aceleração', ['#69F0AE', '#43A047', '#00C853'], True)
-        + _side([3, 2, 1], 'Desaceleração', ['#FFD180', '#FF6D00', '#B71C1C'], False)
-    )
-    return zones if len(zones) >= 2 else None
 
 
 # ── Configuração dos tipos de eventos futebol ──────────────────────────────
@@ -5260,62 +5109,10 @@ def render_export_artigo(resultados_por_periodo, dados_sensor_por_atleta_por_per
                                    "de Pearson. Interpretação usual: |viés %| < 5% "
                                    "e r > 0,90 indicam boa concordância.")
 
-                        # ── 🎯 Calibração dos cortes de banda pelo CSV oficial ──
-                        st.markdown("###### 🎚️ Calibrar bandas de velocidade "
-                                    "pelo CSV oficial")
-                        st.caption("Resolve, a partir do **sinal bruto** desta "
-                                   "atividade, os cortes (km/h) que reproduzem as "
-                                   "distâncias por banda do OpenField — e aplica às "
-                                   "bandas da conta (todo o app passa a usá-los).")
-                        if st.button("Calcular cortes calibrados",
-                                     key="btn_calib_bands"):
-                            _sess_cal = []
-                            for _, _rw in _merged.iterrows():
-                                _atl_c = str(_rw['Atleta'])
-                                _vel_c = []
-                                for _per_c in _per_sel:
-                                    _sp_c = (dados_sensor_por_atleta_por_periodo
-                                             .get(_per_c, {}).get(_atl_c, []))
-                                    _vel_c += [float(_p.get('v') or 0.0) * 3.6
-                                               for _p in _sp_c]
-                                _of_b = [float(_rw.get(
-                                    f"Velocity Band {_i} Total Distance (m) "
-                                    f"(oficial)", 0) or 0) for _i in range(1, 7)]
-                                if len(_vel_c) > 3000 and sum(_of_b) > 500:
-                                    _sess_cal.append((_vel_c, _of_b))
-                            if len(_sess_cal) < 3:
-                                st.warning("Poucos atletas com sinal + dados "
-                                           "oficiais suficientes para calibrar "
-                                           "(mínimo 3).")
-                            else:
-                                st.session_state['_calib_cuts'] = \
-                                    _mtr.calibrate_velocity_cutoffs(_sess_cal)
-                                st.session_state['_calib_n'] = len(_sess_cal)
-                        _cuts_s = st.session_state.get('_calib_cuts')
-                        if _cuts_s:
-                            st.success(
-                                f"Cortes calibrados com "
-                                f"{st.session_state.get('_calib_n', '?')} atletas "
-                                "(km/h): **" +
-                                " | ".join(f"{_c:.1f}" for _c in _cuts_s) + "**")
-                            if st.button("✅ Aplicar às bandas da conta",
-                                         key="btn_calib_apply"):
-                                _edges = [0.0] + list(_cuts_s) + [45.0]
-                                _zones_new = [{
-                                    'name': _NOMES_BANDA_VEL_DEFAULT.get(
-                                        _i + 1, f'B{_i + 1}'),
-                                    'min_ms': _edges[_i] / 3.6,
-                                    'max_ms': _edges[_i + 1] / 3.6,
-                                    'color': _CORES_BANDA_VEL_DEFAULT.get(
-                                        _i + 1, '#888888'),
-                                } for _i in range(6)]
-                                st.session_state['velocity_zones_account'] = _zones_new
-                                st.session_state['velocity_zones_manual'] = True
-                                st.session_state['velocity_zones_source'] = 'manual'
-                                # persiste em disco (escopo da organização):
-                                # sobrevive a novas sessões e recarrega ao conectar
-                                _salvar_zonas_calibradas(_zones_new)
-                                st.rerun()
+                        # (Removido) Calibração de cortes de banda pelo CSV: o app
+                        # usa limiares FIXOS e documentados (padrão da literatura);
+                        # não há ajuste de bandas pelo usuário — instrumento
+                        # determinístico para fins de validação científica.
 
                         _var_ba = st.selectbox("Variável para Bland-Altman",
                                                _vars_num, key="val_var_ba")
@@ -7539,19 +7336,9 @@ Escolha um ou mais atletas para análise simultânea.
                 except Exception:
                     pass
 
-                # ── (Validação) bandas CALIBRADAS da organização: prioridade
-                # máxima — sobrevivem a novas sessões e não são sobrescritas
-                # pela derivação por efforts nem pela API.
-                try:
-                    _zcal = _carregar_zonas_calibradas()
-                    if _zcal:
-                        st.session_state['velocity_zones_account'] = _zcal
-                        st.session_state['velocity_zones_manual'] = True
-                        st.session_state['velocity_zones_source'] = 'manual'
-                        st.success("🎚️ Bandas calibradas (validação) carregadas "
-                                   "do banco da organização.")
-                except Exception:
-                    pass
+                # (Removido) Carregamento de bandas calibradas persistidas: não
+                # há mais calibração pelo usuário. Fonte das zonas de velocidade:
+                # API da conta (se expuser) → senão, limiares fixos documentados.
 
         if not st.session_state.df_activities.empty and token:
             # ── P5: Diagnóstico da sessão — nada falha em silêncio ────────────
@@ -8065,348 +7852,38 @@ Escolha um ou mais atletas para análise simultânea.
             st.session_state['acceleration_zones_account'] = _DEFAULT_ACCELERATION_ZONES[:]
             st.session_state['acceleration_zones_source']  = 'default'
 
-        # ── Bandas de Velocidade — editor das "Bandas Globais" ────────────
-        # A API Connect v6 NÃO expõe os cortes das bandas (confirmado na doc
-        # oficial). Por isso o usuário define aqui os mesmos valores da tela
-        # "Bandas Globais" do OpenField. Os valores fluem por _bandas_vel_ativas().
+        # ── Bandas de Velocidade / Aceleração — SOMENTE LEITURA ───────────
+        # O app usa limiares FIXOS e documentados (padrão da literatura). Não há
+        # edição nem calibração pelo usuário — instrumento determinístico para
+        # validação científica. Exibidos apenas para transparência. Quando a
+        # conta expõe as zonas pela API, elas são lidas na conexão (leitura da
+        # configuração, sem inferência).
         if not st.session_state.get('df_activities', pd.DataFrame()).empty and token:
-            with st.expander("🏷️ Bandas de Velocidade", expanded=False):
-                _vz_src = st.session_state.get('velocity_zones_source', 'default')
-                _vz_src_txt = {
-                    'api':     "🛰️ **Calibrado automaticamente pela API** — os cortes "
-                               "foram recuperados dos resultados por banda que o próprio "
-                               "OpenField calcula para a sua conta (sem CSV manual).",
-                    'efforts': "🟢 **Derivado dos efforts da sua conta** "
-                               "(reconstruído a partir das velocidades reais por banda).",
-                    'manual':  "✏️ **Ajustado manualmente / calibrado por CSV** por você.",
-                    'default': "⚪ **Padrão** (carregue uma atividade para obter os cortes "
-                               "reais da sua conta).",
-                }.get(_vz_src, "")
-                st.caption(_vz_src_txt)
-                st.caption(
-                    "Ao carregar uma atividade, o app **calibra os cortes automaticamente "
-                    "pela API** (a partir das distâncias por banda que o OpenField calcula "
-                    "com os cortes reais da conta) e os **memoriza para as próximas sessões** "
-                    "— sem trabalho manual. Se a sua conta não expuser esses resultados, "
-                    "os cortes são **derivados dos efforts**. Você ainda pode **ajustar "
-                    "manualmente** abaixo."
-                )
+            with st.expander("🏷️ Bandas de Velocidade (fixas)", expanded=False):
+                _src_vz = st.session_state.get('velocity_zones_source', 'default')
+                st.caption("Limiares **fixos e documentados** (padrão da literatura "
+                           "de futebol). Sem edição/calibração pelo usuário · fonte: "
+                           f"`{_src_vz}`.")
+                _cur_vz = (st.session_state.get('velocity_zones_account')
+                           or _DEFAULT_VELOCITY_ZONES)
+                st.dataframe(pd.DataFrame([
+                    {'Banda': z.get('name', f'B{_i+1}'),
+                     'Mín (km/h)': round(float(z['min_ms']) * 3.6, 1),
+                     'Máx (km/h)': ('—' if z['max_ms'] >= 9000
+                                    else round(float(z['max_ms']) * 3.6, 1))}
+                    for _i, z in enumerate(_cur_vz)]),
+                    use_container_width=True, hide_index=True)
+            with st.expander("🏷️ Bandas de Aceleração (fixas)", expanded=False):
+                st.caption("Gen2Acceleration — limiares fixos (m/s²), sem edição.")
+                _cur_az = (st.session_state.get('acceleration_zones_account')
+                           or _DEFAULT_ACCELERATION_ZONES)
+                st.dataframe(pd.DataFrame([
+                    {'Banda': z.get('name', f'B{_i+1}'),
+                     'Mín (m/s²)': round(float(z['min_ms2']), 2),
+                     'Máx (m/s²)': round(float(z['max_ms2']), 2)}
+                    for _i, z in enumerate(_cur_az)]),
+                    use_container_width=True, hide_index=True)
 
-                # Zonas atuais (sessão) ou defaults espelhando a conta Catapult.
-                _cur_zones = (
-                    st.session_state.get('velocity_zones_account')
-                    or _DEFAULT_VELOCITY_ZONES
-                )
-                _df_edit_vz = pd.DataFrame([
-                    {
-                        'Banda': z.get('name', f'B{_i+1}'),
-                        'Mín (km/h)': round(float(z['min_ms']) * 3.6, 2),
-                        'Máx (km/h)': (45.0 if z['max_ms'] >= 9000
-                                       else round(float(z['max_ms']) * 3.6, 2)),
-                        'Cor': z.get('color', '#888888'),
-                    }
-                    for _i, z in enumerate(_cur_zones)
-                ])
-                _edited_vz = st.data_editor(
-                    _df_edit_vz,
-                    use_container_width=True, hide_index=True,
-                    num_rows="dynamic", key="editor_vel_zones",
-                    column_config={
-                        'Banda': st.column_config.TextColumn('Banda'),
-                        'Mín (km/h)': st.column_config.NumberColumn(
-                            'Mín (km/h)', min_value=0.0, max_value=60.0, step=0.1, format="%.2f"),
-                        'Máx (km/h)': st.column_config.NumberColumn(
-                            'Máx (km/h)', min_value=0.0, max_value=60.0, step=0.1, format="%.2f"),
-                        'Cor': st.column_config.TextColumn('Cor (hex)'),
-                    },
-                )
-
-                _cc_vz_save, _cc_vz_deriv, _cc_vz_reset = st.columns(3)
-                with _cc_vz_save:
-                    if st.button("💾 Salvar bandas", key="btn_save_vel_zones",
-                                 use_container_width=True):
-                        _new_zones = []
-                        for _, _row in _edited_vz.iterrows():
-                            try:
-                                _mn = float(_row['Mín (km/h)'])
-                                _mx = float(_row['Máx (km/h)'])
-                            except (TypeError, ValueError):
-                                continue
-                            _new_zones.append({
-                                'name':   str(_row.get('Banda') or '').strip() or f'B{len(_new_zones)+1}',
-                                'min_ms': _mn / 3.6,
-                                'max_ms': _mx / 3.6,
-                                'color':  str(_row.get('Cor') or '#888888').strip() or '#888888',
-                            })
-                        if _new_zones:
-                            st.session_state['velocity_zones_account'] = _new_zones
-                            st.session_state['velocity_zones_manual']  = True
-                            st.session_state['velocity_zones_source']  = 'manual'
-                            st.success(f"✅ {len(_new_zones)} bandas de velocidade salvas.")
-                            st.rerun()
-                        else:
-                            st.warning("Nenhuma banda válida para salvar.")
-                with _cc_vz_deriv:
-                    if st.button("🔄 Re-derivar da conta", key="btn_rederiv_vel_zones",
-                                 use_container_width=True,
-                                 help="Descarta o ajuste manual E a calibração "
-                                      "persistida, voltando a derivar os cortes dos "
-                                      "efforts da conta. Para rebuscar via API, "
-                                      "reconecte com o token."):
-                        _excluir_zonas_calibradas()   # apaga calibração em disco
-                        st.session_state.pop('velocity_zones_manual', None)
-                        st.session_state.pop('velocity_zones_from_api', None)
-                        st.session_state.pop('_bandas_deriv_key', None)
-                        st.rerun()
-                with _cc_vz_reset:
-                    if st.button("↩️ Restaurar Catapult", key="btn_reset_vel_zones",
-                                 use_container_width=True,
-                                 help="Restaura os valores padrão das Bandas Globais "
-                                      "Catapult e apaga a calibração persistida."):
-                        _excluir_zonas_calibradas()   # apaga calibração em disco
-                        st.session_state['velocity_zones_account'] = _DEFAULT_VELOCITY_ZONES[:]
-                        st.session_state['velocity_zones_source']  = 'default'
-                        st.session_state.pop('velocity_zones_manual', None)
-                        st.rerun()
-
-                # ── Diagnóstico completo das bandas via API ───────────────────
-                st.divider()
-                st.caption(
-                    "ℹ️ A Connect API v6 **não expõe a configuração dos cortes**. O app "
-                    "os recupera das distâncias por banda que o OpenField já calcula. "
-                    "O teste abaixo sonda as 3 fontes possíveis (summary, `/parameters`, "
-                    "`/stats`) e mostra os nomes reais dos campos da sua conta."
-                )
-                _diag_api = st.session_state.get('api')
-                if _diag_api and st.button(
-                        "🔬 Diagnóstico completo das bandas (API)",
-                        key="btn_diag_bandas"):
-                    _atl_df = st.session_state.get('atletas_filtrados')
-                    _act_id = st.session_state.get('activity_id')
-                    _per_ids = st.session_state.get('period_ids', {}) or {}
-                    _per_sel = st.session_state.get('periodos_selecionados',
-                                                    ['Atividade Completa'])
-
-                    # 0) ENDPOINTS DIRETOS DE ZONAS ───────────────────────────
-                    # O caminho ideal: a própria configuração das "Bandas
-                    # Globais". Se qualquer um retornar cortes, o app os busca
-                    # sozinho na conexão (sem opção manual).
-                    st.markdown("**0) Endpoints diretos de zonas de velocidade**")
-                    _tdf = st.session_state.get('df_teams')
-                    _tids = ([t for t in _tdf['id'].tolist()]
-                             if _tdf is not None and not getattr(_tdf, 'empty', True)
-                             and 'id' in getattr(_tdf, 'columns', []) else [])
-                    _aid0 = (_atl_df['id'].iloc[0] if _atl_df is not None
-                             and not getattr(_atl_df, 'empty', True) else None)
-                    _probes = [("GET /velocity_zones",
-                                lambda: _diag_api.get_velocity_zones())]
-                    for _tid in _tids[:3]:
-                        _probes.append((f"GET /teams/{_tid}/velocity_zones",
-                                        (lambda t=_tid: _diag_api.get_team_velocity_zones(t))))
-                    if _aid0 is not None:
-                        _probes.append((f"GET /athletes/{_aid0}/velocity_zones",
-                                        (lambda a=_aid0: _diag_api.get_athlete_velocity_zones(a))))
-                    _achou_zona = False
-                    for _label, _fn in _probes:
-                        try:
-                            _resp = _fn()
-                        except Exception as _e_z:
-                            st.write(f"`{_label}` → erro: {_e_z}")
-                            continue
-                        _tem = _resp_tem_zonas(_resp)
-                        _achou_zona = _achou_zona or _tem
-                        st.write(f"`{_label}` → "
-                                 + ("✅ **retornou zonas**" if _tem
-                                    else "vazio/sem zonas"))
-                        if _resp:
-                            st.json(_resp if _tem else
-                                    (_resp if len(str(_resp)) < 400 else
-                                     {"amostra": str(_resp)[:400]}))
-                    if _achou_zona:
-                        st.success("🎯 A API **expõe os cortes diretamente** — dá para "
-                                   "o app buscá-los sozinho na conexão.")
-                    else:
-                        st.info("Endpoints diretos vazios nesta conta. Veja os passos "
-                                "2 e 3 (/parameters e /stats) para a rota alternativa.")
-
-                    # 1) SUMMARY do atleta ────────────────────────────────────
-                    st.markdown("**1) Summary do atleta** (`.../summary`)")
-                    if _atl_df is None or getattr(_atl_df, 'empty', True) or not _act_id:
-                        st.warning("Carregue uma atividade primeiro (summary vem no load).")
-                    else:
-                        _aid = _atl_df['id'].iloc[0]
-                        _anome = (_atl_df['nome'].iloc[0]
-                                  if 'nome' in _atl_df.columns else str(_aid))
-                        _pid = _per_ids.get(_per_sel[0]) if _per_sel else None
-                        try:
-                            _sm = (_diag_api.get_athlete_period_summary(_pid, _aid)
-                                   if _pid else
-                                   _diag_api.get_athlete_activity_summary(_act_id, _aid))
-                        except Exception as _e_sm:
-                            _sm = None
-                            st.write(f"erro: {_e_sm}")
-                        _smd = (_sm if isinstance(_sm, dict)
-                                else (_sm[0] if isinstance(_sm, list) and _sm else {}))
-                        _smp = (_smd.get('parameters', _smd)
-                                if isinstance(_smd, dict) else {})
-                        _nk = len(_smp) if isinstance(_smp, dict) else 0
-                        st.caption(f"Atleta **{_anome}** · summary com **{_nk}** chave(s).")
-                        if _nk == 0:
-                            st.write("Summary bruto:", _sm)
-
-                    # 2) /parameters — métricas de banda disponíveis ──────────
-                    st.markdown("**2) `/parameters`** — só a DISTÂNCIA por banda (limpo)")
-                    _vb_slugs = []
-                    try:
-                        _pr = _diag_api.get_parameters()
-                        _pr_list = (_pr if isinstance(_pr, list)
-                                    else (_pr or {}).get('data',
-                                          (_pr or {}).get('parameters', [])))
-                        # Filtro EXATO: base_name 'velocity_distance' + soma → a
-                        # distância total por banda (velocity_bandN_total_distance),
-                        # sem contagens de esforço nem métricas compostas.
-                        _vb_objs = [_it for _it in (_pr_list or [])
-                                    if isinstance(_it, dict)
-                                    and _it.get('base_name') == 'velocity_distance'
-                                    and _it.get('aggregation') == 'sum']
-                        _vb_objs.sort(key=lambda o: o.get('band', 0))
-                        _vb_slugs = [str(o.get('slug')) for o in _vb_objs
-                                     if o.get('slug')]
-                        st.caption(f"**{len(_vb_objs)}** bandas de distância "
-                                   "(base_name=velocity_distance, sum):")
-                        st.json({str(o.get('band')): o.get('slug') for o in _vb_objs}
-                                if _vb_objs else {"aviso": "nenhuma encontrada"})
-                    except Exception as _e_pr:
-                        st.write(f"/parameters erro: {_e_pr}")
-
-                    # 3) /stats — só os slugs LIMPOS; testa com/sem cached_stats ─
-                    st.markdown("**3) `/stats`** — distância por banda (slugs limpos)")
-                    _cand = (["total_distance"] + _vb_slugs) if _vb_slugs else \
-                            (["total_distance"] + [f"velocity_band{_i}_total_distance"
-                                                   for _i in range(1, 8)])
-                    st.caption("Pedindo: " + ", ".join(f"`{c}`" for c in _cand))
-                    _variantes = [
-                        ("cached_stats", {"group_by": ["athlete"], "parameters": _cand,
-                                          "source": "cached_stats"}),
-                        ("sem source",   {"group_by": ["athlete"], "parameters": _cand}),
-                    ]
-                    _ok_stats = False
-                    for _vlabel, _payload in _variantes:
-                        try:
-                            _stt = _diag_api.get_stats(_payload)
-                        except Exception as _e_st:
-                            st.write(f"[{_vlabel}] erro: {_e_st}")
-                            continue
-                        _stt_list = (_stt if isinstance(_stt, list)
-                                     else (_stt or {}).get('data', []))
-                        if _stt_list:
-                            _row0 = _stt_list[0]
-                            _row0p = (_row0.get('parameters', _row0)
-                                      if isinstance(_row0, dict) else _row0)
-                            st.caption(f"✅ [{_vlabel}] **{len(_stt_list)}** linha(s):")
-                            st.json(_row0p if isinstance(_row0p, dict) else _row0)
-                            _ok_stats = True
-                            break
-                        else:
-                            st.write(f"[{_vlabel}] → 0 linhas")
-                    if not _ok_stats:
-                        st.warning("Nenhuma variante do /stats retornou linhas — então "
-                                   "as distâncias por banda também não vêm por aqui.")
-
-        # ── Bandas de Aceleração — editor "Gen2Acceleration" ──────────────
-        # Mesmo raciocínio das bandas de velocidade: a API Connect v6 não expõe
-        # os cortes da tela "Bandas Globais → Gen2Acceleration", então o usuário
-        # define aqui os mesmos valores (m/s²). Fluem por _bandas_acc_ativas().
-        if not st.session_state.get('df_activities', pd.DataFrame()).empty and token:
-            with st.expander("🏷️ Bandas de Aceleração", expanded=False):
-                _az_src = st.session_state.get('acceleration_zones_source', 'default')
-                _az_src_txt = {
-                    'api':     "🛰️ **Buscado da sua conta via API** — bandas configuradas "
-                               "na conta Catapult (fonte primária).",
-                    'efforts': "🟢 **Derivado dos efforts da sua conta** "
-                               "(reconstruído a partir das acelerações reais por banda).",
-                    'manual':  "✏️ **Ajustado manualmente** por você.",
-                    'default': "⚪ **Padrão** (carregue uma atividade para obter os cortes "
-                               "reais da sua conta).",
-                }.get(_az_src, "")
-                st.caption(_az_src_txt)
-                st.caption(
-                    "Valores da tela **Bandas Globais → Gen2Acceleration** (m/s²). "
-                    "São **buscados da sua conta via API** quando disponíveis; caso "
-                    "contrário, **derivados dos efforts** da conta. Você pode **ajustar "
-                    "manualmente** abaixo — todo o app é recalculado."
-                )
-
-                _cur_az = (
-                    st.session_state.get('acceleration_zones_account')
-                    or _DEFAULT_ACCELERATION_ZONES
-                )
-                _df_edit_az = pd.DataFrame([
-                    {
-                        'Banda':       z.get('name', f'Banda {_i+1}'),
-                        'Mín (m/s²)':  round(float(z['min_ms2']), 2),
-                        'Máx (m/s²)':  round(float(z['max_ms2']), 2),
-                        'Cor':         z.get('color', '#888888'),
-                    }
-                    for _i, z in enumerate(_cur_az)
-                ])
-                _edited_az = st.data_editor(
-                    _df_edit_az,
-                    use_container_width=True, hide_index=True,
-                    num_rows="dynamic", key="editor_acc_zones",
-                    column_config={
-                        'Banda': st.column_config.TextColumn('Banda'),
-                        'Mín (m/s²)': st.column_config.NumberColumn(
-                            'Mín (m/s²)', min_value=-20.0, max_value=20.0, step=0.1, format="%.2f"),
-                        'Máx (m/s²)': st.column_config.NumberColumn(
-                            'Máx (m/s²)', min_value=-20.0, max_value=20.0, step=0.1, format="%.2f"),
-                        'Cor': st.column_config.TextColumn('Cor (hex)'),
-                    },
-                )
-
-                _cc_az_save, _cc_az_deriv, _cc_az_reset = st.columns(3)
-                with _cc_az_save:
-                    if st.button("💾 Salvar bandas", key="btn_save_acc_zones",
-                                 use_container_width=True):
-                        _new_az = []
-                        for _, _row in _edited_az.iterrows():
-                            try:
-                                _mn = float(_row['Mín (m/s²)'])
-                                _mx = float(_row['Máx (m/s²)'])
-                            except (TypeError, ValueError):
-                                continue
-                            _new_az.append({
-                                'name':    str(_row.get('Banda') or '').strip() or f'Banda {len(_new_az)+1}',
-                                'min_ms2': _mn,
-                                'max_ms2': _mx,
-                                'color':   str(_row.get('Cor') or '#888888').strip() or '#888888',
-                            })
-                        if _new_az:
-                            st.session_state['acceleration_zones_account'] = _new_az
-                            st.session_state['acceleration_zones_manual']  = True
-                            st.session_state['acceleration_zones_source']  = 'manual'
-                            st.success(f"✅ {len(_new_az)} bandas de aceleração salvas.")
-                            st.rerun()
-                        else:
-                            st.warning("Nenhuma banda válida para salvar.")
-                with _cc_az_deriv:
-                    if st.button("🔄 Re-derivar da conta", key="btn_rederiv_acc_zones",
-                                 use_container_width=True,
-                                 help="Descarta o ajuste manual e volta a derivar os "
-                                      "cortes dos efforts da conta. Para rebuscar as "
-                                      "bandas via API, reconecte com o token."):
-                        st.session_state.pop('acceleration_zones_manual', None)
-                        st.session_state.pop('acceleration_zones_from_api', None)
-                        st.session_state.pop('_bandas_deriv_key', None)
-                        st.rerun()
-                with _cc_az_reset:
-                    if st.button("↩️ Restaurar Catapult", key="btn_reset_acc_zones",
-                                 use_container_width=True,
-                                 help="Restaura os valores padrão Gen2Acceleration da Catapult."):
-                        st.session_state['acceleration_zones_account'] = _DEFAULT_ACCELERATION_ZONES[:]
-                        st.session_state['acceleration_zones_source']  = 'default'
-                        st.session_state.pop('acceleration_zones_manual', None)
-                        st.rerun()
 
         # ── Parâmetros disponíveis (FEATURE 6) ───────────────────────────
         _avail_params = st.session_state.get('available_params')
@@ -8846,100 +8323,18 @@ Escolha um ou mais atletas para análise simultânea.
             dados_posicao_por_periodo[periodo_nome] = dados_posicao
             dados_eventos_por_periodo[periodo_nome] = dados_eventos
 
-        # ── PRIMÁRIO: calibra os cortes das bandas de velocidade a partir dos
-        # RESULTADOS oficiais do OpenField (summary pré-computado, já baixado
-        # por atleta neste load). A Connect API v6 não expõe a CONFIG dos
-        # cortes, mas expõe as distâncias por banda que o próprio OpenField
-        # calcula com os cortes reais da conta — então recuperamos os cortes
-        # resolvendo, do sinal bruto, os limiares que reproduzem essas
-        # distâncias. 100% automático, via API, sem CSV. Roda uma vez por
-        # (token, atividade, períodos); respeita ajuste manual/persistido.
-        try:
-            _cal_key = (f"{st.session_state.get('_token_marker','')}"
-                        f"|{st.session_state.get('activity_id','')}"
-                        f"|{','.join(periodos_selecionados)}")
-            if (st.session_state.get('_bandas_calib_key') != _cal_key
-                    and not st.session_state.get('velocity_zones_manual')):
-                _sess_api = []
-                for _per_k in periodos_selecionados:
-                    _sensor_per = dados_sensor_por_atleta_por_periodo.get(_per_k, {})
-                    _pos_per    = dados_posicao_por_periodo.get(_per_k, {})
-                    for _atl_k, _pts in (_sensor_per or {}).items():
-                        _of_b = _bandas_vel_oficiais_do_summary(
-                            (_pos_per.get(_atl_k, {}) or {}).get('openfield_summary'))
-                        if not _of_b:
-                            continue
-                        _vel_k = [float(_p.get('v') or 0.0) * 3.6 for _p in (_pts or [])]
-                        if len(_vel_k) > 3000 and sum(_of_b) > 500:
-                            _sess_api.append((_vel_k, _of_b))
-                if len(_sess_api) >= 3:
-                    _cuts_api = _mtr.calibrate_velocity_cutoffs(_sess_api)
-                    # Sanidade: 5 cortes monotônicos em faixa plausível (2–36 km/h).
-                    _ok_cuts = (len(_cuts_api) == 5
-                                and all(2.0 <= _c <= 36.0 for _c in _cuts_api)
-                                and all(_cuts_api[_i] > _cuts_api[_i-1]
-                                        for _i in range(1, 5)))
-                    if _ok_cuts:
-                        _edges_api = [0.0] + list(_cuts_api) + [45.0]
-                        _zones_api = [{
-                            'name':   _NOMES_BANDA_VEL_DEFAULT.get(_i + 1, f'B{_i+1}'),
-                            'min_ms': _edges_api[_i] / 3.6,
-                            'max_ms': _edges_api[_i + 1] / 3.6,
-                            'color':  _CORES_BANDA_VEL_DEFAULT.get(_i + 1, '#888888'),
-                        } for _i in range(6)]
-                        st.session_state['velocity_zones_account'] = _zones_api
-                        st.session_state['velocity_zones_source']  = 'api'
-                        st.session_state['velocity_zones_from_api'] = True
-                        _salvar_zonas_calibradas(_zones_api)  # persiste p/ próximas sessões
-                        _diag_log('Bandas', f"Cortes de velocidade calibrados "
-                                  f"AUTOMATICAMENTE via API ({len(_sess_api)} atletas): "
-                                  + " | ".join(f"{_c:.1f}" for _c in _cuts_api)
-                                  + " km/h (a partir do summary oficial da conta)")
-                    else:
-                        _diag_log('Bandas', "Calibração automática via API "
-                                  "descartada (cortes fora de faixa plausível) — "
-                                  "usando derivação por efforts")
-                elif st.session_state.get('velocity_zones_source', 'default') in ('default', 'efforts'):
-                    _diag_log('Bandas', "Summary da conta não expõe distâncias por "
-                              "banda — calibração automática indisponível; usando "
-                              "derivação por efforts")
-                st.session_state['_bandas_calib_key'] = _cal_key
-        except Exception:
-            pass
+        # (Removido) Calibração automática das bandas de velocidade. Confirmou-se
+        # que a Connect API v6 não expõe os limiares nem as distâncias por banda
+        # (nem /velocity_zones, nem summary, nem /stats). O app usa limiares
+        # FIXOS e documentados (_DEFAULT_VELOCITY_ZONES, padrão da literatura) —
+        # instrumento determinístico, requisito para a validação científica.
 
-        # ── Deriva os cortes REAIS das bandas a partir dos efforts da conta ───
-        # A API v6 não expõe os cortes; os efforts trazem nº da banda +
-        # velocidade/aceleração reais, permitindo reconstruir os limites
-        # específicos deste token. Roda uma vez por (token, atividade, períodos)
-        # e respeita edição manual do usuário (não sobrescreve override manual).
-        try:
-            _deriv_key = (f"{st.session_state.get('_token_marker','')}"
-                          f"|{st.session_state.get('activity_id','')}"
-                          f"|{','.join(periodos_selecionados)}")
-            if st.session_state.get('_bandas_deriv_key') != _deriv_key:
-                _all_vel_eff, _all_acc_eff = {}, {}
-                for _dvel in dados_efforts_vel_por_periodo.values():
-                    for _an_e, _lst in (_dvel or {}).items():
-                        _all_vel_eff.setdefault(_an_e, []).extend(_lst or [])
-                for _dacc in dados_efforts_acc_por_periodo.values():
-                    for _an_e, _lst in (_dacc or {}).items():
-                        _all_acc_eff.setdefault(_an_e, []).extend(_lst or [])
-
-                _dz_vel = _derivar_zonas_velocidade(_all_vel_eff)
-                _dz_acc = _derivar_zonas_aceleracao(_all_acc_eff)
-                # Só deriva dos efforts quando a API NÃO forneceu as zonas e o
-                # usuário não ajustou manualmente (a conta/API tem prioridade).
-                if (_dz_vel and not st.session_state.get('velocity_zones_manual')
-                        and not st.session_state.get('velocity_zones_from_api')):
-                    st.session_state['velocity_zones_account'] = _dz_vel
-                    st.session_state['velocity_zones_source']  = 'efforts'
-                if (_dz_acc and not st.session_state.get('acceleration_zones_manual')
-                        and not st.session_state.get('acceleration_zones_from_api')):
-                    st.session_state['acceleration_zones_account'] = _dz_acc
-                    st.session_state['acceleration_zones_source']  = 'efforts'
-                st.session_state['_bandas_deriv_key'] = _deriv_key
-        except Exception:
-            pass
+        # (Removido) Derivação dos cortes a partir dos efforts. Inferir os
+        # limiares dos dados é uma forma de auto-calibração — inadequada para um
+        # instrumento de validação. O app usa os limiares FIXOS documentados
+        # (_DEFAULT_VELOCITY_ZONES / _DEFAULT_ACCELERATION_ZONES); quando a conta
+        # expõe as zonas por API (leitura limpa da configuração), essas têm
+        # prioridade — ver _zonas_conta_via_api na conexão.
 
         # Apagar container de loading e mostrar resumo compacto
         _ld_box.empty()
