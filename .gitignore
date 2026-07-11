@@ -36,3 +36,8 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Guias/utilitários do usuário (não são arquivos do app — não commitar)
+Guia_*.pdf
+User_Guide_*.pdf
+_gerar_guia_pdf.py
