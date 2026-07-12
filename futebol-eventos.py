@@ -596,9 +596,55 @@ def _excluir_venue(nome: str) -> None:
         pass
 
 
-# (Removido) Persistência de bandas calibradas por organização. Não há mais
-# calibração pelo usuário: o app usa limiares fixos documentados (padrão da
-# literatura), com leitura das zonas via API quando a conta as expõe.
+# ── Bandas DEFINIDAS PELO USUÁRIO (configuração, não calibração) ─────────────
+# A Connect API v6 não expõe os cortes das "Bandas Globais". Como o usuário
+# precisa reproduzir a configuração da sua conta OpenField, ele DIGITA os
+# limiares (velocidade km/h e aceleração m/s²) nos editores. Isso é
+# CONFIGURAÇÃO — como o próprio OpenField deixa configurar — e não fitagem ao
+# resultado. Persistimos por organização para o usuário definir uma única vez.
+
+def _bandas_file() -> str:
+    _mk = str(st.session_state.get('_org_marker', '') or '').strip()
+    _base = _os.path.dirname(_os.path.abspath(__file__))
+    return _os.path.join(_base, f"bandas_usuario_{_mk or 'default'}.json")
+
+
+def _salvar_bandas_usuario(vel=None, acc=None) -> None:
+    """Grava as bandas digitadas pelo usuário (mescla com o que já existir)."""
+    try:
+        _cur = _carregar_bandas_usuario() or {}
+        if vel is not None:
+            _cur['velocity_zones'] = vel
+        if acc is not None:
+            _cur['acceleration_zones'] = acc
+        _cur['saved_at'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+        with open(_bandas_file(), 'w', encoding='utf-8') as f:
+            json.dump(_cur, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _carregar_bandas_usuario():
+    """Retorna {'velocity_zones': [...], 'acceleration_zones': [...]} ou None."""
+    try:
+        with open(_bandas_file(), encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _excluir_bandas_usuario(qual='all') -> None:
+    """Remove bandas persistidas (qual='velocity'|'acceleration'|'all')."""
+    try:
+        if qual == 'all':
+            _os.remove(_bandas_file())
+            return
+        _cur = _carregar_bandas_usuario() or {}
+        _cur.pop('velocity_zones' if qual == 'velocity' else 'acceleration_zones', None)
+        with open(_bandas_file(), 'w', encoding='utf-8') as f:
+            json.dump(_cur, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 class CatapultAPI:
@@ -7336,9 +7382,21 @@ Escolha um ou mais atletas para análise simultânea.
                 except Exception:
                     pass
 
-                # (Removido) Carregamento de bandas calibradas persistidas: não
-                # há mais calibração pelo usuário. Fonte das zonas de velocidade:
-                # API da conta (se expuser) → senão, limiares fixos documentados.
+                # ── Bandas DEFINIDAS PELO USUÁRIO: prioridade máxima ──────────
+                # Se o usuário digitou/salvou os cortes da conta OpenField dele,
+                # eles valem sobre API/padrão (é a configuração escolhida por ele).
+                try:
+                    _bu = _carregar_bandas_usuario()
+                    if _bu and _bu.get('velocity_zones'):
+                        st.session_state['velocity_zones_account'] = _bu['velocity_zones']
+                        st.session_state['velocity_zones_manual'] = True
+                        st.session_state['velocity_zones_source'] = 'manual'
+                    if _bu and _bu.get('acceleration_zones'):
+                        st.session_state['acceleration_zones_account'] = _bu['acceleration_zones']
+                        st.session_state['acceleration_zones_manual'] = True
+                        st.session_state['acceleration_zones_source'] = 'manual'
+                except Exception:
+                    pass
 
         if not st.session_state.df_activities.empty and token:
             # ── P5: Diagnóstico da sessão — nada falha em silêncio ────────────
@@ -7852,37 +7910,112 @@ Escolha um ou mais atletas para análise simultânea.
             st.session_state['acceleration_zones_account'] = _DEFAULT_ACCELERATION_ZONES[:]
             st.session_state['acceleration_zones_source']  = 'default'
 
-        # ── Bandas de Velocidade / Aceleração — SOMENTE LEITURA ───────────
-        # O app usa limiares FIXOS e documentados (padrão da literatura). Não há
-        # edição nem calibração pelo usuário — instrumento determinístico para
-        # validação científica. Exibidos apenas para transparência. Quando a
-        # conta expõe as zonas pela API, elas são lidas na conexão (leitura da
-        # configuração, sem inferência).
+        # ── Bandas de Velocidade / Aceleração — EDITÁVEIS pelo usuário ─────
+        # A API não expõe os cortes das "Bandas Globais"; o usuário DIGITA aqui
+        # os limiares da sua conta OpenField. É configuração (não fitagem ao
+        # resultado). Após salvar, RECARREGUE a atividade: bandas de distância e
+        # esforços (contados por sinal) são recalculados com estes cortes.
         if not st.session_state.get('df_activities', pd.DataFrame()).empty and token:
-            with st.expander("🏷️ Bandas de Velocidade (fixas)", expanded=False):
-                _src_vz = st.session_state.get('velocity_zones_source', 'default')
-                st.caption("Limiares **fixos e documentados** (padrão da literatura "
-                           "de futebol). Sem edição/calibração pelo usuário · fonte: "
-                           f"`{_src_vz}`.")
+            with st.expander("🏷️ Bandas de Velocidade (editável)", expanded=False):
+                st.caption("Digite os limiares (km/h) da **sua conta OpenField**. "
+                           "Deixe o **Máx** da última banda em 45 (aberto). Ao "
+                           "**Salvar**, o app recalcula sozinho todas as análises. "
+                           "Documente estes valores no artigo.")
                 _cur_vz = (st.session_state.get('velocity_zones_account')
                            or _DEFAULT_VELOCITY_ZONES)
-                st.dataframe(pd.DataFrame([
-                    {'Banda': z.get('name', f'B{_i+1}'),
-                     'Mín (km/h)': round(float(z['min_ms']) * 3.6, 1),
-                     'Máx (km/h)': ('—' if z['max_ms'] >= 9000
-                                    else round(float(z['max_ms']) * 3.6, 1))}
-                    for _i, z in enumerate(_cur_vz)]),
-                    use_container_width=True, hide_index=True)
-            with st.expander("🏷️ Bandas de Aceleração (fixas)", expanded=False):
-                st.caption("Gen2Acceleration — limiares fixos (m/s²), sem edição.")
+                _edited_vz = st.data_editor(
+                    pd.DataFrame([
+                        {'Banda': z.get('name', f'B{_i+1}'),
+                         'Mín (km/h)': round(float(z['min_ms']) * 3.6, 2),
+                         'Máx (km/h)': (45.0 if z['max_ms'] >= 9000
+                                        else round(float(z['max_ms']) * 3.6, 2))}
+                        for _i, z in enumerate(_cur_vz)]),
+                    use_container_width=True, hide_index=True, num_rows="dynamic",
+                    key="editor_vel_zones",
+                    column_config={
+                        'Mín (km/h)': st.column_config.NumberColumn(
+                            min_value=0.0, max_value=60.0, step=0.1, format="%.2f"),
+                        'Máx (km/h)': st.column_config.NumberColumn(
+                            min_value=0.0, max_value=60.0, step=0.1, format="%.2f")})
+                _c1, _c2 = st.columns(2)
+                with _c1:
+                    if st.button("💾 Salvar bandas de velocidade",
+                                 key="btn_save_vz", use_container_width=True):
+                        _nz = []
+                        for _, _r in _edited_vz.iterrows():
+                            try:
+                                _mn, _mx = float(_r['Mín (km/h)']), float(_r['Máx (km/h)'])
+                            except (TypeError, ValueError):
+                                continue
+                            _nz.append({'name': str(_r.get('Banda') or f'B{len(_nz)+1}'),
+                                        'min_ms': _mn / 3.6, 'max_ms': _mx / 3.6,
+                                        'color': _CORES_BANDA_VEL_DEFAULT.get(len(_nz)+1, '#888888')})
+                        if _nz:
+                            st.session_state['velocity_zones_account'] = _nz
+                            st.session_state['velocity_zones_manual'] = True
+                            st.session_state['velocity_zones_source'] = 'manual'
+                            _salvar_bandas_usuario(vel=_nz)
+                            st.success("✅ Salvo — as análises são recalculadas "
+                                       "automaticamente com estas bandas.")
+                            st.rerun()
+                with _c2:
+                    if st.button("↩️ Restaurar padrão", key="btn_reset_vz",
+                                 use_container_width=True):
+                        _excluir_bandas_usuario('velocity')
+                        st.session_state['velocity_zones_account'] = _DEFAULT_VELOCITY_ZONES[:]
+                        st.session_state['velocity_zones_source'] = 'default'
+                        st.session_state.pop('velocity_zones_manual', None)
+                        st.session_state.pop('_ld_done_key', None)
+                        st.rerun()
+
+            with st.expander("🏷️ Bandas de Aceleração (editável)", expanded=False):
+                st.caption("Gen2Acceleration (m/s²): B1/B2/B3 de aceleração (valores +) "
+                           "e desaceleração (valores −). Ao **Salvar**, os esforços "
+                           "contados por sinal são recalculados automaticamente.")
                 _cur_az = (st.session_state.get('acceleration_zones_account')
                            or _DEFAULT_ACCELERATION_ZONES)
-                st.dataframe(pd.DataFrame([
-                    {'Banda': z.get('name', f'B{_i+1}'),
-                     'Mín (m/s²)': round(float(z['min_ms2']), 2),
-                     'Máx (m/s²)': round(float(z['max_ms2']), 2)}
-                    for _i, z in enumerate(_cur_az)]),
-                    use_container_width=True, hide_index=True)
+                _edited_az = st.data_editor(
+                    pd.DataFrame([
+                        {'Banda': z.get('name', f'B{_i+1}'),
+                         'Mín (m/s²)': round(float(z['min_ms2']), 2),
+                         'Máx (m/s²)': round(float(z['max_ms2']), 2)}
+                        for _i, z in enumerate(_cur_az)]),
+                    use_container_width=True, hide_index=True, num_rows="dynamic",
+                    key="editor_acc_zones",
+                    column_config={
+                        'Mín (m/s²)': st.column_config.NumberColumn(
+                            min_value=-20.0, max_value=20.0, step=0.1, format="%.2f"),
+                        'Máx (m/s²)': st.column_config.NumberColumn(
+                            min_value=-20.0, max_value=20.0, step=0.1, format="%.2f")})
+                _c3, _c4 = st.columns(2)
+                with _c3:
+                    if st.button("💾 Salvar bandas de aceleração",
+                                 key="btn_save_az", use_container_width=True):
+                        _na = []
+                        for _, _r in _edited_az.iterrows():
+                            try:
+                                _mn, _mx = float(_r['Mín (m/s²)']), float(_r['Máx (m/s²)'])
+                            except (TypeError, ValueError):
+                                continue
+                            _na.append({'name': str(_r.get('Banda') or f'B{len(_na)+1}'),
+                                        'min_ms2': _mn, 'max_ms2': _mx, 'color': '#888888'})
+                        if _na:
+                            st.session_state['acceleration_zones_account'] = _na
+                            st.session_state['acceleration_zones_manual'] = True
+                            st.session_state['acceleration_zones_source'] = 'manual'
+                            _salvar_bandas_usuario(acc=_na)
+                            st.session_state.pop('_ld_done_key', None)
+                            st.success("✅ Salvo. Recarregue a atividade para recalcular.")
+                            st.rerun()
+                with _c4:
+                    if st.button("↩️ Restaurar padrão", key="btn_reset_az",
+                                 use_container_width=True):
+                        _excluir_bandas_usuario('acceleration')
+                        st.session_state['acceleration_zones_account'] = _DEFAULT_ACCELERATION_ZONES[:]
+                        st.session_state['acceleration_zones_source'] = 'default'
+                        st.session_state.pop('acceleration_zones_manual', None)
+                        st.session_state.pop('_ld_done_key', None)
+                        st.rerun()
 
 
         # ── Parâmetros disponíveis (FEATURE 6) ───────────────────────────
