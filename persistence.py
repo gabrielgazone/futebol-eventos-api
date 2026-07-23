@@ -111,3 +111,27 @@ def _excluir_bandas_usuario(qual='all') -> None:
     _cur = _carregar_bandas_usuario() or {}
     _cur.pop('velocity_zones' if qual == 'velocity' else 'acceleration_zones', None)
     _get_store().set(_org_key('bandas_usuario'), _cur)
+
+
+import json  # (P4) prefs
+
+
+# (P4) preferências locais do usuário -> movidas do monólito
+_PREFS_FILE = _os.path.join(_os.path.expanduser("~"), ".futebol_prefs.json")
+
+
+def _carregar_prefs() -> dict:
+    """Carrega preferências salvas do usuário (arquivo local JSON)."""
+    try:
+        with open(_PREFS_FILE, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _salvar_prefs(prefs: dict) -> None:
+    """Persiste preferências do usuário em arquivo local JSON."""
+    try:
+        with open(_PREFS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(prefs, f, ensure_ascii=False, indent=2)
+    except Exception:
+        _applog.log_debug_exc()

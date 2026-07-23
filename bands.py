@@ -220,3 +220,134 @@ def _bandas_acc_ativas() -> dict:
             'color': z.get('color', '#FF6D00'),
         }
     return result if result else BANDAS_ACC
+
+
+import applog as _applog  # (P4)
+from config import _DEFAULT_VELOCITY_ZONES, _DEFAULT_ACCELERATION_ZONES  # (P4)
+
+
+# (P4) parsers de zonas da API -> movidos do monólito
+def _parse_api_velocity_zones(api_response):
+    """Converte resposta da API /velocity_zones para lista de dicts padronizados."""
+    if not api_response:
+        return _DEFAULT_VELOCITY_ZONES[:]
+    try:
+        zones_raw = (api_response if isinstance(api_response, list)
+                     else api_response.get('data', api_response.get('velocity_zones', [])))
+        if not zones_raw:
+            return _DEFAULT_VELOCITY_ZONES[:]
+        result = []
+        for z in zones_raw:
+            # Aceita vários formatos de chave da API Catapult
+            min_val = float(z.get('min_velocity',
+                            z.get('lower_threshold',
+                            z.get('min', 0))) or 0)
+            max_val = float(z.get('max_velocity',
+                            z.get('upper_threshold',
+                            z.get('max', 9999))) or 9999)
+            result.append({
+                'name':   z.get('name', z.get('label', '')),
+                'min_ms': min_val,
+                'max_ms': max_val,
+                'color':  z.get('color', '#888888'),
+            })
+        if not result:
+            return _DEFAULT_VELOCITY_ZONES[:]
+
+        # ── Auto-detecção de unidade: m/s ou km/h ─────────────────────────
+        # Se qualquer valor finito de max for > 20 → API retornou km/h.
+        # Sprint típico ≤ 35 km/h = 9.7 m/s; limiar 20 distingue com segurança.
+        _finite_maxes = [z['max_ms'] for z in result if z['max_ms'] < 9000]
+        if _finite_maxes and max(_finite_maxes) > 20:
+            # Converte km/h → m/s para padronizar com _DEFAULT_VELOCITY_ZONES
+            for z in result:
+                z['min_ms'] = z['min_ms'] / 3.6
+                if z['max_ms'] < 9000:
+                    z['max_ms'] = z['max_ms'] / 3.6
+
+        return result
+    except Exception:
+        return _DEFAULT_VELOCITY_ZONES[:]
+
+def _parse_api_acceleration_zones(api_response):
+    """Converte resposta da API /acceleration_zones para lista de dicts padronizados."""
+    if not api_response:
+        return _DEFAULT_ACCELERATION_ZONES[:]
+    try:
+        zones_raw = (api_response if isinstance(api_response, list)
+                     else api_response.get('data', []))
+        if not zones_raw:
+            return _DEFAULT_ACCELERATION_ZONES[:]
+        result = []
+        for z in zones_raw:
+            min_val = float(z.get('min_acceleration', z.get('min', 0)))
+            max_val = float(z.get('max_acceleration', z.get('max', 9999)))
+            result.append({
+                'name':    z.get('name', ''),
+                'min_ms2': min_val,
+                'max_ms2': max_val,
+                'color':   z.get('color', '#888888'),
+            })
+        return result if result else _DEFAULT_ACCELERATION_ZONES[:]
+    except Exception:
+        return _DEFAULT_ACCELERATION_ZONES[:]
+
+def _resp_tem_zonas(resp) -> bool:
+    """True se a resposta da API realmente traz uma lista de zonas (não vazia).
+    Evita aceitar como 'da conta' uma resposta vazia que o parser converteria
+    nos valores padrão."""
+    if isinstance(resp, list):
+        return len(resp) > 0
+    if isinstance(resp, dict):
+        for _k in ('data', 'velocity_zones', 'acceleration_zones', 'zones', 'items'):
+            _v = resp.get(_k)
+            if isinstance(_v, list) and _v:
+                return True
+    return False
+
+def _zonas_conta_via_api(api, team_ids):
+    """Busca as bandas configuradas NA CONTA via API (fonte primária).
+
+    Tenta o nível de conta e, como alternativa, o nível de equipe (onde a
+    Catapult costuma expor as 'Bandas Globais'). Retorna (vel_zones, acc_zones);
+    cada um é None quando a API não expõe os cortes (cai-se então na derivação
+    por efforts). Nunca lança exceção."""
+    vel = acc = None
+    try:
+        _rv = api.get_velocity_zones()
+        if _resp_tem_zonas(_rv):
+            _z = _parse_api_velocity_zones(_rv)
+            if _z and len(_z) >= 2:
+                vel = _z
+    except Exception:
+        _applog.log_debug_exc()
+    try:
+        _ra = api.get_acceleration_zones()
+        if _resp_tem_zonas(_ra):
+            _z = _parse_api_acceleration_zones(_ra)
+            if _z and len(_z) >= 2:
+                acc = _z
+    except Exception:
+        _applog.log_debug_exc()
+    for _tid in (team_ids or []):
+        if vel and acc:
+            break
+        if vel is None:
+            try:
+                _rv = api.get_team_velocity_zones(_tid)
+                if _resp_tem_zonas(_rv):
+                    _z = _parse_api_velocity_zones(_rv)
+                    if _z and len(_z) >= 2:
+                        vel = _z
+            except Exception:
+                _applog.log_debug_exc()
+        if acc is None:
+            try:
+                _ra = api.get_team_acceleration_zones(_tid)
+                if _resp_tem_zonas(_ra):
+                    _z = _parse_api_acceleration_zones(_ra)
+                    if _z and len(_z) >= 2:
+                        acc = _z
+            except Exception:
+                _applog.log_debug_exc()
+    return vel, acc
