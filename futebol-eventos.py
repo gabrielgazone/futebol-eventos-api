@@ -84,20 +84,22 @@ def _vmax_individual_kmh(atleta, vel_series=None) -> float:
             pass
     return v if v >= 10.0 else 0.0
 
-SERVERS = {
-    "Américas (US)": "https://connect-us.catapultsports.com/api/v6",
-    "Europa/Oriente Médio/África (EU)": "https://connect-eu.catapultsports.com/api/v6",
-    "Ásia-Pacífico (AU)": "https://connect-au.catapultsports.com/api/v6",
-    "China (CN)": "https://connect-cn.catapultsports-cn.com/api/v6",
-}
+# (P4) constantes -> config.py
+from config import (  # noqa: E402
+    SERVERS,
+    LANGUAGES,
+    BANDAS_VEL,
+    BANDAS_ACC,
+    _DEFAULT_VELOCITY_ZONES,
+    _DEFAULT_ACCELERATION_ZONES,
+    _ZONES_SCHEMA_VERSION,
+    _NOMES_BANDA_VEL_DEFAULT,
+    _CORES_BANDA_VEL_DEFAULT,
+    _ACC_BAND_MAP,
+    FUTEBOL_EVENTS_CONFIG,
+)
 
 # ==================== SISTEMA DE IDIOMAS ====================
-LANGUAGES = {
-    "🇧🇷 Português (Brasil)": "pt",
-    "🇺🇸 English (US)":       "en",
-    "🇲🇽 Español (Latino)":   "es",
-    "🇫🇷 Français":           "fr",
-}
 
 TRANSLATIONS = {
     "pt": {
@@ -917,14 +919,6 @@ def plotar_heatmap_presenca_campo(x_coords, y_coords, athlete_name):
 # e /teams/{id} só traz dwell_time e rhie_bands, não os cortes em km/h).
 # Por isso estes valores espelham exatamente a tela "Bandas Globais" e podem
 # ser ajustados pelo usuário na barra lateral.
-BANDAS_VEL = {
-    1: {'label': 'B1 — 0-7 km/h (Caminhada)',           'min': 0,     'max': 7,     'color': '#2196F3'},
-    2: {'label': 'B2 — 7-14.4 km/h (Trote)',            'min': 7,     'max': 14.4,  'color': '#4CAF50'},
-    3: {'label': 'B3 — 14.4-19.8 km/h (Corrida)',       'min': 14.4,  'max': 19.8,  'color': '#CDDC39'},
-    4: {'label': 'B4 — 19.8-25.2 km/h (Corrida Intensa)', 'min': 19.8, 'max': 25.2, 'color': '#FF9800'},
-    5: {'label': 'B5 — 25.2-29.9 km/h (Alta Velocidade)', 'min': 25.2, 'max': 29.9, 'color': '#FF5722'},
-    6: {'label': 'B6 — 29.9-45 km/h (Sprint)',          'min': 29.9,  'max': 45,    'color': '#F44336'},
-}
 # Espelha as "Bandas Globais → Gen2Acceleration" da conta Catapult (m/s²).
 # A API Connect v6 também NÃO expõe estes cortes — são configurados manualmente
 # na barra lateral, mesmo raciocínio das bandas de velocidade.
@@ -933,28 +927,12 @@ BANDAS_VEL = {
 # As caixas 4 e 5 (-2 a 2 m/s² · zona leve/neutra) NÃO são exibidas.
 #   Aceleração   B1 = caixa 6 (2 a 3)   · B2 = caixa 7 (3 a 4)   · B3 = caixa 8 (4 a 10)
 #   Desaceleração B1 = caixa 3 (-3 a -2) · B2 = caixa 2 (-4 a -3) · B3 = caixa 1 (-10 a -4)
-BANDAS_ACC = {
-    'A1': {'label': 'Aceleração B1 — 2 a 3 m/s²',     'min': 2,    'max': 3,   'color': '#69F0AE'},
-    'A2': {'label': 'Aceleração B2 — 3 a 4 m/s²',     'min': 3,    'max': 4,   'color': '#43A047'},
-    'A3': {'label': 'Aceleração B3 — 4 a 10 m/s²',    'min': 4,    'max': 10,  'color': '#00C853'},
-    'D1': {'label': 'Desaceleração B1 — -3 a -2 m/s²', 'min': -3,  'max': -2,  'color': '#FFD180'},
-    'D2': {'label': 'Desaceleração B2 — -4 a -3 m/s²', 'min': -4,  'max': -3,  'color': '#FF6D00'},
-    'D3': {'label': 'Desaceleração B3 — -10 a -4 m/s²','min': -10, 'max': -4,  'color': '#B71C1C'},
-}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # BANDAS DE VELOCIDADE — helpers de zonas individuais / da conta
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Espelha as "Bandas Globais" da conta Catapult (km/h convertido p/ m/s).
-_DEFAULT_VELOCITY_ZONES = [
-    {'name': 'B1 — Caminhada',        'min_ms': 0/3.6,     'max_ms': 7/3.6,    'color': '#2196F3'},
-    {'name': 'B2 — Trote',            'min_ms': 7/3.6,     'max_ms': 14.4/3.6, 'color': '#4CAF50'},
-    {'name': 'B3 — Corrida',          'min_ms': 14.4/3.6,  'max_ms': 19.8/3.6, 'color': '#CDDC39'},
-    {'name': 'B4 — Corrida Intensa',  'min_ms': 19.8/3.6,  'max_ms': 25.2/3.6, 'color': '#FF9800'},
-    {'name': 'B5 — Alta Velocidade',  'min_ms': 25.2/3.6,  'max_ms': 29.9/3.6, 'color': '#FF5722'},
-    {'name': 'B6 — Sprint',           'min_ms': 29.9/3.6,  'max_ms': 45/3.6,   'color': '#F44336'},
-]
 
 
 def _parse_api_velocity_zones(api_response):
@@ -1015,20 +993,11 @@ def get_zones_for_athlete(athlete_name):
 # Espelha "Bandas Globais → Gen2Acceleration" (m/s²), dividido em ACELERAÇÃO e
 # DESACELERAÇÃO. Apenas as 6 bandas relevantes da nuvem (caixas 6,7,8 e 3,2,1);
 # a zona leve/neutra (-2 a 2 · caixas 4 e 5) é ignorada.
-_DEFAULT_ACCELERATION_ZONES = [
-    {'name': 'Aceleração B1',    'min_ms2': 2.0,   'max_ms2': 3.0,   'color': '#69F0AE'},
-    {'name': 'Aceleração B2',    'min_ms2': 3.0,   'max_ms2': 4.0,   'color': '#43A047'},
-    {'name': 'Aceleração B3',    'min_ms2': 4.0,   'max_ms2': 10.0,  'color': '#00C853'},
-    {'name': 'Desaceleração B1', 'min_ms2': -3.0,  'max_ms2': -2.0,  'color': '#FFD180'},
-    {'name': 'Desaceleração B2', 'min_ms2': -4.0,  'max_ms2': -3.0,  'color': '#FF6D00'},
-    {'name': 'Desaceleração B3', 'min_ms2': -10.0, 'max_ms2': -4.0,  'color': '#B71C1C'},
-]
 
 # Versão da estrutura das bandas. Ao mudar a forma das bandas padrão (ex.: de 8
 # para 6 bandas de aceleração), incrementar este valor força a reinicialização
 # das zonas em session_state, descartando valores antigos em cache de sessões
 # que ficaram abertas antes da atualização.
-_ZONES_SCHEMA_VERSION = "2026-06-04-acc6"
 
 
 def _parse_api_acceleration_zones(api_response):
@@ -1118,14 +1087,6 @@ def _zonas_conta_via_api(api, team_ids):
 
 
 # ── Helpers para nomes/cores padrão por índice de banda ──────────────────────
-_NOMES_BANDA_VEL_DEFAULT = {
-    1: 'Caminhada', 2: 'Trote', 3: 'Corrida',
-    4: 'Corrida Intensa', 5: 'Alta Velocidade', 6: 'Sprint',
-}
-_CORES_BANDA_VEL_DEFAULT = {
-    1: '#2196F3', 2: '#4CAF50', 3: '#CDDC39',
-    4: '#FF9800', 5: '#FF5722', 6: '#F44336',
-}
 
 
 def _bandas_vel_ativas() -> dict:
@@ -1263,8 +1224,6 @@ def _rotulo_banda_vel(band_raw) -> str:
 #   Aceleração   → caixas 6,7,8 = A1,A2,A3
 #   Desaceleração → caixas 3,2,1 = D1,D2,D3
 # As caixas 4 e 5 (zona leve/neutra) não têm chave (não são exibidas).
-_ACC_BAND_MAP = {6: 'A1', 7: 'A2', 8: 'A3',
-                 3: 'D1', 2: 'D2', 1: 'D3'}
 # Mapa inverso (chave interna → número da caixa), usado no fallback local.
 _ACC_KEY_TO_NUM = {v: k for k, v in _ACC_BAND_MAP.items()}
 
@@ -1341,48 +1300,6 @@ def _bandas_acc_ativas() -> dict:
 
 
 # ── Configuração dos tipos de eventos futebol ──────────────────────────────
-FUTEBOL_EVENTS_CONFIG = {
-    'football_kick': {
-        'label': '🟡 Chute',
-        'color': '#FFEB3B', 'marker': 'star', 'size': 14,
-        'attrs': ['confidence', 'class'],
-    },
-    'football_header': {
-        'label': '🔵 Cabeceio',
-        'color': '#2196F3', 'marker': 'diamond', 'size': 13,
-        'attrs': ['confidence'],
-    },
-    'football_tackle': {
-        'label': '🔴 Disputa/Tackle',
-        'color': '#F44336', 'marker': 'x', 'size': 12,
-        'attrs': ['confidence', 'duration'],
-    },
-    'football_cross': {
-        'label': '🟠 Cruzamento',
-        'color': '#FF9800', 'marker': 'triangle-up', 'size': 13,
-        'attrs': ['confidence', 'class'],
-    },
-    'ima_impact': {
-        'label': '⚪ Impacto (IMA)',
-        'color': '#90CAF9', 'marker': 'diamond', 'size': 11,
-        'attrs': ['impact', 'direction'],
-    },
-    'ima_jump': {
-        'label': '🟢 Salto (IMA)',
-        'color': '#4CAF50', 'marker': 'triangle-up', 'size': 11,
-        'attrs': ['height'],
-    },
-    'running_symmetry': {
-        'label': '🔄 Simetria de Corrida',
-        'color': '#CE93D8', 'marker': 'circle', 'size': 10,
-        'attrs': ['left_right_ratio', 'asymmetry_index'],
-    },
-    'ima_acceleration': {
-        'label': '⚡ Acc. Explosiva (IMA)',
-        'color': '#FFD54F', 'marker': 'arrow-up', 'size': 12,
-        'attrs': ['direction', 'magnitude'],
-    },
-}
 
 def extrair_eventos_futebol(response_data):
     """Extrai eventos futebol da resposta da API /events."""
