@@ -1,50 +1,56 @@
 # Arquitetura & Modularização (P4)
 
-O app nasceu como um único arquivo (`futebol-eventos.py`, ~15,6 mil linhas). P4 é
-o processo — **incremental e testado** — de extrair responsabilidades em módulos
-puros/coesos, reduzindo o monólito sem quebrar produção. **Toda a infraestrutura
-foi extraída** (10 módulos); o pacote `viz/` (camada de UI) foi iniciado.
+O app nasceu como um único arquivo (`futebol-eventos.py`, **~15,6 mil linhas**)
+que misturava tudo. P4 extraiu — **incremental e testado, E2E verde a cada
+commit** — todas as responsabilidades separáveis em módulos coesos.
+
+**Resultado: 14 módulos, monólito reduzido a ~12,6 mil linhas (−19%).** Toda a
+infraestrutura e as três `render_*` autônomas estão fora do arquivo principal.
 
 ## Módulos extraídos
 
-| Módulo | Responsabilidade | Acoplamento | Testes |
-|---|---|---|---|
-| `metrics.py` | Motor de cálculo (distância, bandas, PlayerLoad, ACWR, calibração) | Puro (numpy) | `tests/test_metrics.py` |
-| `validation.py` | Concordância / Bland-Altman (estudo de validação) | Puro (numpy/pandas) | `tests/test_validation.py` |
-| `storage.py` | Persistência chave→valor (local + Supabase) | Puro | `tests/test_storage.py` |
-| `applog.py` | Logging estruturado | Puro (stdlib) | `tests/test_applog.py` |
-| `catapult_api.py` | Cliente HTTP da Catapult Connect v6 (`_api_fetch` + `CatapultAPI`) | streamlit (cache) + requests | `tests/test_e2e_load.py` |
-| `ui_theme.py` | CSS global + helpers de design (`_hr`, `_badge`) | streamlit (markup) | `tests/test_e2e_load.py` |
-| `diagnostics.py` | Selo de proveniência + diagnóstico da sessão (`_diag_log`) | streamlit (sessão) | `tests/test_e2e_load.py` |
-| `config.py` | Constantes (servidores, i18n LANGUAGES, bandas, Gen2, eventos) | Puro (dados) | — |
-| `i18n.py` | Traduções (`TRANSLATIONS`) + `t()` | streamlit (sessão) | `tests/test_e2e_load.py` |
-| `viz/monitoramento.py` | Aba Monitoramento (ACWR/monotonia/strain) — 1ª `render_*` | streamlit + metrics/diagnostics/i18n | `tests/test_e2e_load.py` |
+| Módulo | Responsabilidade | Acoplamento |
+|---|---|---|
+| `metrics.py` | Motor de cálculo (distância, bandas, PlayerLoad, ACWR, calibração) | Puro (numpy) |
+| `validation.py` | Concordância / Bland-Altman (estudo de validação) | Puro |
+| `storage.py` | Persistência chave→valor (local + Supabase) | Puro |
+| `applog.py` | Logging estruturado | Puro (stdlib) |
+| `config.py` | Constantes (servidores, i18n LANGUAGES, bandas, Gen2, eventos) | Puro (dados) |
+| `catapult_api.py` | Cliente HTTP da Catapult Connect v6 | streamlit (cache) + requests |
+| `i18n.py` | Traduções (`TRANSLATIONS`) + `t()` | streamlit (sessão) |
+| `diagnostics.py` | Selo de proveniência + diagnóstico da sessão (`_diag_log`) | streamlit (sessão) |
+| `persistence.py` | Store + venues + bandas do usuário (sobre `storage`) | streamlit + storage |
+| `bands.py` | Cortes ativos de banda + rótulos/formatação | streamlit + config |
+| `ui_theme.py` | CSS global + helpers de design | streamlit |
+| `viz/monitoramento.py` | Aba Monitoramento (ACWR/monotonia/strain) | viz |
+| `viz/tatica_coletiva.py` | Aba Tática Coletiva (Pitch Control, Voronoi, replay 3D) | viz |
+| `viz/export_artigo.py` | Aba Exportação para Artigo (tabela + validação) | viz |
 
-Resultado: monólito de ~15,6k → ~14,5k linhas, agora com **fronteiras de módulo
-limpas**. O que sobra em `futebol-eventos.py` é a camada de **UI/render**
-(demais `render_*` + seções das abas) e a **orquestração de estado**.
+Testes: `tests/test_{metrics,validation,storage,applog}.py` (unitários dos
+módulos puros) + `tests/test_e2e_load.py` (`AppTest` que renderiza o app inteiro
+— cobre os módulos streamlit-aware e as `render_*`).
 
-## Restante (mesma receita, mecânica e comprovada)
+## O que resta no `futebol-eventos.py`
 
-O pacote `viz/` está estabelecido e o padrão validado pelo E2E. As demais
-`render_*` seguem idênticas — mover uma por commit, mantendo o E2E verde:
+A função `main()` — **orquestração + as seções inline das abas** que ainda vivem
+dentro dela (Resumo, Campo & GPS com 6 subabas, Ao Vivo). Diferente das 3
+`render_*` autônomas, essas seções são **código inline no corpo de `main()`**,
+lendo dezenas de variáveis locais (dados por período/atleta, ids, seleção…).
 
-1. **`viz/tatica_coletiva.py`** e **`viz/export_artigo.py`** — as outras duas
-   `render_*` autônomas. Antes, extrair os helpers de banda que elas usam
-   (`_bandas_vel_ativas`/`_bandas_acc_ativas`) para um `bands.py`.
-2. **Seções inline das abas** (Resumo, Campo, WCS, Neuromuscular, Janelas,
-   Acc-Vel, FC) — hoje dentro de `main()`; transformar cada uma em
-   `render_*(...)` e mover para `viz/`.
-3. **`state.py`** (opcional) — modelo central do `st.session_state`
-   (dataclass + versão de schema) para reduzir bugs de estado.
-4. **`data_layer.py`** (opcional) — repositório sobre `catapult_api` com cache
-   TTL, retry/backoff e cache do sinal 10 Hz em parquet (ver P7).
+## Refinamento final opcional (split das abas inline)
 
-## Regras da modularização
+Mover essas seções para `viz/` exige, antes, **refatorar `main()`**: transformar
+cada bloco `with aba[i]:` numa função `render_x(dados…)` com parâmetros
+explícitos, e só então movê-la. É a maior e mais acoplada fatia; deve ser feita
+**uma aba por commit, com o E2E verde** (que já pegou regressões reais nesta
+rodada). Não é pré-requisito de boa arquitetura — o `main()` é legitimamente a
+camada de página/orquestração de um app Streamlit.
 
-- **Uma extração por commit**, com `tests/` + E2E verdes antes de push.
-- Módulos novos **puros sempre que possível** (sem `import streamlit`), para
-  serem testáveis isoladamente. Quando o Streamlit for inevitável (cache,
-  sessão), isolar num módulo "streamlit-aware" claramente identificado.
-- Nada de dependência reversa: um módulo extraído **não** importa
-  `futebol-eventos.py`.
+## Regras da modularização (seguidas em todos os 14 commits)
+
+- **Uma extração por commit**, com `tests/` + E2E verdes antes do push.
+- Módulos **puros quando possível**; quando o Streamlit é inevitável
+  (cache/sessão), o módulo é "streamlit-aware" e declarado como tal.
+- **Sem dependência reversa**: nenhum módulo importa `futebol-eventos.py`.
+- Constantes/estado compartilhados vão para `config`/`persistence`/`bands`,
+  nunca duplicados nem presos num módulo de UI.
