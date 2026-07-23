@@ -29,6 +29,15 @@ import json
 import os
 from typing import Any, Optional
 
+try:
+    import applog as _applog
+except Exception:                                 # pragma: no cover
+    class _applog:                                # fallback silencioso
+        @staticmethod
+        def log_exc(ctx=""): pass
+        @staticmethod
+        def log_warn(msg=""): pass
+
 
 class BaseStore:
     durable: bool = False
@@ -67,6 +76,7 @@ class LocalJSONStore(BaseStore):
                 json.dump(value, f, ensure_ascii=False, indent=2)
             return True
         except Exception:
+            _applog.log_exc(f"LocalJSONStore.set falhou (key={key})")
             return False
 
     def delete(self, key: str) -> bool:
@@ -119,8 +129,11 @@ class SupabaseStore(BaseStore):
                 self.endpoint,
                 headers={**self._headers, "Prefer": "resolution=merge-duplicates"},
                 json={"key": key, "value": value}, timeout=self.timeout)
+            if r.status_code not in (200, 201, 204):
+                _applog.log_warn(f"SupabaseStore.set HTTP {r.status_code} (key={key})")
             return r.status_code in (200, 201, 204)
         except Exception:
+            _applog.log_exc(f"SupabaseStore.set falhou (key={key})")
             return False
 
     def delete(self, key: str) -> bool:

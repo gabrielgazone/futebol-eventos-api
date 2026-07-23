@@ -31,6 +31,7 @@ _campo_component = st.components.v1.declare_component("campo_interativo_v1", pat
 import metrics as _mtr          # noqa: E402
 import validation as _valmod    # noqa: E402
 import storage as _storage      # noqa: E402  (P2: persistência durável)
+import applog as _applog        # noqa: E402  (P3: logging estruturado)
 
 # (Cloud) Após um deploy, o Streamlit Cloud reexecuta o script principal mas
 # pode manter os módulos locais ANTIGOS em cache no sys.modules — foi a causa
@@ -509,7 +510,8 @@ def _api_fetch(base_url: str, token: str, path: str,
                          timeout=60)
         if r.status_code == 200:
             return r.json()
-        # Salva o status de erro para exibir ao usuário
+        # Salva o status de erro para exibir ao usuário + loga (P3).
+        _applog.log_warn(f"API {r.status_code} em GET /{path}")
         try:
             import streamlit as _st_fetch
             _st_fetch.session_state['_api_last_err'] = r.status_code
@@ -517,6 +519,7 @@ def _api_fetch(base_url: str, token: str, path: str,
             pass
         return None
     except Exception as _exc:
+        _applog.log_exc(f"Falha de rede em GET /{path}")   # traceback nos logs
         try:
             import streamlit as _st_fetch
             _st_fetch.session_state['_api_last_err'] = str(_exc)
@@ -15535,5 +15538,20 @@ Escolha um ou mais atletas para análise simultânea.
         st.info("👈 Selecione uma atividade, período(s) e clique em 'Buscar Atletas da Atividade'")
 
 if __name__ == "__main__":
-    main()
+    # (P3) Rede de segurança: qualquer erro não tratado é REGISTRADO com
+    # traceback nos logs do servidor e mostrado de forma amigável — em vez de
+    # sumir ou virar um traceback cru na tela.
+    try:
+        main()
+    except Exception:
+        _applog.log_exc("Erro não tratado em main()")
+        try:
+            st.error("⚠️ Ocorreu um erro inesperado. A equipe foi notificada "
+                     "pelos logs. Recarregue a página; se persistir, reporte ao "
+                     "suporte com o horário.")
+            with st.expander("Detalhes técnicos"):
+                import traceback as _tb
+                st.code(_tb.format_exc())
+        except Exception:
+            raise
     
