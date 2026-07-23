@@ -13,8 +13,11 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 
+import applog as _applog
 from diagnostics import _diag_log
 from persistence import _carregar_venues
+from field import gps_para_campo_coords
+from config import _TATICA_PALETA
 
 
 def _tatica_cor_atleta(i: int) -> str:

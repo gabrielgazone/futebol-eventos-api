@@ -10,6 +10,7 @@ from __future__ import annotations
 import streamlit as st
 import pandas as pd
 import numpy as np
+import plotly.graph_objects as go
 
 import metrics as _mtr
 from diagnostics import _diag_log

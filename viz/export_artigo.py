@@ -9,10 +9,14 @@ from __future__ import annotations
 
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
 
+import applog as _applog
 import metrics as _mtr
 import validation as _valmod
-from bands import _bandas_vel_ativas, _bandas_acc_ativas, _fmt_num_banda
+from bands import (_bandas_vel_ativas, _bandas_acc_ativas, _fmt_num_banda,
+                   _ACC_KEY_TO_NUM)
+from analysis import acc_series_from_vel, get_min_dur_s
 from diagnostics import _diag_log
 from config import _CHAVE_COMBINADO
 

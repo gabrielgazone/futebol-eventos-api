@@ -120,3 +120,52 @@ FUTEBOL_EVENTS_CONFIG = {
         'attrs': ['direction', 'magnitude'],
     },
 }
+
+
+# (P4) constantes de UI/paleta migradas do monólito
+_ATHLETE_PALETTE = [
+    '#2196F3','#4CAF50','#FF9800','#E91E63','#9C27B0',
+    '#00BCD4','#F44336','#FFEB3B','#26A69A','#78909C',
+    '#AB47BC','#EC407A','#66BB6A','#FFA726','#42A5F5',
+    '#EF5350','#26C6DA','#D4E157','#8D6E63','#5C6BC0',
+]
+
+_POSICAO_GRUPOS = {
+    'Goleiro':      {'tags': ['GK','GR','GOL','GOLEIRO','GOALKEEPER','KEEPER','POR','PORTERO','ARQUEIRO'],    'h': 0.14},
+    'Defensor':     {'tags': ['CB','ZAG','LD','LE','RB','LB','DEF','DEFENSOR','ZAGUEIRO','LATERAL','BACK'],  'h': 0.60},
+    'Meio-campo':   {'tags': ['CM','CDM','VOL','MC','MCD','MEI','MED','VOLANTE','MEDIO','MEIA','MIDFIELD'],  'h': 0.35},
+    'Ala/Extremo':  {'tags': ['LW','RW','PE','PD','ALA','EXT','ALE','ALD','PONTA','WINGER','EXTREMO'],      'h': 0.08},
+    'Atacante':     {'tags': ['ST','CF','CAM','SS','CA','SA','AT','C9','ATACANTE','CENTROAVANTE','STRIKER','FORWARD'], 'h': 0.02},
+}
+
+_EV_ICONES = {
+    'Goal':          '⚽', 'Gol': '⚽', 'goal': '⚽',
+    'Card':          '🟨', 'Cartão': '🟨', 'Yellow Card': '🟨', 'Red Card': '🟥',
+    'Substitution':  '🔄', 'Substituição': '🔄',
+    'Shot':          '🎯', 'Chute': '🎯', 'Finalização': '🎯',
+    'Foul Committed':'🤚', 'Falta': '🤚',
+    'Offside':       '🚩', 'Impedimento': '🚩',
+    'Save':          '🧤',
+    'Corner':        '🏳️', 'Escanteio': '🏳️',
+    'Free Kick':     '⚡',
+    'Penalty':       '🎯', 'Pênalti': '🎯',
+}
+
+_TATICA_PALETA = [
+    '#FF5252', '#448AFF', '#FFD740', '#69F0AE', '#E040FB', '#FF6E40',
+    '#18FFFF', '#B2FF59', '#FF4081', '#40C4FF', '#EEFF41', '#FFAB40',
+    '#7C4DFF', '#64FFDA', '#F50057', '#00B0FF', '#76FF03', '#FF3D00',
+    '#D500F9', '#1DE9B6', '#C6FF00', '#FF9100', '#3D5AFE', '#00E5FF',
+]
+
+_METRICAS_SUM = {
+    'Duração (min)', 'Distância (m)', 'Dist. 19-24 km/h (m)',
+    'Dist. > 19 km/h (m)', 'Dist. > 24 km/h (m)', 'PlayerLoad',
+    'Sprints (>24 km/h)', 'Esforços Alta Int.', 'Acc 2-3 (m/s²)',
+    'Dcc 2-3 (m/s²)', 'Acelerações (>3 m/s²)', 'Desacelerações (<-3 m/s²)',
+    'RHIE Blocos', 'Total Pontos',
+}
+
+_METRICAS_MAX = {
+    'Velocidade Máx (km/h)', 'FC Máx (bpm)', 'Acc Max (m/s²)', 'Dcc Max (m/s²)',
+}

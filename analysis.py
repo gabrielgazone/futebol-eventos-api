@@ -7,19 +7,25 @@ gráficos de velocidade/aceleração/intensidade. Depende de módulos já extra�
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from scipy.signal import savgol_filter
 
+import applog as _applog
 import metrics as _mtr
-from bands import _bandas_vel_ativas, _bandas_acc_ativas, _fmt_num_banda
+from bands import (_bandas_vel_ativas, _bandas_acc_ativas, _fmt_num_banda,
+                   _rotulo_banda_vel, _rotulo_banda_acc, _ACC_KEY_TO_NUM)
 from diagnostics import _diag_log, _selo_fonte
 from config import (
     BANDAS_VEL, BANDAS_ACC, _ACC_BAND_MAP, _CHAVE_COMBINADO,
     _DEFAULT_MIN_DUR_S, _DEFAULT_MIN_DUR_VEL_S,
     _DEFAULT_VELOCITY_ZONES, _DEFAULT_ACCELERATION_ZONES,
     _NOMES_BANDA_VEL_DEFAULT, _CORES_BANDA_VEL_DEFAULT,
+    _METRICAS_SUM, _METRICAS_MAX,
 )
 
 
