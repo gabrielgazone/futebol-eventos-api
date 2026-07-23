@@ -9,6 +9,10 @@ sem Streamlit — importado de volta pelo app pelos mesmos nomes.
 # Chave do período sintético "combinado" (soma de todos os períodos).
 _CHAVE_COMBINADO = '📊 Períodos Combinados'
 
+# Durações mínimas padrão de esforço (s).
+_DEFAULT_MIN_DUR_S     = 0.6   # acc / dec
+_DEFAULT_MIN_DUR_VEL_S = 1.0   # esforços de velocidade
+
 SERVERS = {
     "Américas (US)": "https://connect-us.catapultsports.com/api/v6",
     "Europa/Oriente Médio/África (EU)": "https://connect-eu.catapultsports.com/api/v6",
