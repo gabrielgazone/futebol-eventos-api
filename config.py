@@ -6,6 +6,9 @@ aceleração padrão, mapeamentos Gen2 e config de eventos de futebol. Sem lógi
 sem Streamlit — importado de volta pelo app pelos mesmos nomes.
 """
 
+# Chave do período sintético "combinado" (soma de todos os períodos).
+_CHAVE_COMBINADO = '📊 Períodos Combinados'
+
 SERVERS = {
     "Américas (US)": "https://connect-us.catapultsports.com/api/v6",
     "Europa/Oriente Médio/África (EU)": "https://connect-eu.catapultsports.com/api/v6",
