@@ -30,6 +30,7 @@ _campo_component = st.components.v1.declare_component("campo_interativo_v1", pat
 # abas delegam para cá — o mesmo número em qualquer tela.
 import metrics as _mtr          # noqa: E402
 import validation as _valmod    # noqa: E402
+import storage as _storage      # noqa: E402  (P2: persistência durável)
 
 # (Cloud) Após um deploy, o Streamlit Cloud reexecuta o script principal mas
 # pode manter os módulos locais ANTIGOS em cache no sys.modules — foi a causa
@@ -551,21 +552,41 @@ def _salvar_prefs(prefs: dict) -> None:
 # uns dos outros; o compartilhamento continua funcionando dentro do clube.
 # Estrutura: { "Nome do Venue": { lat, lon, rot, fl, fw, ig, saved_at } }
 
-def _venues_file() -> str:
-    """Caminho do arquivo de venues com escopo por organização (P7)."""
-    _mk = str(st.session_state.get('_org_marker', '') or '').strip()
-    _base = _os.path.dirname(_os.path.abspath(__file__))
-    if _mk:
-        return _os.path.join(_base, f"venues_{_mk}.json")
-    return _os.path.join(_base, "venues.json")   # legado (sem conta carregada)
+def _get_store():
+    """(P2) Retorna o armazenamento durável (Supabase) se configurado em
+    st.secrets['supabase'] = {url, key, [table]}; senão, o local (efêmero) e
+    marca um aviso na sessão. Cacheado por sessão."""
+    _cached = st.session_state.get('_kv_store')
+    if _cached is not None:
+        return _cached
+    store = None
+    try:
+        _sb = None
+        try:
+            _sb = st.secrets.get('supabase')
+        except Exception:
+            _sb = None
+        if _sb and _sb.get('url') and _sb.get('key'):
+            store = _storage.SupabaseStore(_sb['url'], _sb['key'],
+                                           _sb.get('table', 'app_kv'))
+    except Exception:
+        store = None
+    if store is None:
+        store = _storage.LocalJSONStore(_os.path.dirname(_os.path.abspath(__file__)))
+        st.session_state['_persist_efemera'] = True
+    st.session_state['_kv_store'] = store
+    return store
+
+
+def _org_key(prefix: str) -> str:
+    """Chave de armazenamento com escopo por organização (menor team_id)."""
+    _mk = str(st.session_state.get('_org_marker', '') or '').strip() or 'default'
+    return f"{prefix}_{_mk}"
+
 
 def _carregar_venues() -> dict:
     """Retorna o dicionário de venues salvos (nome → config)."""
-    try:
-        with open(_venues_file(), encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    return _get_store().get(_org_key('venues')) or {}
 
 def _salvar_venue(nome: str, cfg: dict) -> None:
     """Persiste (ou sobrescreve) a configuração de um venue no escopo da conta."""
@@ -579,21 +600,13 @@ def _salvar_venue(nome: str, cfg: dict) -> None:
         'ig':       cfg.get('ig',  1),
         'saved_at': datetime.now().strftime('%Y-%m-%d %H:%M'),
     }
-    try:
-        with open(_venues_file(), 'w', encoding='utf-8') as f:
-            json.dump(dados, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    _get_store().set(_org_key('venues'), dados)
 
 def _excluir_venue(nome: str) -> None:
     """Remove um venue do banco da conta."""
     dados = _carregar_venues()
     dados.pop(nome, None)
-    try:
-        with open(_venues_file(), 'w', encoding='utf-8') as f:
-            json.dump(dados, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    _get_store().set(_org_key('venues'), dados)
 
 
 # ── Bandas DEFINIDAS PELO USUÁRIO (configuração, não calibração) ─────────────
@@ -603,48 +616,30 @@ def _excluir_venue(nome: str) -> None:
 # CONFIGURAÇÃO — como o próprio OpenField deixa configurar — e não fitagem ao
 # resultado. Persistimos por organização para o usuário definir uma única vez.
 
-def _bandas_file() -> str:
-    _mk = str(st.session_state.get('_org_marker', '') or '').strip()
-    _base = _os.path.dirname(_os.path.abspath(__file__))
-    return _os.path.join(_base, f"bandas_usuario_{_mk or 'default'}.json")
-
-
 def _salvar_bandas_usuario(vel=None, acc=None) -> None:
     """Grava as bandas digitadas pelo usuário (mescla com o que já existir)."""
-    try:
-        _cur = _carregar_bandas_usuario() or {}
-        if vel is not None:
-            _cur['velocity_zones'] = vel
-        if acc is not None:
-            _cur['acceleration_zones'] = acc
-        _cur['saved_at'] = datetime.now().strftime('%Y-%m-%d %H:%M')
-        with open(_bandas_file(), 'w', encoding='utf-8') as f:
-            json.dump(_cur, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    _cur = _carregar_bandas_usuario() or {}
+    if vel is not None:
+        _cur['velocity_zones'] = vel
+    if acc is not None:
+        _cur['acceleration_zones'] = acc
+    _cur['saved_at'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+    _get_store().set(_org_key('bandas_usuario'), _cur)
 
 
 def _carregar_bandas_usuario():
     """Retorna {'velocity_zones': [...], 'acceleration_zones': [...]} ou None."""
-    try:
-        with open(_bandas_file(), encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return None
+    return _get_store().get(_org_key('bandas_usuario'))
 
 
 def _excluir_bandas_usuario(qual='all') -> None:
     """Remove bandas persistidas (qual='velocity'|'acceleration'|'all')."""
-    try:
-        if qual == 'all':
-            _os.remove(_bandas_file())
-            return
-        _cur = _carregar_bandas_usuario() or {}
-        _cur.pop('velocity_zones' if qual == 'velocity' else 'acceleration_zones', None)
-        with open(_bandas_file(), 'w', encoding='utf-8') as f:
-            json.dump(_cur, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    if qual == 'all':
+        _get_store().delete(_org_key('bandas_usuario'))
+        return
+    _cur = _carregar_bandas_usuario() or {}
+    _cur.pop('velocity_zones' if qual == 'velocity' else 'acceleration_zones', None)
+    _get_store().set(_org_key('bandas_usuario'), _cur)
 
 
 class CatapultAPI:
@@ -7171,6 +7166,14 @@ Escolha um ou mais atletas para análise simultânea.
                        f"metrics v{getattr(_mtr, 'SCHEMA_VERSION', '?')}")
         except Exception:
             pass
+
+        # (P2) Aviso de persistência efêmera — força a inicialização do store.
+        _get_store()
+        if st.session_state.get('_persist_efemera'):
+            st.caption("💾 Armazenamento **local (temporário)**: bandas e campos "
+                       "podem se perder em um redeploy. Para torná-los duráveis, "
+                       "configure um Supabase em `st.secrets['supabase']` "
+                       "(url + key). Veja `SETUP_PERSISTENCIA.md`.")
 
         st.header("🔐 Token")
         # (P7) token mascarado (não fica visível na tela) + suporte a st.secrets
