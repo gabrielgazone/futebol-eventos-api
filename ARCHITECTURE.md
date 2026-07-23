@@ -13,14 +13,17 @@ puros/coesos, reduzindo o monólito sem quebrar produção.
 | `storage.py` | Persistência chave→valor (local + Supabase) | Puro | `tests/test_storage.py` |
 | `applog.py` | Logging estruturado | Puro (stdlib) | `tests/test_applog.py` |
 | `catapult_api.py` | Cliente HTTP da Catapult Connect v6 (`_api_fetch` + `CatapultAPI`) | streamlit (cache) + requests | `tests/test_e2e_load.py` |
+| `ui_theme.py` | CSS global + helpers de design (`_hr`, `_badge`, `inject_global_css`) | streamlit (markup) | `tests/test_e2e_load.py` |
 
-O que sobra em `futebol-eventos.py`: a camada de **UI/render** (Streamlit) e a
-orquestração de estado.
+**Camada de infraestrutura extraída** (cálculo, validação, persistência, logs,
+API, tema). O que sobra em `futebol-eventos.py`: a camada de **UI/render**
+(as `render_*` + seções das abas) e a **orquestração de estado**.
 
-## Roadmap (ordem sugerida, por risco/valor)
+## Roadmap restante (ordem sugerida, por risco/valor)
 
-1. **`ui_theme.py`** — o CSS global e helpers de design (`_hr`, `_badge`,
-   cabeçalho). Baixo risco (quase sem lógica), alto ganho de legibilidade.
+1. **`config.py`** — constantes (zonas padrão, mapeamentos Gen2, servidores,
+   nomes/cores de banda, i18n) num só lugar. Mecânico, mas toca muitas
+   referências — extrair verificando cada uma.
 2. **`state.py`** — um modelo central do `st.session_state` (dataclass + versão
    de schema), substituindo as dezenas de chaves soltas. Reduz bugs de estado.
 3. **`data_layer.py`** — repositório sobre `catapult_api` com cache TTL,
@@ -28,9 +31,9 @@ orquestração de estado.
 4. **`viz/`** (pacote) — mover as funções `render_*` uma a uma:
    `render_tatica_coletiva`, `render_export_artigo`, `render_monitoramento`,
    e as seções de Resumo / Campo / WCS / Neuromuscular / Janelas / Acc-Vel / FC.
+   É a maior fatia (milhares de linhas) e a mais acoplada (usam helpers de
+   estado); requer extrair antes os helpers compartilhados (ex.: `_diag_log`).
    Cada extração deve manter o E2E (`AppTest`) verde.
-5. **`config.py`** — constantes (zonas padrão, mapeamentos Gen2, servidores,
-   i18n) num só lugar.
 
 ## Regras da modularização
 
