@@ -81,7 +81,7 @@ def _diag_log(categoria: str, msg: str):
             if len(_lst) > 200:
                 del _lst[:-200]
     except Exception:
-        pass
+        _applog.log_debug_exc()
 
 
 def _diag_reset():
@@ -90,7 +90,7 @@ def _diag_reset():
         st.session_state['_diag_eventos'] = []
         st.session_state.pop('_api_last_err', None)
     except Exception:
-        pass
+        _applog.log_debug_exc()
 
 
 # ── P9: bandas relativas à Vmáx individual (modo de análise opcional) ───────
@@ -516,7 +516,7 @@ def _salvar_prefs(prefs: dict) -> None:
         with open(_PREFS_FILE, 'w', encoding='utf-8') as f:
             json.dump(prefs, f, ensure_ascii=False, indent=2)
     except Exception:
-        pass
+        _applog.log_debug_exc()
 
 
 # ==================== BANCO COMPARTILHADO DE VENUES ====================
@@ -1122,7 +1122,7 @@ def _zonas_conta_via_api(api, team_ids):
             if _z and len(_z) >= 2:
                 vel = _z
     except Exception:
-        pass
+        _applog.log_debug_exc()
     try:
         _ra = api.get_acceleration_zones()
         if _resp_tem_zonas(_ra):
@@ -1130,7 +1130,7 @@ def _zonas_conta_via_api(api, team_ids):
             if _z and len(_z) >= 2:
                 acc = _z
     except Exception:
-        pass
+        _applog.log_debug_exc()
     for _tid in (team_ids or []):
         if vel and acc:
             break
@@ -1142,7 +1142,7 @@ def _zonas_conta_via_api(api, team_ids):
                     if _z and len(_z) >= 2:
                         vel = _z
             except Exception:
-                pass
+                _applog.log_debug_exc()
         if acc is None:
             try:
                 _ra = api.get_team_acceleration_zones(_tid)
@@ -1151,7 +1151,7 @@ def _zonas_conta_via_api(api, team_ids):
                     if _z and len(_z) >= 2:
                         acc = _z
             except Exception:
-                pass
+                _applog.log_debug_exc()
     return vel, acc
 
 
@@ -2050,7 +2050,7 @@ def adicionar_convex_hull(fig, x_coords, y_coords):
             line=dict(color='#FFD700', width=2, dash='dash'),
             fill='toself', fillcolor='rgba(255,215,0,0.10)'))
     except Exception:
-        pass
+        _applog.log_debug_exc()
 
 
 def adicionar_tercos_campo(fig, x_coords, y_coords, field_length=105, field_width=68):
@@ -3525,7 +3525,7 @@ def _tatica_resolver_campo_config(dados_periodo: dict, atletas_sel):
                          'fw': float(v.get('fw', 68)), 'ig': int(v.get('ig', 1))},
                         f'venue salvo "{vname}"')
     except Exception:
-        pass
+        _applog.log_debug_exc()
 
     # 3) AUTO: centro = mediana GPS; rotação = eixo principal (PCA).
     lats, lons = [], []
@@ -4617,7 +4617,7 @@ def _fmt_data_br(valor) -> str:
     try:
         return _dt.fromisoformat(s.replace('Z', '').split('.')[0]).strftime('%d/%m/%Y')
     except Exception:
-        pass
+        _applog.log_debug_exc()
     for _f in ('%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y'):
         try:
             return _dt.strptime(s[:10], _f).strftime('%d/%m/%Y')
@@ -4675,7 +4675,7 @@ def render_export_artigo(resultados_por_periodo, dados_sensor_por_atleta_por_per
             if not _match.empty:
                 _act_data = _fmt_data_br(_match['data'].values[0])
     except Exception:
-        pass
+        _applog.log_debug_exc()
 
     _atletas_disp = sorted({r.get('Atleta', '') for p in _periodos_reais
                             for r in resultados_por_periodo.get(p, [])} - {''})
@@ -4799,7 +4799,7 @@ def render_export_artigo(resultados_por_periodo, dados_sensor_por_atleta_por_per
         st.caption(f"🎚️ **Cortes de banda usados** (início de B1..B6, km/h): "
                    f"**{_cortes_txt}** · fonte: {_src_txt}")
     except Exception:
-        pass
+        _applog.log_debug_exc()
 
     st.download_button(
         "📥 Exportar CSV (formato Catapult)",
@@ -5504,7 +5504,7 @@ def calcular_efforts_velocidade_sensor(
                 try:
                     hora_str = datetime.fromtimestamp(_ts_s).strftime('%H:%M:%S')
                 except Exception:
-                    pass
+                    _applog.log_debug_exc()
 
             records.append({
                 'Esforço':            esf_num,
@@ -5587,7 +5587,7 @@ def calcular_efforts_aceleracao_sensor(
                 try:
                     hora_str = datetime.fromtimestamp(_ts_s).strftime('%H:%M:%S')
                 except Exception:
-                    pass
+                    _applog.log_debug_exc()
 
             records.append({
                 'Esforço':        esf_num,
@@ -5747,7 +5747,7 @@ def criar_grafico_aceleracao_tempo(sensor_points, athlete_name, window_size=31, 
                     line=dict(color='purple', width=2)
                 ))
         except:
-            pass
+            _applog.log_debug_exc()
     
     fig.add_hline(y=0, line_dash="dash", line_color="black", opacity=0.5)
     
@@ -6878,7 +6878,7 @@ Escolha um ou mais atletas para análise simultânea.
             st.caption(f"🏗️ Build: **{_build_ts.strftime('%d/%m %H:%M')}** · "
                        f"metrics v{getattr(_mtr, 'SCHEMA_VERSION', '?')}")
         except Exception:
-            pass
+            _applog.log_debug_exc()
 
         # (P2) Aviso de persistência efêmera — força a inicialização do store.
         _get_store()
@@ -6926,7 +6926,7 @@ Escolha um ou mais atletas para análise simultânea.
                             st.session_state['_org_marker'] = ''.join(
                                 _c for _c in _org_ids[0] if _c.isalnum())[:16]
                     except Exception:
-                        pass
+                        _applog.log_debug_exc()
                     
                     st.subheader("📋 Mapeando atletas por equipe...")
                     athlete_team_map = {}
@@ -7025,7 +7025,7 @@ Escolha um ou mais atletas para análise simultânea.
                                     _src_auto[_match_nome] = 'catapult_stats'
                                     _n_vmax_auto += 1
                     except Exception:
-                        pass
+                        _applog.log_debug_exc()
                     st.session_state['hist_vmax']        = _hvm_auto
                     st.session_state['hist_vmax_source'] = _src_auto
                     _vmax_msg = f" · {_n_vmax_auto} Vmax hist. detectadas" if _n_vmax_auto else ""
@@ -7096,7 +7096,7 @@ Escolha um ou mais atletas para análise simultânea.
                         st.session_state['acceleration_zones_source']  = 'api'
                         st.session_state['acceleration_zones_from_api'] = True
                 except Exception:
-                    pass
+                    _applog.log_debug_exc()
 
                 # ── Bandas DEFINIDAS PELO USUÁRIO: prioridade máxima ──────────
                 # Se o usuário digitou/salvou os cortes da conta OpenField dele,
@@ -7112,7 +7112,7 @@ Escolha um ou mais atletas para análise simultânea.
                         st.session_state['acceleration_zones_manual'] = True
                         st.session_state['acceleration_zones_source'] = 'manual'
                 except Exception:
-                    pass
+                    _applog.log_debug_exc()
 
         if not st.session_state.df_activities.empty and token:
             # ── P5: Diagnóstico da sessão — nada falha em silêncio ────────────
@@ -7181,7 +7181,7 @@ Escolha um ou mais atletas para análise simultânea.
                                     _param_names.append(_pn)
                             st.session_state['available_params'] = _param_names
                     except Exception:
-                        pass
+                        _applog.log_debug_exc()
 
                 # ── FEATURE 7: Venues da conta Catapult ──────────────────────
                 _api_venues = st.session_state.get('api')
@@ -7194,7 +7194,7 @@ Escolha um ou mais atletas para análise simultânea.
                                                 else _venues_raw.get('data', []))
                                 st.session_state['venues_catapult'] = _venues_list
                     except Exception:
-                        pass
+                        _applog.log_debug_exc()
 
                 # Auto-match venue desta atividade com venues da conta
                 _venue_act = st.session_state.get('venue', {})
@@ -7240,7 +7240,7 @@ Escolha um ou mais atletas para análise simultânea.
                                 unsafe_allow_html=True
                             )
                     except Exception:
-                        pass
+                        _applog.log_debug_exc()
 
                 with st.spinner("Buscando períodos da atividade..."):
                     api = st.session_state.api
@@ -7507,7 +7507,7 @@ Escolha um ou mais atletas para análise simultânea.
                                     _n_rb += 1
                             st.toast(f"✅ {_n_rb} Vmax atualizadas via /stats")
                     except Exception:
-                        pass
+                        _applog.log_debug_exc()
                     st.session_state['hist_vmax'] = _hvm_g
                     st.session_state['hist_vmax_source'] = _src_g
                     st.rerun()
@@ -7946,7 +7946,7 @@ Escolha um ou mais atletas para análise simultânea.
                                     _vmax_encontrado = _pvf
                                     _vmax_fonte = 'profile'
                     except Exception:
-                        pass
+                        _applog.log_debug_exc()
                     # — Persiste apenas se o valor é MAIOR que o já armazenado ─
                     # (POST /stats já pode ter um valor melhor de outra sessão)
                     _cur_best = _hvm_global.get(atleta_nome, 0.0)
@@ -8030,9 +8030,9 @@ Escolha um ou mais atletas para análise simultânea.
                                         st.session_state['hist_vmax']        = _hvm_now
                                         st.session_state['hist_vmax_source'] = _src_now
                             except Exception:
-                                pass
+                                _applog.log_debug_exc()
                     except Exception:
-                        pass
+                        _applog.log_debug_exc()
                     
                     # A API devolve x,y com origem no canto inferior esquerdo (0,0).
                     # Filtra nulos e artefactos de projeção GPS (valores absurdamente altos).
@@ -8664,7 +8664,7 @@ Escolha um ou mais atletas para análise simultânea.
                                                 _sp_vs = list(_sp_d.get('vels_gps', [0.0]*len(_sp_xs)))
                                                 _sp_gps_used = True
                                             except Exception:
-                                                pass
+                                                _applog.log_debug_exc()
 
                                 if _sp_xs:
                                     # Direção de ataque para este lado do split view
@@ -9428,7 +9428,7 @@ Escolha um ou mais atletas para análise simultânea.
                                                          if len(_acc_eff) == len(_xn_eff)
                                                          else [0]*(_ei-_si))
                                     except Exception:
-                                        pass
+                                        _applog.log_debug_exc()
 
                             if _fonte_xy:
                                 st.caption("📡 Coordenadas x/y Catapult OpenField")
@@ -12193,7 +12193,7 @@ Escolha um ou mais atletas para análise simultânea.
                                                                         _lts_ao, _lns_ao,
                                                                         _anim_cfg_ao))
                                                             except Exception:
-                                                                pass
+                                                                _applog.log_debug_exc()
 
                                                     if not _xs_ao:
                                                         continue
@@ -15080,7 +15080,7 @@ Escolha um ou mais atletas para análise simultânea.
                                                     'ico': _ico,
                                                 })
                                         except Exception:
-                                            pass
+                                            _applog.log_debug_exc()
 
                                 _has_alert = bool(_card_alerts)
 

@@ -33,8 +33,17 @@ if not logger.handlers:
 
 
 def log_exc(context: str = "") -> None:
-    """Registra a exceção ATUAL (dentro de um except) com traceback completo."""
+    """Registra a exceção ATUAL (dentro de um except) com traceback completo.
+    Nível ERROR — use para falhas que importam."""
     logger.exception(context or "exceção")
+
+
+def log_debug_exc(context: str = "") -> None:
+    """Registra a exceção ATUAL em nível DEBUG (com traceback), para fallbacks
+    'esperados' que antes eram `except: pass`. Não aparece em produção (nível
+    INFO), mas fica disponível com PITCHPULSE_LOG_LEVEL=DEBUG — nada mais é
+    engolido em silêncio."""
+    logger.debug(context or "fallback", exc_info=True)
 
 
 def log_error(msg: str) -> None:
