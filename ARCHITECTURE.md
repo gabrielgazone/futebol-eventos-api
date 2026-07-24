@@ -4,9 +4,10 @@ O app nasceu como um único arquivo (`futebol-eventos.py`, **~15,6 mil linhas**)
 que misturava tudo. P4 extraiu — **incremental, testado, com E2E + pyflakes
 verdes a cada commit** — todas as responsabilidades separáveis em módulos.
 
-**Resultado: 18 módulos; monólito reduzido a ~9,0 mil linhas (−42%). O
-`futebol-eventos.py` não contém mais nenhuma função helper top-level — apenas
-`main()` (a página/orquestração).**
+**Resultado final: 26 módulos; monólito reduzido de ~15,6 mil para ~2,2 mil
+linhas (−86%). O `futebol-eventos.py` é apenas `main()` (orquestração: barra
+lateral, conexão, loop de carga e a estrutura de abas chamando os `render_*`).
+Toda a lógica, compute, plotagem E a UI das abas vivem em módulos.**
 
 ## Módulos extraídos (18)
 
@@ -25,12 +26,14 @@ verdes a cada commit** — todas as responsabilidades separáveis em módulos.
 | `analysis.py` | Compute: métricas por atleta, janelas, esforços, gráficos |
 | `field.py` | Campo/plotagem, trajetórias/heatmaps, eventos, Voronoi, neuro, ACWR |
 | `ui_theme.py` | CSS global + helpers de design |
-| `viz/monitoramento.py` | Aba Monitoramento (ACWR/monotonia/strain) |
-| `viz/tatica_coletiva.py` | Aba Tática Coletiva (Pitch Control, Voronoi, replay 3D) |
-| `viz/export_artigo.py` | Aba Exportação para Artigo (tabela + validação) |
+| `viz/` (pacote) | **13 abas**: `visao_geral`, `campo`, `janelas`, `neuromuscular`, `acc_vel`, `fc`, `por_posicao`, `wcs`, `ao_vivo`, `tatica_coletiva`, `export_artigo`, `monitoramento`, `esforcos` |
 
 Grafo de dependências acíclico: `viz/*` → `field`/`analysis`/`bands`/… →
 `metrics`/`config`/`applog`. Nenhum módulo importa `futebol-eventos.py`.
+
+Cada `render_*(...)` recebe os dados carregados como parâmetros (mesmos nomes
+do escopo de `main`), descobertos por análise de variáveis livres + verificação
+`pyflakes` (garante zero nomes indefinidos — nenhum import ou dado faltando).
 
 ## Verificação
 
@@ -40,21 +43,13 @@ Grafo de dependências acíclico: `viz/*` → `field`/`analysis`/`bands`/… →
 - **`pyflakes`** em todo o repo — garante **zero nomes indefinidos** (pegou bugs
   latentes que o E2E não exercitava, ex.: import faltando num ramo condicional).
 
-## O que resta: `main()` (a camada de página)
+## `main()` — o que sobrou (orquestração pura)
 
-O `futebol-eventos.py` é agora **só a função `main()`** — barra lateral
-(conexão, filtros, seleção, editores), loop de carga, e as **seções inline das
-abas** (Resumo, Campo & GPS + subabas, Ao Vivo) renderizadas no corpo de `main`.
+O `futebol-eventos.py` (~2,2k linhas) é a função `main()`: barra lateral
+(conexão, filtros, seleção, editores), o loop de carga da API, a estrutura de
+abas (`st.tabs`) e a chamada de cada `render_*` do pacote `viz/`. É o **shell de
+orquestração** — nada de lógica de negócio, compute ou plotagem.
 
-Isso é o **fim natural do de-monolito**: todo o código reutilizável/testável
-(lógica, dados, API, tema, i18n, persistência, compute, plot) está em módulos; o
-que sobra é o **fluxo de página** de um app Streamlit, que idiomaticamente vive
-no script principal.
-
-### Decomposição adicional (opcional)
-
-Quebrar as seções inline das abas em `viz/*` exige **refatorar `main()`**: montar
-um objeto de contexto com os dados carregados e transformar cada bloco
-`with aba[i]:` em `render_x(ctx)`. É page-decomposition (não de-monolito de
-helpers), a fatia mais acoplada; deve ser feita **uma aba por commit, com E2E +
-pyflakes verdes**. As 3 `render_*` já extraídas são o modelo.
+**P4 concluído.** Todo o código separável — lógica, dados, API, tema, i18n,
+persistência, compute, plotagem e as 13 abas — está em 26 módulos, com grafo
+acíclico e verificação por testes + E2E + pyflakes.
