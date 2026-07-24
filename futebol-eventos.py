@@ -672,9 +672,11 @@ Escolha um ou mais atletas para análise simultânea.
             _tok_secret = ''
         token = st.text_input(
             "Token JWT:", type="password", value=_tok_secret,
-            help="O token fica mascarado e não é gravado em disco. Em deploy, "
-                 "configure CATAPULT_TOKEN em st.secrets para preenchê-lo "
-                 "automaticamente.")
+            help="O token fica mascarado, NÃO é gravado em disco e é removido "
+                 "dos logs (redação automática). Boas práticas: gere com o "
+                 "ESCOPO MÍNIMO necessário (Dados resumidos + Sensor 10 Hz) e "
+                 "validade CURTA; revogue no OpenField se vazar. Em deploy, "
+                 "configure CATAPULT_TOKEN em st.secrets.")
         if _tok_secret and token == _tok_secret:
             st.caption("🔒 Token carregado de `st.secrets`.")
         
@@ -897,7 +899,7 @@ Escolha um ou mais atletas para análise simultânea.
             with st.expander(f"🔍 Diagnóstico da sessão ({_diag_n})",
                              expanded=False):
                 if _api_err:
-                    st.warning(f"Último erro da API: `{_api_err}`")
+                    st.warning(f"Último erro da API: `{_applog.redact(_api_err)}`")
                 if not _diag_ev:
                     st.caption("✅ Nenhum dado descartado nem fallback registrado.")
                 else:
@@ -1993,7 +1995,7 @@ Escolha um ou mais atletas para análise simultânea.
                 )
             elif _api_err:
                 st.error(
-                    f"⚠️ **Erro na API Catapult** ({_api_err}). "
+                    f"⚠️ **Erro na API Catapult** ({_applog.redact(_api_err)}). "
                     "Verifique o token e a conexão com a internet."
                 )
             else:

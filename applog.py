@@ -17,9 +17,31 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 
 _LEVEL = os.environ.get("PITCHPULSE_LOG_LEVEL", "INFO").upper()
+
+# ── (P5) Redação de segredos ────────────────────────────────────────────────
+# Defesa em profundidade: qualquer mensagem que passe pelo logger tem tokens
+# JWT / cabeçalhos Bearer / chaves removidos, para que NENHUM log (nem no Cloud)
+# vaze credenciais — mesmo que algum código passe um token por engano.
+_JWT_RE = re.compile(r'eyJ[A-Za-z0-9_=-]{8,}\.[A-Za-z0-9_=-]{6,}\.[A-Za-z0-9_=-]{6,}')
+_BEARER_RE = re.compile(r'(?i)\b(bearer|apikey|authorization|token|key)\b(["\'\s:=]+)\S{8,}')
+
+
+def redact(text: object) -> str:
+    """Remove JWTs e segredos (Bearer/apikey/token/key=...) de um texto."""
+    s = str(text)
+    s = _JWT_RE.sub('***JWT-REDACTED***', s)
+    s = _BEARER_RE.sub(r'\1\2***', s)
+    return s
+
+
+def mask_token(tok: object) -> str:
+    """Máscara para EXIBIR um token (6 primeiros + 4 últimos)."""
+    t = str(tok or '')
+    return f"{t[:6]}…{t[-4:]}" if len(t) > 14 else '***'
 
 logger = logging.getLogger("pitchpulse")
 if not logger.handlers:
@@ -35,7 +57,7 @@ if not logger.handlers:
 def log_exc(context: str = "") -> None:
     """Registra a exceção ATUAL (dentro de um except) com traceback completo.
     Nível ERROR — use para falhas que importam."""
-    logger.exception(context or "exceção")
+    logger.exception(redact(context or "exceção"))
 
 
 def log_debug_exc(context: str = "") -> None:
@@ -47,12 +69,12 @@ def log_debug_exc(context: str = "") -> None:
 
 
 def log_error(msg: str) -> None:
-    logger.error(msg)
+    logger.error(redact(msg))
 
 
 def log_warn(msg: str) -> None:
-    logger.warning(msg)
+    logger.warning(redact(msg))
 
 
 def log_info(msg: str) -> None:
-    logger.info(msg)
+    logger.info(redact(msg))
