@@ -32,6 +32,7 @@ import metrics as _mtr          # noqa: E402
 import validation as _valmod    # noqa: E402
 import storage as _storage      # noqa: E402  (P2: persistência durável)
 import applog as _applog        # noqa: E402  (P3: logging estruturado)
+import state as _state          # noqa: E402  (P6: esquema de estado)
 from catapult_api import _api_fetch, CatapultAPI  # noqa: E402,F401  (P4: cliente API)
 
 # (Cloud) Após um deploy, o Streamlit Cloud reexecuta o script principal mas
@@ -470,6 +471,12 @@ from ui_theme import _hr, _badge, inject_global_css  # noqa: E402
 
 
 def main():
+    # (P6) Esquema central do estado da sessão: aplica defaults e, num bump de
+    # versão (deploy), descarta o estado volátil incompatível — em vez de
+    # renderizar com dados velhos (fonte de crashes pós-deploy).
+    if _state.init(st):
+        _applog.log_info("Estado da sessão resetado (nova versão de esquema).")
+
     # ═══════════════════════════════════════════════════════════════════
     # DESIGN SYSTEM — CSS global injetado uma vez por sessão
     # ═══════════════════════════════════════════════════════════════════
