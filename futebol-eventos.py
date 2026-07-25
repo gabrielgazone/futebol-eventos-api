@@ -20,6 +20,7 @@ import metrics as _mtr          # noqa: E402
 import validation as _valmod    # noqa: E402
 import applog as _applog        # noqa: E402  (P3: logging estruturado)
 import state as _state          # noqa: E402  (P6: esquema de estado)
+import data_loader as _data_loader  # noqa: E402  (P9: pré-busca paralela)
 from catapult_api import _api_fetch, CatapultAPI  # noqa: E402,F401  (P4: cliente API)
 
 # (Cloud) Após um deploy, o Streamlit Cloud reexecuta o script principal mas
@@ -1557,6 +1558,27 @@ Escolha um ou mais atletas para análise simultânea.
         _ok_ld      = 0
         _warn_ld    = []
         _ld_box     = st.empty()
+
+        # (P9) Pré-busca PARALELA do sinal 10 Hz + efforts de todos os atletas,
+        # aquecendo o cache do cliente. O loop abaixo (sequencial p/ a barra de
+        # progresso) passa a acertar o cache — N fetches concorrentes em vez de
+        # N sequenciais.
+        try:
+            _af_pf = st.session_state.get('atletas_filtrados')
+            _ids_pf = []
+            if _af_pf is not None and not _af_pf.empty:
+                for _an_pf in st.session_state.atletas_sel:
+                    _row_pf = _af_pf[_af_pf['nome'] == _an_pf]
+                    if not _row_pf.empty:
+                        _ids_pf.append(_row_pf['id'].values[0])
+            if _ids_pf:
+                with _ld_box.container():
+                    st.caption(f"⚡ Pré-carregando {len(_ids_pf)} atletas em paralelo…")
+                _data_loader.prefetch_sensores(
+                    api, activity_id, period_ids, periodos_selecionados, _ids_pf,
+                    effort_types="velocity,acceleration")
+        except Exception:
+            _applog.log_debug_exc()      # sem prefetch, o loop ainda carrega tudo
 
         for periodo_nome in periodos_selecionados:
             period_id = period_ids.get(periodo_nome)
