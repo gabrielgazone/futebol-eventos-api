@@ -4,12 +4,18 @@ O app nasceu como um único arquivo (`futebol-eventos.py`, **~15,6 mil linhas**)
 que misturava tudo. P4 extraiu — **incremental, testado, com E2E + pyflakes
 verdes a cada commit** — todas as responsabilidades separáveis em módulos.
 
-**Resultado final: 26 módulos; monólito reduzido de ~15,6 mil para ~2,2 mil
-linhas (−86%). O `futebol-eventos.py` é apenas `main()` (orquestração: barra
-lateral, conexão, loop de carga e a estrutura de abas chamando os `render_*`).
-Toda a lógica, compute, plotagem E a UI das abas vivem em módulos.**
+**Resultado final: 29 módulos; monólito reduzido de ~15,6 mil para ~1,79 mil
+linhas (−88,5%). O `futebol-eventos.py` é apenas `main()` (barra lateral de
+conexão/seleção + a estrutura de abas chamando os `render_*`). Toda a lógica,
+compute, plotagem, carga de dados E a UI das abas vivem em módulos.**
 
-## Módulos extraídos (18)
+> Contexto: P4 é o 4º item de uma lista de 10 melhorias de arquitetura —
+> **P1–P10 estão todos concluídos** (versões fixadas, persistência durável,
+> observabilidade, modularização, token/segredos, esquema de estado, camada de
+> dados com retry/backoff, cobertura de testes 62→110, performance e portões de
+> CI com ruff).
+
+## Módulos extraídos (29)
 
 | Módulo | Responsabilidade |
 |---|---|
@@ -17,9 +23,11 @@ Toda a lógica, compute, plotagem E a UI das abas vivem em módulos.**
 | `validation.py` | Concordância / Bland-Altman (estudo de validação) |
 | `storage.py` | Persistência chave→valor (local + Supabase) |
 | `persistence.py` | Store + venues + bandas do usuário + prefs (sobre `storage`) |
-| `applog.py` | Logging estruturado |
+| `applog.py` | Logging estruturado + redação de segredos (P5) |
 | `config.py` | Constantes (servidores, i18n, bandas, Gen2, eventos, paletas) |
-| `catapult_api.py` | Cliente HTTP da Catapult Connect v6 |
+| `state.py` | Esquema central do `st.session_state` + versão/reset (P6) |
+| `catapult_api.py` | Cliente HTTP da Catapult Connect v6 + retry/backoff (P7) |
+| `data_loader.py` | Carga de dados: pré-busca paralela (P9) + `carregar_dados()` |
 | `i18n.py` | Traduções + `t()` |
 | `diagnostics.py` | Selo de proveniência + diagnóstico da sessão |
 | `bands.py` | Cortes de banda + rótulos/formatação + parsers de zona da API |
