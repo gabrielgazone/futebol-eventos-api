@@ -159,3 +159,18 @@ def test_fluxo_completo_carregar_atividade(api_mock):
     assert at.session_state['atletas_sel'] == ['Ana Silva', 'Bia Souza']
     assert len(at.tabs) >= 10, "abas não renderizaram após a carga"
     assert len(at.dataframe) >= 3, "tabelas não renderizaram após a carga"
+
+    # (P8) asserts específicos por aba, além do "sem exceções"
+    assert len(at.metric) >= 4, "cabeçalho de métricas (atletas/dist/PL/vmax) não renderizou"
+
+    # aba Exportação: tabela no formato oficial Catapult (21 colunas)
+    _tem_export = False
+    for _df in at.dataframe:
+        try:
+            _cols = list(_df.value.columns)
+        except Exception:
+            continue
+        if 'Total Distance (m)' in _cols and 'Maximum Velocity (km/h)' in _cols:
+            _tem_export = True
+            break
+    assert _tem_export, "tabela de exportação no formato Catapult não encontrada"
