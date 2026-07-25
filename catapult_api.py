@@ -7,9 +7,51 @@ erro na sessão), requests e applog. Sem acoplamento com o resto do app.
 """
 from __future__ import annotations
 
+import time
+
 import streamlit as st
 import requests
 import applog as _applog
+
+
+# ==================== CAMADA DE DADOS — retry/backoff (P7) ====================
+# Falhas transitórias que valem uma nova tentativa (rate-limit + erros de
+# servidor). 429 respeita o cabeçalho Retry-After quando presente.
+_RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
+
+
+def _http(method: str, url: str, *, headers=None, params=None, json=None,
+          timeout: float = 60, max_retries: int = 3, base_delay: float = 0.5,
+          sleep=time.sleep):
+    """GET/POST com retry exponencial em 429/5xx/erros de rede. Usa
+    getattr(requests, method) (compatível com o mock do E2E). Retorna o
+    Response (mesmo no erro final) ou relança a última exceção de rede.
+    `sleep` é injetável para testes."""
+    fn = getattr(requests, method.lower())
+    delay = base_delay
+    r = None
+    for attempt in range(max_retries + 1):
+        try:
+            kw = {'headers': headers, 'params': params, 'timeout': timeout}
+            if json is not None:
+                kw['json'] = json
+            r = fn(url, **kw)
+            if r.status_code in _RETRY_STATUS and attempt < max_retries:
+                _ra = (getattr(r, 'headers', None) or {}).get('Retry-After')
+                wait = float(_ra) if (isinstance(_ra, str) and _ra.isdigit()) else delay
+                _applog.log_warn(f"API {r.status_code} em {method.upper()} — "
+                                 f"retry {attempt+1}/{max_retries} em {min(wait,10):.1f}s")
+                sleep(min(wait, 10)); delay *= 2
+                continue
+            return r
+        except requests.RequestException:
+            if attempt < max_retries:
+                _applog.log_warn(f"Rede falhou — retry {attempt+1}/{max_retries} "
+                                 f"em {delay:.1f}s")
+                sleep(delay); delay *= 2
+                continue
+            raise
+    return r
 
 
 # ==================== CACHE DE API (TTL 15 min) ====================
@@ -18,14 +60,12 @@ import applog as _applog
 @st.cache_data(ttl=900, show_spinner=False)
 def _api_fetch(base_url: str, token: str, path: str,
                params: tuple = ()) -> object:
-    """Chamada HTTP GET à API Catapult com cache automático de 15 min."""
+    """Chamada HTTP GET à API Catapult com cache (15 min) e retry/backoff."""
     headers = {'Authorization': f'Bearer {token}'}
     try:
-        r = requests.get(f"{base_url}/{path}",
-                         headers=headers,
-                         params=dict(params),
-                         timeout=60)
-        if r.status_code == 200:
+        r = _http('get', f"{base_url}/{path}", headers=headers,
+                  params=dict(params), timeout=60)
+        if r is not None and r.status_code == 200:
             return r.json()
         # Salva o status de erro para exibir ao usuário + loga (P3).
         _applog.log_warn(f"API {r.status_code} em GET /{path}")
@@ -165,16 +205,15 @@ class CatapultAPI:
         return _api_fetch(self.base_url, self._token, f"athletes/{athlete_id}/thresholds")
 
     def get_stats(self, payload):
-        """Estatísticas agregadas por grupo (POST /stats). Não usa cache — dados dinâmicos."""
-        import requests as _req
+        """Estatísticas agregadas por grupo (POST /stats), com retry/backoff.
+        Sem cache — dados dinâmicos."""
         try:
-            r = _req.post(
-                f"{self.base_url}/stats",
-                headers={**self.headers, "Content-Type": "application/json"},
-                json=payload, timeout=20,
-            )
-            return r.json() if r.status_code == 200 else None
+            r = _http('post', f"{self.base_url}/stats",
+                      headers={**self.headers, "Content-Type": "application/json"},
+                      json=payload, timeout=20)
+            return r.json() if (r is not None and r.status_code == 200) else None
         except Exception:
+            _applog.log_exc("Falha em POST /stats")
             return None
 
     # ── Velocity zones ───────────────────────────────────────────────────────
