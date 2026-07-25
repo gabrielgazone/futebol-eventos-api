@@ -2,21 +2,9 @@
 # PARTE 1 - IMPORTS, CONSTANTES E CLASSE API
 
 import streamlit as st
-import requests
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
-import json
-import base64
-import io
+from datetime import datetime
 import numpy as np
-from scipy.signal import savgol_filter
-from scipy.ndimage import gaussian_filter as _gf
-from scipy.spatial import cKDTree
-import folium
-from streamlit_folium import st_folium
 import os as _os
 
 st.set_page_config(page_title="Futebol Eventos - Catapult", layout="wide")
@@ -30,7 +18,6 @@ _campo_component = st.components.v1.declare_component("campo_interativo_v1", pat
 # abas delegam para cá — o mesmo número em qualquer tela.
 import metrics as _mtr          # noqa: E402
 import validation as _valmod    # noqa: E402
-import storage as _storage      # noqa: E402  (P2: persistência durável)
 import applog as _applog        # noqa: E402  (P3: logging estruturado)
 import state as _state          # noqa: E402  (P6: esquema de estado)
 from catapult_api import _api_fetch, CatapultAPI  # noqa: E402,F401  (P4: cliente API)
@@ -116,20 +103,15 @@ from field import (  # noqa: E402,F401
 
 # (P4) constantes -> config.py
 from config import (  # noqa: E402
-    _CHAVE_COMBINADO,
     _DEFAULT_MIN_DUR_S,
     _DEFAULT_MIN_DUR_VEL_S,
     _ATHLETE_PALETTE,
     SERVERS,
     LANGUAGES,
-    BANDAS_VEL,
-    BANDAS_ACC,
     _DEFAULT_VELOCITY_ZONES,
     _DEFAULT_ACCELERATION_ZONES,
     _ZONES_SCHEMA_VERSION,
-    _NOMES_BANDA_VEL_DEFAULT,
     _CORES_BANDA_VEL_DEFAULT,
-    _ACC_BAND_MAP,
     FUTEBOL_EVENTS_CONFIG,
 )
 
@@ -154,7 +136,6 @@ REFERENCIAS = {
 
 
 # ==================== CORES POR GRUPO DE POSIÇÃO ====================
-import colorsys as _colorsys
 
 # Hue base para cada grupo tático (HSL)
 
@@ -467,7 +448,7 @@ _LIMIARES_JANELA = {
 
 
 # (P4) helpers de design + CSS global -> ui_theme.py
-from ui_theme import _hr, _badge, inject_global_css  # noqa: E402
+from ui_theme import _hr, inject_global_css  # noqa: E402
 
 
 def main():
@@ -1983,7 +1964,7 @@ Escolha um ou mais atletas para análise simultânea.
             f"<div><span style='color:#86efac;font-weight:600'>{_ok_ld} atletas carregados</span>"
             f"<span style='color:#4ade80;font-size:12px'>&nbsp;·&nbsp;{_per_label}</span>"
             + (f"<span style='color:#fca5a5;font-size:12px'>&nbsp;·&nbsp;{_warn_ld_n} sem dados</span>" if _warn_ld_n else "")
-            + f"</div></div>",
+            + "</div></div>",
             unsafe_allow_html=True
         )
 
@@ -2065,7 +2046,7 @@ Escolha um ou mais atletas para análise simultânea.
                     f"</div>"
                     f"<div style='display:flex;gap:6px;align-items:center'>"
                     + "".join(f"<div style='width:8px;height:8px;border-radius:50%;background:{'#2196F3' if i+1==_ob_step else '#2d4a6a'}'></div>" for i in range(4))
-                    + f"</div></div></div>",
+                    + "</div></div></div>",
                     unsafe_allow_html=True
                 )
 

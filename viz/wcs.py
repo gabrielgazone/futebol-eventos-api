@@ -951,7 +951,6 @@ def render_wcs(_REL_VEL_BANDAS, _SENSOR_HZ, _ok_ld, dados_efforts_acc_por_period
                                 # ── Legenda inline ──
                                 if _is_acoes_anim:
                                     # Bandas de acel/desacel (rótulo curto B1/B2/B3)
-                                    import re as _re_anim
                                     for _bk, _bd in _bandas_acc_ativas().items():
                                         _lbl_full = _bd.get('label', _bk)
                                         # encurta: "Aceleração B1 — 2 a 3 m/s²"

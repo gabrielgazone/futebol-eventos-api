@@ -8,10 +8,7 @@ pandas/plotly (scipy é importado localmente nas views).
 from __future__ import annotations
 
 import streamlit as st
-import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
 
 import applog as _applog
 from diagnostics import _diag_log
@@ -1106,7 +1103,6 @@ def _tatica_frames_cached(cache_key, _dados_prep, atletas_sel, t_ini, t_fim,
 
 def render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, atletas_sel):
     """Aba 🧠 Tática Coletiva — orquestra as 5 visões coletivas."""
-    import numpy as _np
 
     st.markdown("### 🧠 Tática Coletiva")
     st.caption("O time como **sistema**: visões que cruzam a posição de todos os "

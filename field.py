@@ -14,19 +14,16 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
 from plotly.subplots import make_subplots
 import folium
 from scipy.ndimage import gaussian_filter as _gf
 from scipy.spatial import cKDTree
 
 import applog as _applog
-from bands import (_bandas_vel_ativas, _bandas_acc_ativas, _fmt_num_banda,
-                   _rotulo_banda_vel, _rotulo_banda_acc, _legenda_vel_js)
+from bands import (_bandas_vel_ativas, _bandas_acc_ativas, _legenda_vel_js)
 from analysis import detectar_eventos_acc, get_min_dur_s
 from config import (
-    BANDAS_VEL, BANDAS_ACC, _ACC_BAND_MAP, FUTEBOL_EVENTS_CONFIG,
-    _NOMES_BANDA_VEL_DEFAULT, _CORES_BANDA_VEL_DEFAULT,
+    BANDAS_VEL, BANDAS_ACC, FUTEBOL_EVENTS_CONFIG,
     _ATHLETE_PALETTE, _POSICAO_GRUPOS, _EV_ICONES, _DEFAULT_MIN_DUR_S,
 )
 

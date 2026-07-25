@@ -1,0 +1,18 @@
+# Configuração de qualidade (P10 — portões de CI)
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["_gerar_guia_pdf.py"]
+
+[tool.ruff.lint]
+# Portão de CORREÇÃO (não estilo): F = pyflakes (nomes indefinidos, imports não
+# usados, redefinições), E9 = erros de sintaxe. É o mínimo que pega bugs reais
+# sem afogar em ruído de formatação de uma base grande e legada.
+select = ["F", "E9"]
+# F841 (variável local atribuída e não usada): cosmético + falsos positivos com
+# operador walrus (`f(x := ...)`). Não bloqueia o build.
+ignore = ["F841"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]

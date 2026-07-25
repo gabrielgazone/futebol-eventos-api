@@ -14,7 +14,6 @@ import plotly.graph_objects as go
 
 import metrics as _mtr
 from diagnostics import _diag_log
-from i18n import t
 
 
 _ACWR_EMOJI = {'ideal': '🟢', 'subcarga': '🟡', 'atenção': '🟠',

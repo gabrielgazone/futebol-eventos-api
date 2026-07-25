@@ -15,14 +15,19 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Instala dependências (app completo + pytest)
-        run: pip install -r requirements.txt pytest
+      - name: Instala dependências (app completo + pytest + ruff)
+        run: pip install -r requirements.txt pytest ruff
 
-      - name: Testes (motor de métricas, validação e E2E do carregamento)
+      - name: Lint (ruff — portão de correção F/E9)
+        run: python -m ruff check .
+
+      - name: Testes (motor, validação, storage, retry, compute e E2E)
         run: python -m pytest tests/ -q
 
-      - name: Smoke check de sintaxe do app
+      - name: Smoke check de sintaxe (app + módulos)
         run: |
           python -m py_compile futebol-eventos.py
-          python -m py_compile metrics.py
-          python -m py_compile validation.py
+          for m in metrics validation storage persistence applog config \
+                   catapult_api i18n diagnostics bands analysis field \
+                   ui_theme state; do python -m py_compile "$m.py"; done
+          for v in viz/*.py; do python -m py_compile "$v"; done
