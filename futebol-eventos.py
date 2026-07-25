@@ -4,7 +4,6 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-import numpy as np
 import os as _os
 
 st.set_page_config(page_title="Futebol Eventos - Catapult", layout="wide")
