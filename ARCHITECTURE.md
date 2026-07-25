@@ -53,11 +53,23 @@ do escopo de `main`), descobertos por análise de variáveis livres + verificaç
 
 ## `main()` — o que sobrou (orquestração pura)
 
-O `futebol-eventos.py` (~2,2k linhas) é a função `main()`: barra lateral
-(conexão, filtros, seleção, editores), o loop de carga da API, a estrutura de
-abas (`st.tabs`) e a chamada de cada `render_*` do pacote `viz/`. É o **shell de
-orquestração** — nada de lógica de negócio, compute ou plotagem.
+O `futebol-eventos.py` (~1,79k linhas) é a função `main()`: barra lateral
+(conexão, filtros, seleção, editores), a estrutura de abas (`st.tabs`) e a
+chamada de cada `render_*` do pacote `viz/`. A carga de dados já vive em
+`data_loader.carregar_dados()`. É o **shell de orquestração** — nada de lógica
+de negócio, compute ou plotagem.
 
 **P4 concluído.** Todo o código separável — lógica, dados, API, tema, i18n,
-persistência, compute, plotagem e as 13 abas — está em 26 módulos, com grafo
+persistência, compute, plotagem e as 13 abas — está em 29 módulos, com grafo
 acíclico e verificação por testes + E2E + pyflakes.
+
+### Por que paramos em −88,5% (e não perseguimos 100%)
+
+Os 11,5% restantes são o **shell de entrada do Streamlit** — barra lateral
+(fluxo de conexão) + estrutura de abas. Extrair a barra lateral para um módulo
+**não** foi feito de propósito: ela é UI acoplada ao I/O de conexão, **não é
+reutilizável, não é testável isoladamente e não é compartilhada**; movê-la só
+relocaria o contrato de `session_state` (mesmo acoplamento atrás de um `import`)
+— "teatro de modularização". Além disso, é o fluxo de conexão dos clientes
+reais ("zero erro"): risco alto, benefício nulo em testabilidade/reuso. O ponto
+de parada certo é quando o próximo passo adiciona risco sem adicionar valor.
