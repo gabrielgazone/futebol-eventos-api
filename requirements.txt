@@ -16,3 +16,7 @@ numpy>=1.26,<2.6
 scipy>=1.11,<2.0
 folium>=0.14,<0.21
 streamlit-folium>=0.15,<0.30
+
+# Rebuild forçado 2026-07-25: recria o ambiente/processo do zero no Streamlit
+# Cloud (o "git pull + rerun" não estava limpando um processo travado). Mesmas
+# versões fixadas — sem mudança de dependência.
