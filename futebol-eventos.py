@@ -12,6 +12,32 @@ st.set_page_config(page_title="Futebol Eventos - Catapult", layout="wide")
 _CAMPO_COMP_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "_campo_component")
 _campo_component = st.components.v1.declare_component("campo_interativo_v1", path=_CAMPO_COMP_DIR)
 
+# ── (Cloud) Blindagem contra módulos locais ANTIGOS no sys.modules ──────────
+# Após um deploy, o Streamlit Cloud pode fazer "git pull + rerun" MANTENDO o
+# mesmo processo Python — e com ele versões ANTIGAS dos módulos locais em
+# sys.modules. Se um commit adiciona um nome (ex.: em config.py) que o módulo
+# em cache não tem, o import novo estoura ImportError e o app cai no boot
+# (foi exatamente o que derrubou o app: `from config import ...` batendo num
+# `config` velho). Antes de importar QUALQUER módulo do projeto, removemos do
+# cache os módulos que vivem no diretório do app, forçando releitura do disco.
+# É no-op num processo novo; recupera um processo reusado. O filtro por
+# __file__ garante que só módulos locais são afetados (nunca streamlit/pandas
+# nem um pacote pip de nome coincidente). Substitui a guarda pontual de
+# metrics/validation por uma proteção geral do boot.
+import sys as _sys              # noqa: E402
+import importlib as _importlib  # noqa: E402
+_APP_DIR = _os.path.dirname(_os.path.abspath(__file__))
+_THIS_FILE = _os.path.abspath(__file__)
+for _mname in list(_sys.modules):
+    _m = _sys.modules.get(_mname)
+    _mf = getattr(_m, "__file__", None)
+    if not _mf:
+        continue
+    _mf = _os.path.abspath(_mf)
+    if _mf.startswith(_APP_DIR + _os.sep) and _mf != _THIS_FILE and "site-packages" not in _mf:
+        del _sys.modules[_mname]
+_importlib.invalidate_caches()
+
 # ── P1/P3: motor único de métricas + validação de concordância ──────────────
 # Fonte canônica de cálculo (funções puras, cobertas por tests/): todas as
 # abas delegam para cá — o mesmo número em qualquer tela.
@@ -22,14 +48,12 @@ import state as _state          # noqa: E402  (P6: esquema de estado)
 import data_loader as _data_loader  # noqa: E402  (P9: pré-busca paralela)
 from catapult_api import _api_fetch, CatapultAPI  # noqa: E402,F401  (P4: cliente API)
 
-# (Cloud) Após um deploy, o Streamlit Cloud reexecuta o script principal mas
-# pode manter os módulos locais ANTIGOS em cache no sys.modules — foi a causa
-# do AttributeError 'metrics has no attribute playerload_total'. Se a versão
-# do esquema não bater, força o reload; o teste de sincronia no CI garante
-# que estes números acompanham os SCHEMA_VERSION dos módulos.
+# (Cloud) Rede de segurança extra: mesmo com a purga do sys.modules acima, se
+# por algum motivo o esquema de metrics/validation não bater, força o reload.
+# O teste de sincronia no CI garante que estes números acompanham os
+# SCHEMA_VERSION dos módulos.
 _METRICS_SCHEMA_ESPERADO = 4
 _VALIDATION_SCHEMA_ESPERADO = 2
-import importlib as _importlib  # noqa: E402
 if getattr(_mtr, 'SCHEMA_VERSION', 0) < _METRICS_SCHEMA_ESPERADO:
     _mtr = _importlib.reload(_mtr)
 if getattr(_valmod, 'SCHEMA_VERSION', 0) < _VALIDATION_SCHEMA_ESPERADO:
