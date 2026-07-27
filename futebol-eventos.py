@@ -16,37 +16,52 @@ _campo_component = st.components.v1.declare_component("campo_interativo_v1", pat
 # Após um deploy, o Streamlit Cloud pode fazer "git pull + rerun" MANTENDO o
 # mesmo processo Python — e com ele versões ANTIGAS dos módulos locais em
 # sys.modules. Se um commit adiciona um nome (ex.: em config.py) que o módulo
-# em cache não tem, o import novo estoura ImportError e o app cai no boot
-# (foi exatamente o que derrubou o app: `from config import ...` batendo num
-# `config` velho). Antes de importar QUALQUER módulo do projeto, removemos do
-# cache os módulos que vivem no diretório do app, forçando releitura do disco.
-# É no-op num processo novo; recupera um processo reusado. O filtro por
-# __file__ garante que só módulos locais são afetados (nunca streamlit/pandas
-# nem um pacote pip de nome coincidente). Substitui a guarda pontual de
-# metrics/validation por uma proteção geral do boot.
+# em cache não tem, o import estoura ImportError e o app cai no boot (foi o que
+# derrubou o app: `from config import ...` batendo num `config` velho).
+#
+# Estratégia: importar NORMALMENTE; só SE um import falhar, purgar os módulos
+# locais do cache (por __file__ no diretório do app — nunca site-packages/pip)
+# e tentar de novo com o código fresco do disco. Num processo saudável a 1ª
+# tentativa passa e NADA é purgado nem reimportado (comportamento idêntico ao
+# app original — sem custo por rerun); num processo reusado, a purga recupera o
+# boot sem precisar de reboot manual.
 import sys as _sys              # noqa: E402
 import importlib as _importlib  # noqa: E402
 _APP_DIR = _os.path.dirname(_os.path.abspath(__file__))
 _THIS_FILE = _os.path.abspath(__file__)
-for _mname in list(_sys.modules):
-    _m = _sys.modules.get(_mname)
-    _mf = getattr(_m, "__file__", None)
-    if not _mf:
-        continue
-    _mf = _os.path.abspath(_mf)
-    if _mf.startswith(_APP_DIR + _os.sep) and _mf != _THIS_FILE and "site-packages" not in _mf:
-        del _sys.modules[_mname]
-_importlib.invalidate_caches()
+
+
+def _purgar_modulos_locais_antigos():
+    """Remove do sys.modules os módulos que vivem no diretório do app, forçando
+    releitura do disco no próximo import. Nunca toca em site-packages/pip nem no
+    próprio script em execução."""
+    for _mname in list(_sys.modules):
+        _m = _sys.modules.get(_mname)
+        _mf = getattr(_m, "__file__", None)
+        if not _mf:
+            continue
+        _mf = _os.path.abspath(_mf)
+        if _mf.startswith(_APP_DIR + _os.sep) and _mf != _THIS_FILE and "site-packages" not in _mf:
+            del _sys.modules[_mname]
+    _importlib.invalidate_caches()
+
 
 # ── P1/P3: motor único de métricas + validação de concordância ──────────────
 # Fonte canônica de cálculo (funções puras, cobertas por tests/): todas as
 # abas delegam para cá — o mesmo número em qualquer tela.
-import metrics as _mtr          # noqa: E402
-import validation as _valmod    # noqa: E402
-import applog as _applog        # noqa: E402  (P3: logging estruturado)
-import state as _state          # noqa: E402  (P6: esquema de estado)
-import data_loader as _data_loader  # noqa: E402  (P9: pré-busca paralela)
-from catapult_api import _api_fetch, CatapultAPI  # noqa: E402,F401  (P4: cliente API)
+for _tentativa_import in (1, 2):
+    try:
+        import metrics as _mtr          # noqa: E402
+        import validation as _valmod    # noqa: E402
+        import applog as _applog        # noqa: E402  (P3: logging estruturado)
+        import state as _state          # noqa: E402  (P6: esquema de estado)
+        import data_loader as _data_loader  # noqa: E402  (P9: pré-busca paralela)
+        from catapult_api import _api_fetch, CatapultAPI  # noqa: E402,F401
+        break
+    except ImportError:
+        if _tentativa_import == 2:
+            raise
+        _purgar_modulos_locais_antigos()  # processo reusado c/ módulo velho: recarrega
 
 # (Cloud) Rede de segurança extra: mesmo com a purga do sys.modules acima, se
 # por algum motivo o esquema de metrics/validation não bater, força o reload.
