@@ -596,6 +596,10 @@ def main():
 </div>
 """, unsafe_allow_html=True)
 
+    # DIAG TEMPORÁRIO (remover após confirmar o Python do deploy)
+    import sys as _sys_diag
+    st.caption(f"🔧 diag · Python {_sys_diag.version_info.major}.{_sys_diag.version_info.minor} · streamlit {st.__version__}")
+
     # Inicializar session state
     if 'df_athletes' not in st.session_state:
         st.session_state.df_athletes = pd.DataFrame()
