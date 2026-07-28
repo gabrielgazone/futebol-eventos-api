@@ -596,6 +596,10 @@ def main():
 </div>
 """, unsafe_allow_html=True)
 
+    # DIAG TEMPORÁRIO (remover após confirmar): mostra versões vivas no Cloud
+    import numpy as _np_diag
+    st.caption(f"🔧 diag · numpy {_np_diag.__version__} · streamlit {st.__version__}")
+
     # Inicializar session state
     if 'df_athletes' not in st.session_state:
         st.session_state.df_athletes = pd.DataFrame()
