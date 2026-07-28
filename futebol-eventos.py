@@ -596,16 +596,6 @@ def main():
 </div>
 """, unsafe_allow_html=True)
 
-    # DIAG TEMPORÁRIO (remover após confirmar): mostra versões vivas no Cloud
-    import numpy as _np_diag, pandas as _pd_diag, scipy as _sp_diag
-    import plotly as _pl_diag, folium as _fo_diag, sys as _sys_diag
-    st.caption(
-        f"🔧 diag · py {_sys_diag.version_info.major}.{_sys_diag.version_info.minor}"
-        f" · numpy {_np_diag.__version__} · pandas {_pd_diag.__version__}"
-        f" · scipy {_sp_diag.__version__} · plotly {_pl_diag.__version__}"
-        f" · folium {_fo_diag.__version__} · streamlit {st.__version__}"
-    )
-
     # Inicializar session state
     if 'df_athletes' not in st.session_state:
         st.session_state.df_athletes = pd.DataFrame()
