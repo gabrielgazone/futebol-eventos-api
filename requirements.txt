@@ -8,16 +8,21 @@
 # atualização "surpresa" (ex.: Streamlit 1.59+) fica barrada.
 # Para reprodutibilidade TOTAL, fixe também o Python em 3.12 nas configurações
 # avançadas do Streamlit Cloud (o mesmo do ambiente de desenvolvimento).
-# streamlit FIXADO em 1.50.0: a faixa <1.59 deixava o Cloud instalar a 1.58,
-# que renderiza só o cabeçalho e NÃO monta a barra lateral (regressão de DOM —
-# o mesmo tipo de quebra que a 1.58 já causou nas abas). Verificado: 1.50.0
-# renderiza o app inteiro (servidor Streamlit real, sidebar completa). Wheel
-# universal (py3), então não há risco de faltar wheel por versão de Python.
+# streamlit FIXADO em 1.50.0 por precaução: é a versão verificada de ponta a
+# ponta (servidor real: sidebar + abas + 110 testes). A causa da queda foi o
+# numpy 2.5.x (abaixo), NÃO o streamlit — mas como a 1.58 não foi validada com
+# o app atual, mantemos o pino na versão testada para não introduzir variável
+# nova logo após o incidente. Wheel universal (py3), sem risco de wheel/Python.
 streamlit==1.50.0
 requests>=2.31,<3.0
 pandas>=2.1,<3.1
 plotly>=5.18,<7.0
-numpy>=1.26,<2.6
+# numpy TETO em <2.5: a 2.5.x (que a faixa <2.6 deixava o Cloud instalar) faz o
+# app renderizar SÓ o cabeçalho — a barra lateral e as abas não montam, e sem
+# erro no log (bisecção controlada: 2.5.1 quebra; 2.4.6 e 2.3.3 renderizam o app
+# inteiro e passam nos 110 testes). Foi a causa real do "app no ar mas só o
+# header". 2.4.6 (o teto atual) tem wheels amplos, inclusive p/ Python novo.
+numpy>=1.26,<2.5
 scipy>=1.11,<2.0
 folium>=0.14,<0.21
 streamlit-folium>=0.15,<0.30
