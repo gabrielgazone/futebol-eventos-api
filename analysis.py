@@ -52,6 +52,95 @@ def detectar_eventos_acc(acc_arr, limiar, min_dur_s=0.6, acima=True, freq_hz=10)
             in_event = False
     return eventos
 
+def detectar_acoes_rhie(vel_kmh, acc_ms2, hz, vel_thr_kmh, acc_thr_ms2,
+                        dec_thr_ms2, min_dur_acc_s=0.6):
+    """Ações de alta intensidade numa linha do tempo, para compor blocos RHIE
+    (Repeated High-Intensity Efforts).
+
+    Retorna lista de dicts {frame, tipo} ordenada por frame, onde tipo é:
+      'vel' — entrada em corrida de alta intensidade (vel_kmh > vel_thr_kmh)
+      'acc' — aceleração sustentada  >= acc_thr_ms2  por min_dur_acc_s
+      'dec' — desaceleração sustentada <= -dec_thr_ms2 por min_dur_acc_s
+
+    dec_thr_ms2 é a MAGNITUDE do corte (positiva; ex.: 3.0 → desacel ≤ -3 m/s²).
+    vel_kmh / acc_ms2: arrays por frame. Função pura (numpy) — coberta por teste.
+    """
+    acoes = []
+
+    # Velocidade: conta cada ENTRADA acima do corte (uma vez por esforço)
+    _in_hi = False
+    for _i, _v in enumerate(vel_kmh):
+        if _v > vel_thr_kmh and not _in_hi:
+            acoes.append({'frame': _i, 'tipo': 'vel'})
+            _in_hi = True
+        elif _v <= vel_thr_kmh:
+            _in_hi = False
+
+    # Aceleração / desaceleração sustentadas (reusa a detecção por duração mínima)
+    _acc_arr = np.asarray(acc_ms2, dtype=float)
+    if _acc_arr.size:
+        _mask_acc = detectar_eventos_acc(_acc_arr, acc_thr_ms2, min_dur_acc_s,
+                                         acima=True, freq_hz=hz)
+        _mask_dec = detectar_eventos_acc(_acc_arr, dec_thr_ms2, min_dur_acc_s,
+                                         acima=False, freq_hz=hz)
+        for _f in np.flatnonzero(_mask_acc):
+            acoes.append({'frame': int(_f), 'tipo': 'acc'})
+        for _f in np.flatnonzero(_mask_dec):
+            acoes.append({'frame': int(_f), 'tipo': 'dec'})
+
+    acoes.sort(key=lambda _a: _a['frame'])
+    return acoes
+
+
+def agrupar_blocos_rhie(acoes, hz, min_acoes=3, recuperacao_s=21.0):
+    """Agrupa as ações de detectar_acoes_rhie em blocos RHIE: ações consecutivas
+    separadas por MENOS de `recuperacao_s`. Só grupos com >= `min_acoes` ações
+    contam como bloco RHIE.
+
+    Retorna lista de dicts por bloco: frame_ini, frame_fim, dur_s, n_vel, n_acc,
+    n_dec, n_total e a lista `acoes`. Função pura — coberta por teste.
+    """
+    if not acoes:
+        return []
+    _gap = recuperacao_s * hz
+    _grupos = []
+    _cur = [acoes[0]]
+    for _a in acoes[1:]:
+        if _a['frame'] - _cur[-1]['frame'] <= _gap:
+            _cur.append(_a)
+        else:
+            if len(_cur) >= min_acoes:
+                _grupos.append(_cur)
+            _cur = [_a]
+    if len(_cur) >= min_acoes:
+        _grupos.append(_cur)
+
+    _blocos = []
+    for _g in _grupos:
+        _f0, _f1 = _g[0]['frame'], _g[-1]['frame']
+        _blocos.append({
+            'frame_ini': _f0,
+            'frame_fim': _f1,
+            'dur_s': (_f1 - _f0) / hz if hz > 0 else 0.0,
+            'n_vel': sum(1 for _a in _g if _a['tipo'] == 'vel'),
+            'n_acc': sum(1 for _a in _g if _a['tipo'] == 'acc'),
+            'n_dec': sum(1 for _a in _g if _a['tipo'] == 'dec'),
+            'n_total': len(_g),
+            'acoes': _g,
+        })
+    return _blocos
+
+
+def calcular_blocos_rhie(vel_kmh, acc_ms2, hz, *, vel_thr_kmh, acc_thr_ms2,
+                         dec_thr_ms2, min_dur_acc_s=0.6, min_acoes=3,
+                         recuperacao_s=21.0):
+    """Conveniência: detecta as ações e agrupa em blocos RHIE de uma vez.
+    Ver detectar_acoes_rhie (cortes) e agrupar_blocos_rhie (agrupamento)."""
+    _acoes = detectar_acoes_rhie(vel_kmh, acc_ms2, hz, vel_thr_kmh, acc_thr_ms2,
+                                 dec_thr_ms2, min_dur_acc_s)
+    return agrupar_blocos_rhie(_acoes, hz, min_acoes, recuperacao_s)
+
+
 def acc_series_from_vel(vel_kmh, ts_list, freq_hz=10.0):
     """Deriva aceleração (m/s²) da velocidade (km/h) + timestamps.
 
