@@ -8,9 +8,10 @@ from analysis import get_min_dur_s
 import plotly.graph_objects as go
 import numpy as np
 import streamlit as st
+from viz.rhie import render_rhie_secao
 
 
-def render_esforcos(_SENSOR_HZ, dados_sensor_por_atleta_por_periodo):
+def render_esforcos(_SENSOR_HZ, dados_sensor_por_atleta_por_periodo, dados_posicao_por_periodo):
         st.subheader("⏱️ Esforços ao Longo do Tempo")
 
         if dados_sensor_por_atleta_por_periodo:
@@ -115,3 +116,8 @@ def render_esforcos(_SENSOR_HZ, dados_sensor_por_atleta_por_periodo):
 
 
         # ── FEATURE 8: PDF Export — REMOVIDO ──────────────────────────
+
+        # ── RHIE — Esforcos Repetidos de Alta Intensidade ──────────────
+        render_rhie_secao(
+            dados_sensor_por_atleta_por_periodo,
+            dados_posicao_por_periodo, _SENSOR_HZ, "esforcos")

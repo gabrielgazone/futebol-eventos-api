@@ -21,6 +21,7 @@ from field import gps_para_campo_coords
 import numpy as np
 import pandas as pd
 import streamlit as st
+from viz.rhie import render_rhie_secao
 
 
 def render_wcs(_REL_VEL_BANDAS, _SENSOR_HZ, _ok_ld, dados_efforts_acc_por_periodo, dados_posicao_por_periodo, dados_sensor_por_atleta_por_periodo, resultados_por_periodo):
@@ -1120,3 +1121,8 @@ def render_wcs(_REL_VEL_BANDAS, _SENSOR_HZ, _ok_ld, dados_efforts_acc_por_period
                                 st.plotly_chart(_fig_wcs2, use_container_width=True)
                             else:
                                 st.info("Dados GPS insuficientes para animação deste atleta.")
+
+                # ── RHIE — Esforcos Repetidos de Alta Intensidade ──────────────
+                render_rhie_secao(
+                    dados_sensor_por_atleta_por_periodo,
+                    dados_posicao_por_periodo, _SENSOR_HZ, "wcs")

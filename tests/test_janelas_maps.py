@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from viz.janelas import _build_period_maps, _periodo_label_de_t  # noqa: E402
+from viz.campo_anim import _build_period_maps, _periodo_label_de_t  # noqa: E402
 
 
 def _periodo(ts_ini, ts_fim, atleta='atl1'):

@@ -1766,7 +1766,7 @@ Escolha um ou mais atletas para análise simultânea.
 
             # ==================== ABA 2: ESFORÇOS AO LONGO DO TEMPO ====================
             with abas[1]:
-                render_esforcos(_SENSOR_HZ, dados_sensor_por_atleta_por_periodo)
+                render_esforcos(_SENSOR_HZ, dados_sensor_por_atleta_por_periodo, dados_posicao_por_periodo)
 
             # ==================== ABA 3: JANELAS TEMPORAIS MÓVEIS ====================
             with abas[2]:
