@@ -31,7 +31,7 @@ _CHAVE_LINHA = ['Atividade', 'Atleta', 'Escopo', 'Variavel', 'Janela_min']
 # descartado, em vez de ser exibido incompleto e parecer um bug.
 _COLS_ESPERADAS = ['Atividade', 'Data', 'Equipe', 'Atleta', 'Posicao',
                    'Minutos', 'Periodos_jogados', 'Escopo', 'Variavel',
-                   'Janela_min', 'Valor']
+                   'Janela_min', 'Valor', 'Ocorrencias_pct']
 
 
 def _fmt_data_br(valor) -> str:
@@ -325,7 +325,7 @@ def _cols_id(df):
                           'Escopo') if _c in df.columns]
 
 
-def pivotar_variaveis_x_janelas(df):
+def pivotar_variaveis_x_janelas(df, pct=90):
     """UMA linha por atleta (× atividade/escopo) e uma coluna por
     VARIÁVEL × JANELA — ex.: "Distância (m) 1min", "Distância (m) 3min", ...
 
@@ -335,31 +335,40 @@ def pivotar_variaveis_x_janelas(df):
     if df is None or getattr(df, 'empty', True):
         return df
     _idx = _cols_id(df)
+    _tem_ocor = 'Ocorrencias_pct' in df.columns
+    _vals = ['Valor'] + (['Ocorrencias_pct'] if _tem_ocor else [])
     _p = df.pivot_table(index=_idx, columns=['Variavel', 'Janela_min'],
-                        values='Valor', aggfunc='first').reset_index()
-    # Achata o cabeçalho de 2 níveis: ('Distância (m)', 1) -> 'Distância (m) 1min'
+                        values=_vals, aggfunc='first').reset_index()
+    # Achata o cabeçalho: ('Valor', 'Distância (m)', 1) -> 'Distância (m) 1min';
+    # ('Ocorrencias_pct', ...) -> 'Distância (m) ≥90% 1min'
     _novos = []
     for _c in _p.columns:
         if isinstance(_c, tuple):
-            _var, _jan = _c[0], _c[1]
-            _novos.append(f"{_var} {int(_jan)}min" if _var and _jan != ''
-                          else str(_var or _jan))
+            _partes = [_x for _x in _c if _x != '']
+            if len(_partes) >= 3:
+                _tipo, _var, _jan = _partes[0], _partes[1], _partes[2]
+                _suf = f' ≥{int(pct)}%' if _tipo == 'Ocorrencias_pct' else ''
+                _novos.append(f"{_var}{_suf} {int(_jan)}min")
+            else:
+                _novos.append(str(_partes[-1] if _partes else _c[0]))
         else:
             _novos.append(str(_c))
     _p.columns = _novos
-    # Ordena: identificadores, depois variável (ordem de VARIAVEIS) × janela
+    # Ordena: identificadores; depois, por variável, os picos 1/3/5 e em
+    # seguida as ocorrências ≥90% 1/3/5.
     _janelas = sorted({int(_j) for _j in df['Janela_min'].unique()})
     _ordem_vars = []
     for _v in _wx.VARIAVEIS:
-        for _j in _janelas:
-            _nome = f"{_v} {_j}min"
-            if _nome in _p.columns:
-                _ordem_vars.append(_nome)
+        for _suf in ('', f' ≥{int(pct)}%'):
+            for _j in _janelas:
+                _nome = f"{_v}{_suf} {_j}min"
+                if _nome in _p.columns:
+                    _ordem_vars.append(_nome)
     _outras = [_c for _c in _p.columns if _c not in _ordem_vars]
     return _p[_outras + _ordem_vars]
 
 
-def pivotar_variaveis(df):
+def pivotar_variaveis(df, pct=90):
     """Converte o formato longo em VARIÁVEIS COMO COLUNAS (atletas nas linhas).
 
     Índice: Atividade, Data, Equipe, Atleta, Posicao, Minutos*, Escopo,
@@ -370,18 +379,36 @@ def pivotar_variaveis(df):
     _idx = [_c for _c in ('Atividade', 'Data', 'Equipe', 'Atleta', 'Posicao',
                           'Minutos', 'Periodos_jogados',
                           'Escopo', 'Janela_min') if _c in df.columns]
-    _p = df.pivot_table(index=_idx, columns='Variavel', values='Valor',
+    _tem_ocor = 'Ocorrencias_pct' in df.columns
+    _vals = ['Valor'] + (['Ocorrencias_pct'] if _tem_ocor else [])
+    _p = df.pivot_table(index=_idx, columns='Variavel', values=_vals,
                         aggfunc='first').reset_index()
-    _p.columns.name = None
-    # Ordena as colunas de variáveis como em VARIAVEIS (o resto vem antes)
-    _vars_ord = [_v for _v in _wx.VARIAVEIS if _v in _p.columns]
+    _novos = []
+    for _c in _p.columns:
+        if isinstance(_c, tuple):
+            _partes = [_x for _x in _c if _x != '']
+            if len(_partes) >= 2:
+                _tipo, _var = _partes[0], _partes[1]
+                _novos.append(f"{_var} ≥{int(pct)}%"
+                              if _tipo == 'Ocorrencias_pct' else str(_var))
+            else:
+                _novos.append(str(_partes[-1] if _partes else _c[0]))
+        else:
+            _novos.append(str(_c))
+    _p.columns = _novos
+    # Ordena: identificadores; por variável, o pico e depois as ocorrências
+    _vars_ord = []
+    for _v in _wx.VARIAVEIS:
+        for _suf in ('', f' ≥{int(pct)}%'):
+            if f"{_v}{_suf}" in _p.columns:
+                _vars_ord.append(f"{_v}{_suf}")
     _outras = [_c for _c in _p.columns if _c not in _vars_ord]
     return _p[_outras + _vars_ord]
 
 
 def _linhas_wcs_atividade(act_nome, act_data, dados_sensor, info_atl,
                           variaveis, janelas, escopos, hz, cortes,
-                          participantes=None, duracoes=None):
+                          participantes=None, duracoes=None, pct=0.90):
     """Linhas tidy de WCS para UMA atividade já carregada.
 
     info_atl: {nome: (posicao, equipe)} vindo da API (ver _atletas_da_atividade).
@@ -434,6 +461,8 @@ def _linhas_wcs_atividade(act_nome, act_data, dados_sensor, info_atl,
 
         for _escopo, _sp, _min_escopo in _escopo_series:
             _picos = _wx.calcular_wcs(_sp, variaveis, janelas, hz, **cortes)
+            _ocor = _wx.calcular_ocorrencias(_sp, variaveis, janelas, hz,
+                                             pct, **cortes)
             for (_var, _wmin), _val in _picos.items():
                 _rows.append({
                     'Atividade': act_nome,
@@ -447,6 +476,7 @@ def _linhas_wcs_atividade(act_nome, act_data, dados_sensor, info_atl,
                     'Variavel': _var,
                     'Janela_min': _wmin,
                     'Valor': _val,
+                    'Ocorrencias_pct': _ocor.get((_var, _wmin), 0),
                 })
     return _rows, _excluidos
 
@@ -503,6 +533,12 @@ def render_export_wcs_multi(api):
             default=['Partida inteira', 'Por período'], key='wcs_multi_esc',
             help="Partida inteira = períodos encadeados (pior janela do jogo). "
                  "Por período = pico separado de cada tempo.")
+        _pct_ocor = st.number_input(
+            "Limiar de ocorrências (% do máximo do atleta)", 50, 100, 90, 5,
+            key='wcs_multi_pct',
+            help="Para cada variável e janela, conta quantos esforços DISTINTOS "
+                 "(não-sobrepostos) o atleta fez acima desta fração do SEU "
+                 "próprio pico. 90% = repetições do próprio pior cenário.")
         with st.expander("⚙️ Cortes das variáveis"):
             _hsr = st.number_input("HSR ≥ (km/h)", 10.0, 30.0,
                                    _wx.DEFAULT_HSR_KMH, 0.1, key='wcs_multi_hsr')
@@ -621,7 +657,8 @@ def render_export_wcs_multi(api):
                     _novas, _excl = _linhas_wcs_atividade(
                         _nm, _dt, _sensor, _info_atl, _vars_sel, _jan_sel,
                         _esc_sel, 10.0, _cortes,
-                        participantes=_partic, duracoes=_duracs)
+                        participantes=_partic, duracoes=_duracs,
+                        pct=_pct_ocor / 100.0)
                     _rows += _novas
                     _n_sem_pos = sum(1 for _v in _info_atl.values() if not _v[0])
                     _log.append(
@@ -715,7 +752,7 @@ def render_export_wcs_multi(api):
              "Longo: 1 linha por variável (para modelos mistos).")
 
     if _fmt_out == "Variáveis × janelas em colunas":
-        _dfx = pivotar_variaveis_x_janelas(_df)
+        _dfx = pivotar_variaveis_x_janelas(_df, _pct_ocor)
         _nome_csv = "wcs_multi_atividades_var_x_janelas.csv"
         _legenda = (
             "Cada linha é um **atleta** numa atividade/escopo; cada variável tem "
@@ -723,7 +760,7 @@ def render_export_wcs_multi(api):
             "`Distância (m) 3min`, `Distância (m) 5min`). Formato direto para "
             "comparar janelas lado a lado no jamovi.")
     elif _fmt_out == "Variáveis em colunas":
-        _dfx = pivotar_variaveis(_df)
+        _dfx = pivotar_variaveis(_df, _pct_ocor)
         _nome_csv = "wcs_multi_atividades_variaveis_em_colunas.csv"
         _legenda = (
             "Cada linha é um **atleta** numa atividade/escopo/janela; cada "

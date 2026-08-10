@@ -225,6 +225,61 @@ def pico_janela(sv, n_amostras, is_max=False):
     return float(_rw[_bi]), _bi, _bi + _n
 
 
+def ocorrencias_acima_pct(sv, n_amostras, pct=0.90):
+    """Nº de esforços DISTINTOS (não-sobrepostos) em que a janela atingiu
+    >= `pct` do MÁXIMO do próprio atleta naquela série.
+
+    O limiar é relativo ao próprio atleta (90% do seu pico), como pedido. Conta
+    esforços distintos com o mesmo algoritmo guloso das abas WCS/Janelas: pega a
+    maior janela, bloqueia todas que se sobrepõem a ela (separação mínima = a
+    própria janela) e repete. Sem isso, o passo de 10 s faria um único esforço
+    ser contado várias vezes (numa janela de 5 min, dezenas), inflando o número
+    por artefato de método.
+    """
+    _n = int(n_amostras)
+    if not sv or _n < 1 or len(sv) < _n:
+        return 0
+    _rw = _mtr.rolling_sum(sv, _n)
+    if not _rw:
+        return 0
+    _mx = max(_rw)
+    if _mx <= 0:
+        return 0
+    _thr = float(pct) * _mx
+    _usado = [False] * len(_rw)
+    _cont = 0
+    for _i in sorted(range(len(_rw)), key=lambda _k: _rw[_k], reverse=True):
+        if _usado[_i]:
+            continue
+        if _rw[_i] < _thr:
+            break                      # ordenado: nada abaixo será útil
+        for _j in range(max(0, _i - _n + 1), min(len(_rw), _i + _n)):
+            _usado[_j] = True
+        _cont += 1
+    return _cont
+
+
+def calcular_ocorrencias(sensor_points, variaveis, janelas_min, hz=10.0,
+                         pct=0.90, **cortes):
+    """{(variável, janela): nº de esforços >= pct do máximo do atleta}.
+
+    Complementa `calcular_wcs` (que dá o pico): aqui a frequência com que o
+    atleta repetiu o próprio pior cenário. Janelas que não cabem na série são
+    omitidas, igual ao pico.
+    """
+    _out = {}
+    for _var in variaveis:
+        _sv = serie_por_amostra(sensor_points, _var, hz, **cortes)
+        if not _sv:
+            continue
+        for _wmin in janelas_min:
+            _n = int(round(_wmin * 60 * hz))
+            if _n < 1 or len(_sv) < _n:
+                continue
+            _out[(_var, _wmin)] = ocorrencias_acima_pct(_sv, _n, pct)
+    return _out
+
+
 def calcular_wcs(sensor_points, variaveis, janelas_min, hz=10.0, **cortes):
     """Pico WCS de cada (variável × janela) para UM atleta num escopo.
 
