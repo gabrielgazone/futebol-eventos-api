@@ -20,6 +20,18 @@ from data_loader import carregar_dados
 
 _SS_RES = '_wcs_multi_resultado'      # DataFrame tidy calculado
 _SS_LOG = '_wcs_multi_log'            # avisos por atividade
+_SS_ACTS = '_wcs_multi_acts_calc'     # atividades que geraram o resultado atual
+
+# Colunas que identificam uma linha unicamente (usadas para deduplicar ao
+# acumular lotes de atividades).
+_CHAVE_LINHA = ['Atividade', 'Atleta', 'Escopo', 'Variavel', 'Janela_min']
+
+# Colunas que o resultado ATUAL precisa ter. Um resultado guardado na sessão de
+# antes de um deploy pode não ter as colunas novas (ex.: minutos) — nesse caso é
+# descartado, em vez de ser exibido incompleto e parecer um bug.
+_COLS_ESPERADAS = ['Atividade', 'Data', 'Equipe', 'Atleta', 'Posicao',
+                   'Minutos_OpenField', 'Minutos_sensor', 'Escopo',
+                   'Variavel', 'Janela_min', 'Valor']
 
 
 def _fmt_data_br(valor) -> str:
@@ -323,8 +335,16 @@ def render_export_wcs_multi(api):
         st.warning("Escolha ao menos uma variável, uma janela e um escopo.")
         return
 
-    st.caption(f"**{len(_sel)}** atividade(s) · {len(_vars_sel)} variável(is) · "
-               f"janelas {_jan_sel} · escopo(s) {len(_esc_sel)}")
+    st.caption(f"**{len(_sel)}** atividade(s) selecionada(s) · {len(_vars_sel)} "
+               f"variável(is) · janelas {_jan_sel} · escopo(s) {len(_esc_sel)}")
+
+    _acumular = st.checkbox(
+        "➕ Acumular com o resultado já calculado", value=False,
+        key='wcs_multi_acum',
+        help="Marque para SOMAR estas atividades ao que já foi calculado, em vez "
+             "de substituir. Útil para exportar muitas atividades em lotes "
+             "(ex.: 30 partidas em 3 lotes de 10) e baixar um CSV único no fim. "
+             "Linhas repetidas da mesma atividade são substituídas, não duplicadas.")
 
     # ── Cálculo (sob demanda — não roda a cada rerun) ────────────────────────
     if st.button("🚀 Carregar atividades e calcular WCS", type="primary",
@@ -404,9 +424,21 @@ def render_export_wcs_multi(api):
             if _bkp_filt is not None:
                 st.session_state['atletas_filtrados'] = _bkp_filt
         _prog.progress(1.0, text="Concluído.")
-        st.session_state[_SS_RES] = (pd.DataFrame(_rows) if _rows
-                                     else pd.DataFrame())
+        _novo_df = pd.DataFrame(_rows) if _rows else pd.DataFrame()
+        _ant_df = st.session_state.get(_SS_RES)
+        _ant_acts = list(st.session_state.get(_SS_ACTS) or [])
+        if (_acumular and _ant_df is not None
+                and not getattr(_ant_df, 'empty', True) and not _novo_df.empty):
+            # Junta lotes e remove repetições da MESMA atividade (recálculo)
+            _novo_df = (pd.concat([_ant_df, _novo_df], ignore_index=True)
+                        .drop_duplicates(subset=_CHAVE_LINHA, keep='last')
+                        .reset_index(drop=True))
+            _acts_final = _ant_acts + [_a for _a in _sel if _a not in _ant_acts]
+        else:
+            _acts_final = list(_sel)
+        st.session_state[_SS_RES] = _novo_df
         st.session_state[_SS_LOG] = _log
+        st.session_state[_SS_ACTS] = _acts_final
 
     # ── Resultado ────────────────────────────────────────────────────────────
     _df = st.session_state.get(_SS_RES)
@@ -418,13 +450,38 @@ def render_export_wcs_multi(api):
 
     if _df is None:
         return
+
+    # Resultado de ANTES de um deploy pode não ter as colunas novas (minutos,
+    # bandas). Nesse caso descarta — melhor recalcular do que exibir incompleto.
+    if (not getattr(_df, 'empty', True)
+            and any(_c not in _df.columns for _c in _COLS_ESPERADAS)):
+        _falta = [_c for _c in _COLS_ESPERADAS if _c not in _df.columns]
+        for _k in (_SS_RES, _SS_LOG, _SS_ACTS):
+            st.session_state.pop(_k, None)
+        st.warning(
+            "O resultado guardado é de uma versão anterior do app "
+            f"(sem: {', '.join(_falta)}) e foi descartado. Clique em "
+            "**🚀 Carregar atividades e calcular WCS** para recalcular.")
+        return
+
     if getattr(_df, 'empty', True):
         st.warning("Nenhuma linha gerada. Verifique se as atividades têm dados "
                    "de sensor e se as janelas cabem na duração.")
         return
 
+    # Aviso de resultado DESATUALIZADO: a seleção mudou depois do cálculo.
+    _acts_calc = list(st.session_state.get(_SS_ACTS) or [])
+    if set(_acts_calc) != set(_sel):
+        _faltam = [_a for _a in _sel if _a not in _acts_calc]
+        st.warning(
+            f"⚠️ Este resultado é de **{len(_acts_calc)}** atividade(s), mas você "
+            f"tem **{len(_sel)}** selecionada(s)"
+            + (f" — falta calcular: {', '.join(_faltam[:5])}"
+               + ("…" if len(_faltam) > 5 else "") if _faltam else "")
+            + ". Clique em **🚀 Carregar atividades e calcular WCS** para atualizar.")
+
     st.success(f"**{len(_df)}** linhas · {_df['Atleta'].nunique()} atleta(s) · "
-               f"{_df['Atividade'].nunique()} atividade(s)")
+               f"{_df['Atividade'].nunique()} atividade(s) calculada(s)")
 
     _fmt_out = st.radio(
         "Formato da tabela:",

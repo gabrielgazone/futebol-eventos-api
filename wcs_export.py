@@ -148,6 +148,17 @@ def serie_por_amostra(sensor_points, variavel, hz=10.0, *,
                           dtype=float)
         if not _acc.size:
             return []
+        # Sem aceleração nativa (campo 'a' ausente ou achatado) as contagens
+        # sairiam todas ZERO. Espelha o fallback da aba WCS: deriva a série por
+        # dv/dt da velocidade, para não subestimar acel/desacel.
+        if not np.any(np.abs(_acc) > 0.05):
+            from analysis import acc_series_from_vel as _acc_de_vel
+            _vk = _vel_kmh(sensor_points)
+            _ts = [float(_p.get('ts') or 0.0) for _p in sensor_points]
+            if any(_v > 0.1 for _v in _vk):
+                _acc = np.asarray(_acc_de_vel(_vk, _ts, hz), dtype=float)
+                if not _acc.size:
+                    return []
         _disp = {'acc_b2': acc_b2, 'acc_b3': acc_b3,
                  'dec_b2': dec_b2, 'dec_b3': dec_b3}
         _pos = variavel in (VAR_ACC_B2, VAR_ACC_B3, VAR_ACC_B2P)

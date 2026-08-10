@@ -184,3 +184,31 @@ def test_defaults_classificam_pico_3_0_como_b2():
     pts = _pts([10.0] * len(acc), acc=acc)
     assert sum(wx.serie_por_amostra(pts, wx.VAR_ACC_B2, hz=10)) == 1.0
     assert sum(wx.serie_por_amostra(pts, wx.VAR_ACC_B3, hz=10)) == 0.0
+
+
+def test_acc_dec_presentes_mesmo_sem_aceleracao_nativa():
+    """Sem campo 'a', as bandas nao devem sumir da tabela: a serie e derivada
+    por dv/dt da velocidade (espelha o fallback da aba WCS).
+
+    Usa RAMPAS sustentadas: ~3 m/s² exige dv = 0,3 m/s por amostra a 10 Hz
+    (= 1,08 km/h), mantido por >= 6 frames (duracao minima de 0,6 s).
+    """
+    vel = [5.0]
+    for _ in range(15):                       # aceleracao sustentada ~3 m/s²
+        vel.append(vel[-1] + 1.1)
+    vel += [vel[-1]] * 20                     # plato
+    for _ in range(15):                       # desaceleracao sustentada
+        vel.append(max(0.0, vel[-1] - 1.1))
+    vel += [vel[-1]] * 20
+    pts = _pts(vel)                           # SEM 'a'
+    for _v in (wx.VAR_ACC_B2P, wx.VAR_DEC_B2P):
+        sv = wx.serie_por_amostra(pts, _v, hz=10)
+        assert sv, f"{_v}: serie vazia"
+        assert sum(sv) > 0, f"{_v}: derivacao dv/dt nao gerou acoes"
+
+
+def test_bandas_presentes_na_saida_mesmo_com_zero():
+    """Mesmo sem nenhuma acao, a variavel aparece com 0 (coluna nao desaparece)."""
+    pts = _pts([10.0] * 600, acc=[0.0] * 600)   # 'a' presente e plano
+    r = wx.calcular_wcs(pts, [wx.VAR_ACC_B2, wx.VAR_DEC_B3], [1], hz=10)
+    assert (wx.VAR_ACC_B2, 1) in r and (wx.VAR_DEC_B3, 1) in r
