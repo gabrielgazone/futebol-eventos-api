@@ -116,6 +116,16 @@ class CatapultAPI:
         return _api_fetch(self.base_url, self._token,
                           f"activities/{activity_id}/periods")
 
+    def get_deep_activity(self, activity_id):
+        """GET /activities/{id}?include=all — atividade "profunda": períodos com
+        start_time/end_time e os atletas de cada período, além de athletes
+        (com position) e teams. Substitui ~5 chamadas por atividade e é a fonte
+        AUTORITATIVA de duração de período e participação (o que o OpenField usa
+        para decidir quem entra no export de cada tempo)."""
+        return _api_fetch(self.base_url, self._token,
+                          f"activities/{activity_id}",
+                          (("include", "all"),))
+
     def get_all_periods(self):
         return _api_fetch(self.base_url, self._token, "periods")
 

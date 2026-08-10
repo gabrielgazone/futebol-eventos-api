@@ -120,6 +120,87 @@ def _atletas_da_atividade(api, activity_id, pos_map, eq_map):
     return pd.DataFrame(_rows)
 
 
+def _nome_do_atleta(_a):
+    """Nome como o app monta a chave do atleta (first + last, senão name)."""
+    _nm = f"{_a.get('first_name', '')} {_a.get('last_name', '')}".strip()
+    return _nm or str(_a.get('name') or '')
+
+
+def ler_atividade_profunda(resp):
+    """Extrai duração e participação de GET /activities/{id}?include=all.
+
+    Fonte AUTORITATIVA (docs Catapult v6): cada período traz `start_time`/
+    `end_time` em epoch (+ `start_centiseconds`/`end_centiseconds`) e a lista de
+    atletas do período — exatamente o que o OpenField usa para o export de cada
+    tempo. Duração = end − start; participação = presença na lista do período.
+
+    Retorna (duracoes, participantes, info_atl):
+      duracoes     {nome_do_periodo: minutos}
+      participantes{nome_do_periodo: set(nomes) | None}
+      info_atl     {nome: (posicao, equipe)}
+    """
+    _obj = resp
+    if isinstance(_obj, list):
+        _obj = _obj[0] if _obj else {}
+    if not isinstance(_obj, dict):
+        return {}, {}, {}
+    _obj = _obj.get('data', _obj) if isinstance(_obj.get('data'), dict) else _obj
+
+    # Posição/equipe dos atletas da atividade
+    _info = {}
+    _equipe_ativ = ''
+    _teams = _obj.get('teams') or []
+    if isinstance(_teams, list) and _teams:
+        _t0 = _teams[0]
+        if isinstance(_t0, dict):
+            _equipe_ativ = str(_t0.get('name') or '')
+    for _a in (_obj.get('athletes') or []):
+        if not isinstance(_a, dict):
+            continue
+        _nm = _nome_do_atleta(_a)
+        if not _nm:
+            continue
+        _pos = str(_a.get('position_name') or _a.get('position') or '')
+        if isinstance(_a.get('position'), dict):
+            _pos = str(_a['position'].get('name') or '')
+        _info[_nm] = (_pos, _equipe_ativ)
+
+    # id → nome, para resolver listas de período que só trazem athlete_id
+    _id2nome = {}
+    for _a in (_obj.get('athletes') or []):
+        if isinstance(_a, dict) and _a.get('id'):
+            _id2nome[str(_a['id'])] = _nome_do_atleta(_a)
+
+    _duracoes, _partic = {}, {}
+    for _p in (_obj.get('periods') or []):
+        if not isinstance(_p, dict):
+            continue
+        _pnm = str(_p.get('name') or f"Período {len(_duracoes) + 1}")
+        try:
+            _ini = (float(_p.get('start_time') or 0)
+                    + float(_p.get('start_centiseconds') or 0) / 100.0)
+            _fim = (float(_p.get('end_time') or 0)
+                    + float(_p.get('end_centiseconds') or 0) / 100.0)
+        except (TypeError, ValueError):
+            _ini = _fim = 0.0
+        _duracoes[_pnm] = (round((_fim - _ini) / 60.0, 5)
+                           if _fim > _ini > 0 else 0.0)
+
+        _nomes = set()
+        for _chave in ('athletes', 'period_athletes'):
+            for _pa in (_p.get(_chave) or []):
+                if not isinstance(_pa, dict):
+                    continue
+                _nm = _nome_do_atleta(_pa)
+                if not _nm:
+                    _aid = _pa.get('athlete_id') or _pa.get('id')
+                    _nm = _id2nome.get(str(_aid), '') if _aid else ''
+                if _nm:
+                    _nomes.add(_nm)
+        _partic[_pnm] = _nomes or None
+    return _duracoes, _partic, _info
+
+
 def duracoes_periodos(dados_sensor, hz=10.0):
     """{período: duração em minutos} pela janela de tempo do período.
 
@@ -469,13 +550,37 @@ def render_export_wcs_multi(api):
                     if not _sensor:
                         _log.append(f"⚠️ {_nm}: sem dados de sensor — ignorada.")
                         continue
-                    # Participacao por periodo (lista oficial da API) +
-                    # duracao de cada periodo => Minutos igual ao OpenField.
-                    _id2nome = {str(_r['id']): _r['nome']
-                                for _, _r in _df_atl.iterrows() if _r.get('id')}
-                    _partic = _participantes_por_periodo(api, _pids, _id2nome)
-                    _duracs = duracoes_periodos(_sensor, 10.0)
-                    _sem_lista = [_p for _p, _v in _partic.items() if _v is None]
+                    # Duração e participação AUTORITATIVAS: 1 chamada
+                    # /activities/{id}?include=all (períodos com start/end_time
+                    # + atletas de cada período). Fallback: /periods/{id}/
+                    # athletes + timestamps do sensor.
+                    _duracs, _partic, _info_deep = {}, {}, {}
+                    _fonte_min = 'sensor'
+                    try:
+                        _deep = api.get_deep_activity(_aid)
+                        if _deep:
+                            _duracs, _partic, _info_deep = ler_atividade_profunda(_deep)
+                            if _duracs:
+                                _fonte_min = 'API (deep activity)'
+                    except Exception:
+                        _applog.log_debug_exc()
+                    if _info_deep:                 # posição/equipe da mesma fonte
+                        for _k, _v in _info_deep.items():
+                            _info_atl.setdefault(_k, _v)
+                    if not _duracs:
+                        _id2nome = {str(_r['id']): _r['nome']
+                                    for _, _r in _df_atl.iterrows() if _r.get('id')}
+                        _partic = _participantes_por_periodo(api, _pids, _id2nome)
+                        _duracs = duracoes_periodos(_sensor, 10.0)
+                    else:
+                        # Preenche períodos que o sensor tem e a API não nomeou
+                        for _pn_s in _sensor.keys():
+                            _duracs.setdefault(
+                                _pn_s, duracoes_periodos(
+                                    {_pn_s: _sensor[_pn_s]}, 10.0)[_pn_s])
+                            _partic.setdefault(_pn_s, None)
+                    _sem_lista = [_p for _p in _sensor.keys()
+                                  if _partic.get(_p) is None]
                     _novas, _excl = _linhas_wcs_atividade(
                         _nm, _dt, _sensor, _info_atl, _vars_sel, _jan_sel,
                         _esc_sel, 10.0, _cortes,
@@ -487,6 +592,7 @@ def render_export_wcs_multi(api):
                         f"{len(_info_atl)} atleta(s) no elenco"
                         + (f" — ⚠️ {_n_sem_pos} sem posição na API"
                            if _n_sem_pos else "")
+                        + f" · Minutos: {_fonte_min}"
                         + (f" · {_excl} par(es) atleta×período excluído(s) "
                            "por não participação" if _excl else "")
                         + (f" · ⚠️ sem lista oficial de participantes em: "

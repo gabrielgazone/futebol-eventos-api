@@ -150,3 +150,84 @@ def test_participantes_periodo_api_vazia_vira_none():
             return []
 
     assert _participantes_por_periodo(Vazia(), {'1T': 'p1'}, {})['1T'] is None
+
+
+# ── Atividade profunda: /activities/{id}?include=all (fonte autoritativa) ────
+def _deep_resp():
+    """Resposta como a doc descreve: periods com start/end_time (epoch) e os
+    atletas de cada periodo. 1o tempo = 51,40233 min; 2o = 55,7 min (valores
+    reais do OpenField em RESENDE x AMERICANO)."""
+    _ini1 = 1785000000
+    _fim1 = _ini1 + int(51.40233 * 60)
+    _ini2 = _fim1 + 900                       # intervalo
+    _fim2 = _ini2 + int(55.7 * 60)
+    return [{
+        'id': 'act1',
+        'teams': [{'id': 't1', 'name': 'Resende FC'}],
+        'athletes': [
+            {'id': 'a1', 'first_name': 'Enzo', 'last_name': 'Zaidan',
+             'position_name': 'Volante'},
+            {'id': 'a2', 'first_name': 'Matheus', 'last_name': 'Goiano',
+             'position_name': 'Atacante'},
+        ],
+        'periods': [
+            {'id': 'p1', 'name': '1 Tempo', 'start_time': _ini1,
+             'start_centiseconds': 0, 'end_time': _fim1, 'end_centiseconds': 14,
+             'athletes': [{'id': 'a2'}]},          # SÓ Matheus no 1o tempo
+            {'id': 'p2', 'name': '2 Tempo', 'start_time': _ini2,
+             'start_centiseconds': 0, 'end_time': _fim2, 'end_centiseconds': 0,
+             'athletes': [{'id': 'a1'}, {'id': 'a2'}]},
+        ],
+    }]
+
+
+def test_deep_duracoes_batem_com_openfield():
+    from viz.export_wcs_multi import ler_atividade_profunda
+    dur, part, info = ler_atividade_profunda(_deep_resp())
+    assert abs(dur['1 Tempo'] - 51.40233) < 0.01     # como no export do site
+    assert abs(dur['2 Tempo'] - 55.7) < 0.01
+
+
+def test_deep_participacao_exclui_enzo_do_primeiro_tempo():
+    from viz.export_wcs_multi import ler_atividade_profunda
+    _, part, _ = ler_atividade_profunda(_deep_resp())
+    assert part['1 Tempo'] == {'Matheus Goiano'}      # Enzo ausente
+    assert part['2 Tempo'] == {'Enzo Zaidan', 'Matheus Goiano'}
+
+
+def test_deep_traz_posicao_e_equipe():
+    from viz.export_wcs_multi import ler_atividade_profunda
+    _, _, info = ler_atividade_profunda(_deep_resp())
+    assert info['Enzo Zaidan'] == ('Volante', 'Resende FC')
+    assert info['Matheus Goiano'][0] == 'Atacante'
+
+
+def test_deep_minutos_totais_por_atleta():
+    """Enzo = só 2o tempo (55,7); Matheus = os dois (107,10233)."""
+    from viz.export_wcs_multi import ler_atividade_profunda
+    dur, part, _ = ler_atividade_profunda(_deep_resp())
+    _min_enzo = sum(d for p, d in dur.items() if 'Enzo Zaidan' in (part[p] or ()))
+    _min_mat = sum(d for p, d in dur.items()
+                   if 'Matheus Goiano' in (part[p] or ()))
+    assert abs(_min_enzo - 55.7) < 0.01
+    assert abs(_min_mat - 107.10233) < 0.02
+
+
+def test_deep_resposta_vazia_ou_invalida():
+    from viz.export_wcs_multi import ler_atividade_profunda
+    assert ler_atividade_profunda([]) == ({}, {}, {})
+    assert ler_atividade_profunda(None) == ({}, {}, {})
+    assert ler_atividade_profunda({'periods': []}) == ({}, {}, {})
+
+
+def test_deep_periodo_com_period_athletes_e_athlete_id():
+    """Formato alternativo da doc: period_athletes com athlete_id."""
+    from viz.export_wcs_multi import ler_atividade_profunda
+    resp = {
+        'athletes': [{'id': 'a1', 'first_name': 'Enzo', 'last_name': 'Zaidan'}],
+        'periods': [{'name': '2 Tempo', 'start_time': 1000, 'end_time': 4342,
+                     'period_athletes': [{'athlete_id': 'a1'}]}],
+    }
+    dur, part, _ = ler_atividade_profunda(resp)
+    assert abs(dur['2 Tempo'] - 55.7) < 0.01
+    assert part['2 Tempo'] == {'Enzo Zaidan'}
