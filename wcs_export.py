@@ -43,11 +43,13 @@ VARIAVEIS = [VAR_DIST, VAR_HSR, VAR_SPRINT, VAR_PL,
 DEFAULT_HSR_KMH    = 19.8
 DEFAULT_SPRINT_KMH = 25.2
 
-# Bandas de acel/desacel em m/s² (mesmos limites de config._DEFAULT_ACCELERATION_ZONES).
-DEFAULT_ACC_B2 = (3.0, 4.0)
-DEFAULT_ACC_B3 = (4.0, 10.0)
-DEFAULT_DEC_B2 = (-4.0, -3.0)
-DEFAULT_DEC_B3 = (-10.0, -4.0)
+# Bandas de acel/desacel em m/s², definidas pelo usuário do estudo:
+# B2 = 2,5–3,5 · B3 = 3,5–10 (desaceleração espelhada, em magnitude).
+# Editáveis na UI (expander "Cortes das variáveis"); B2+ = B2 + B3.
+DEFAULT_ACC_B2 = (2.5, 3.5)
+DEFAULT_ACC_B3 = (3.5, 10.0)
+DEFAULT_DEC_B2 = (-3.5, -2.5)
+DEFAULT_DEC_B3 = (-10.0, -3.5)
 
 # Variável → bandas que a compõem (chaves resolvidas em serie_por_amostra).
 _VAR_BANDAS = {

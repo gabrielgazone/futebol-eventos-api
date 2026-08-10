@@ -49,21 +49,24 @@ def test_serie_playerload():
 
 
 def test_serie_acc_por_banda_b2_vs_b3():
-    # pico 3.5 -> banda B2 (3-4); pico 5.0 -> banda B3 (4-10)
+    # bandas explicitas (independe dos defaults): B2=3-4, B3=4-10
+    # pico 3.5 -> B2; pico 5.0 -> B3
     acc = [0.0] * 5 + [3.5] * 8 + [0.0] * 5 + [5.0] * 8 + [0.0] * 4
     pts = _pts([10.0] * len(acc), acc=acc)
-    assert sum(wx.serie_por_amostra(pts, wx.VAR_ACC_B2, hz=10)) == 1.0
-    assert sum(wx.serie_por_amostra(pts, wx.VAR_ACC_B3, hz=10)) == 1.0
+    _b = dict(acc_b2=(3.0, 4.0), acc_b3=(4.0, 10.0))
+    assert sum(wx.serie_por_amostra(pts, wx.VAR_ACC_B2, hz=10, **_b)) == 1.0
+    assert sum(wx.serie_por_amostra(pts, wx.VAR_ACC_B3, hz=10, **_b)) == 1.0
     # B2+ = B2 + B3
-    assert sum(wx.serie_por_amostra(pts, wx.VAR_ACC_B2P, hz=10)) == 2.0
+    assert sum(wx.serie_por_amostra(pts, wx.VAR_ACC_B2P, hz=10, **_b)) == 2.0
 
 
 def test_serie_dec_por_banda_b2_vs_b3():
     acc = [0.0] * 5 + [-3.5] * 8 + [0.0] * 5 + [-5.0] * 8 + [0.0] * 4
     pts = _pts([10.0] * len(acc), acc=acc)
-    assert sum(wx.serie_por_amostra(pts, wx.VAR_DEC_B2, hz=10)) == 1.0
-    assert sum(wx.serie_por_amostra(pts, wx.VAR_DEC_B3, hz=10)) == 1.0
-    assert sum(wx.serie_por_amostra(pts, wx.VAR_DEC_B2P, hz=10)) == 2.0
+    _b = dict(dec_b2=(-4.0, -3.0), dec_b3=(-10.0, -4.0))
+    assert sum(wx.serie_por_amostra(pts, wx.VAR_DEC_B2, hz=10, **_b)) == 1.0
+    assert sum(wx.serie_por_amostra(pts, wx.VAR_DEC_B3, hz=10, **_b)) == 1.0
+    assert sum(wx.serie_por_amostra(pts, wx.VAR_DEC_B2P, hz=10, **_b)) == 2.0
 
 
 def test_b2mais_e_soma_de_b2_e_b3():
@@ -162,3 +165,22 @@ def test_b2mais_equivale_ao_motor_do_app():
             _np.asarray(acc), [{'min': lo, 'max': hi} for lo, hi in bandas],
             min_dur_s=0.6, hz=10))
         assert meu == app, f"{b2p}: export={meu} vs app={app}"
+
+
+def test_defaults_das_bandas_do_estudo():
+    """Padrões definidos pelo usuário do estudo: B2 = 2,5–3,5 · B3 = 3,5–10."""
+    assert wx.DEFAULT_ACC_B2 == (2.5, 3.5)
+    assert wx.DEFAULT_ACC_B3 == (3.5, 10.0)
+    assert wx.DEFAULT_DEC_B2 == (-3.5, -2.5)     # magnitude 2,5–3,5
+    assert wx.DEFAULT_DEC_B3 == (-10.0, -3.5)
+    # contíguas: o topo de B2 é o piso de B3 (sem lacuna nem sobreposição)
+    assert wx.DEFAULT_ACC_B2[1] == wx.DEFAULT_ACC_B3[0]
+    assert wx.DEFAULT_DEC_B2[0] == wx.DEFAULT_DEC_B3[1]
+
+
+def test_defaults_classificam_pico_3_0_como_b2():
+    """Com os novos padrões, um pico de 3,0 m/s² cai em B2 (2,5–3,5)."""
+    acc = [0.0] * 5 + [3.0] * 8 + [0.0] * 5
+    pts = _pts([10.0] * len(acc), acc=acc)
+    assert sum(wx.serie_por_amostra(pts, wx.VAR_ACC_B2, hz=10)) == 1.0
+    assert sum(wx.serie_por_amostra(pts, wx.VAR_ACC_B3, hz=10)) == 0.0
