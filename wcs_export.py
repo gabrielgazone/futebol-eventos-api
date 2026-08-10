@@ -141,7 +141,22 @@ def serie_por_amostra(sensor_points, variavel, hz=10.0, *,
                 for _v in _vel_kmh(sensor_points)]
 
     if variavel == VAR_PL:
-        return [float(_p.get('pl') or 0.0) for _p in sensor_points]
+        # O 'pl' do sensor é ACUMULADO (série não-decrescente). Somar o valor
+        # bruto na janela dá números absurdos (ex.: 435 mil num minuto, contra
+        # ~550 de PlayerLoad TOTAL do jogo). Usa os INCREMENTOS — mesma detecção
+        # de metrics.playerload_total (≥98% não-decrescente → acumulada).
+        _pl = []
+        for _p in sensor_points:
+            try:
+                _pl.append(float(_p.get('pl') or 0.0))
+            except (TypeError, ValueError):
+                _pl.append(0.0)
+        _arr = np.asarray(_pl, dtype=float)
+        if _arr.size >= 10:
+            _d = np.diff(_arr)
+            if _arr[-1] > _arr[0] and float((_d >= -1e-6).mean()) > 0.98:
+                return [0.0] + np.clip(_d, 0.0, None).tolist()
+        return [max(0.0, _v) for _v in _pl]      # já incremental
 
     if variavel in _VAR_BANDAS:
         _acc = np.asarray([float(_p.get('a') or 0.0) for _p in sensor_points],

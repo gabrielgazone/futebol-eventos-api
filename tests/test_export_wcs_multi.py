@@ -72,9 +72,10 @@ def test_linhas_wcs_usa_posicao_da_api():
     pts = [{'v': 10.0} for _ in range(600)]
     dados_sensor = {'1T': {'João Silva': pts}}
     info = {'João Silva': ('Zagueiro', 'Vasco')}
-    rows = _linhas_wcs_atividade(
+    rows, _ = _linhas_wcs_atividade(
         'Jogo A', '2026-03-01', dados_sensor, info,
-        [wx.VAR_DIST], [1], ['Partida inteira'], 10.0, {})
+        [wx.VAR_DIST], [1], ['Partida inteira'], 10.0, {},
+        participantes={'1T': {'João Silva'}}, duracoes={'1T': 1.0})
     assert len(rows) == 1
     assert rows[0]['Posicao'] == 'Zagueiro'
     assert rows[0]['Equipe'] == 'Vasco'
@@ -85,9 +86,10 @@ def test_linhas_wcs_usa_posicao_da_api():
 
 def test_linhas_wcs_atleta_sem_info_nao_quebra():
     pts = [{'v': 10.0} for _ in range(600)]
-    rows = _linhas_wcs_atividade(
+    rows, _ = _linhas_wcs_atividade(
         'Jogo B', '2026-03-02', {'1T': {'Desconhecido': pts}}, {},
-        [wx.VAR_DIST], [1], ['Partida inteira'], 10.0, {})
+        [wx.VAR_DIST], [1], ['Partida inteira'], 10.0, {},
+        participantes={'1T': {'Desconhecido'}}, duracoes={'1T': 1.0})
     assert len(rows) == 1
     assert rows[0]['Posicao'] == '' and rows[0]['Equipe'] == ''
 
@@ -107,58 +109,18 @@ def test_fmt_data_br_iso_e_vazio():
     assert _fmt_data_br(None) == '' and _fmt_data_br('') == ''
 
 
-# ── Minutos oficiais (/stats) ────────────────────────────────────────────────
-def test_para_minutos_segundos_e_minutos():
-    from viz.export_wcs_multi import _para_minutos
-    assert _para_minutos(5400) == 90.0        # segundos → minutos
-    assert _para_minutos(90) == 90.0          # já em minutos
-    assert _para_minutos(0) is None and _para_minutos(None) is None
 
 
-def test_minutos_openfield_encontra_parametro():
-    from viz.export_wcs_multi import _minutos_openfield
-
-    class StatsApi:
-        def __init__(self):
-            self.pedidos = []
-
-        def get_stats(self, payload, timeout=20):
-            self.pedidos.append(payload['parameters'][0])
-            if payload['parameters'][0] != 'total_duration':
-                return None                    # só este parâmetro existe
-            return [{'athlete': 'João Silva', 'parameters': {'total_duration': 5400}},
-                    {'athlete': 'Ana Souza', 'parameters': {'total_duration': 2700}}]
-
-    api = StatsApi()
-    mins, par = _minutos_openfield(api, 'total_duration',
-                                   1785005112, 1785091512)
-    assert par == 'total_duration'
-    assert mins == {'João Silva': 90.0, 'Ana Souza': 45.0}
-
-
-def test_minutos_openfield_sem_resposta():
-    from viz.export_wcs_multi import _minutos_openfield
-
-    class Vazio:
-        def get_stats(self, payload, timeout=20):
-            return None
-
-    assert _minutos_openfield(Vazio(), 'total_duration',
-                              1785005112, None) == ({}, None)
-    # sem epoch ou sem parâmetro → nem tenta
-    assert _minutos_openfield(Vazio(), 'total_duration', None, None) == ({}, None)
-    assert _minutos_openfield(Vazio(), False, 1785005112, None) == ({}, None)
-
-
-def test_linhas_incluem_minutos_of_e_sensor():
+def test_linhas_incluem_minutos_e_dispositivo():
     pts = [{'v': 10.0} for _ in range(600)]     # 600 amostras a 10 Hz = 1 min
-    rows = _linhas_wcs_atividade(
+    rows, _ = _linhas_wcs_atividade(
         'Jogo A', '25/07/2026', {'1T': {'João Silva': pts}},
         {'João Silva': ('Zagueiro', 'Vasco')},
         [wx.VAR_DIST], [1], ['Partida inteira'], 10.0, {},
-        min_map={'João Silva': 90.0})
-    assert rows[0]['Minutos_OpenField'] == 90.0
-    assert rows[0]['Minutos_sensor'] == 1.0     # derivado das amostras
+        participantes={'1T': {'João Silva'}}, duracoes={'1T': 51.4})
+    assert rows[0]['Minutos'] == 51.4           # duração do período (OpenField)
+    assert rows[0]['Minutos_dispositivo'] == 1.0   # tempo de sinal do sensor
+    assert rows[0]['Periodos_jogados'] == 1
     assert rows[0]['Data'] == '25/07/2026'
 
 
@@ -167,8 +129,8 @@ def test_pivotar_variaveis_colunas_e_linhas():
     import pandas as pd
     from viz.export_wcs_multi import pivotar_variaveis
     base = {'Atividade': 'J1', 'Data': '25/07/2026', 'Equipe': 'Vasco',
-            'Posicao': 'Meia', 'Minutos_OpenField': 90.0,
-            'Minutos_sensor': 89.5, 'Escopo': 'Partida inteira', 'Janela_min': 1}
+            'Posicao': 'Meia', 'Minutos': 90.0, 'Minutos_dispositivo': 89.5,
+            'Periodos_jogados': 2, 'Escopo': 'Partida inteira', 'Janela_min': 1}
     df = pd.DataFrame([
         dict(base, Atleta='A', Variavel=wx.VAR_DIST, Valor=180.0),
         dict(base, Atleta='A', Variavel=wx.VAR_HSR, Valor=40.0),
@@ -181,7 +143,7 @@ def test_pivotar_variaveis_colunas_e_linhas():
     assert 'Variavel' not in p.columns and 'Valor' not in p.columns
     linha_a = p[p['Atleta'] == 'A'].iloc[0]
     assert linha_a[wx.VAR_DIST] == 180.0 and linha_a[wx.VAR_HSR] == 40.0
-    assert linha_a['Minutos_OpenField'] == 90.0
+    assert linha_a['Minutos'] == 90.0
     # identificadores vêm antes das variáveis
     assert list(p.columns).index('Atleta') < list(p.columns).index(wx.VAR_DIST)
 
@@ -194,81 +156,6 @@ def test_pivotar_variaveis_df_vazio():
 
 
 # ── Descoberta do parâmetro de duração + disjuntor (bug do app travando) ─────
-def test_descobrir_param_duracao_via_parameters():
-    """Descobre o nome no GET /parameters (1 chamada) em vez de 6 POSTs cegos."""
-    import streamlit as st
-    from viz.export_wcs_multi import _descobrir_param_duracao, _SS_DURPAR
-
-    class ParApi:
-        def __init__(self):
-            self.n = 0
-
-        def get_parameters(self):
-            self.n += 1
-            return [{'name': 'total_distance'}, {'name': 'total_duration'},
-                    {'name': 'velocity_band1_duration'}]
-
-    st.session_state.pop(_SS_DURPAR, None)
-    api = ParApi()
-    assert _descobrir_param_duracao(api) == 'total_duration'
-    # 2ª chamada usa o cache da sessão (não repete a busca)
-    assert _descobrir_param_duracao(api) == 'total_duration'
-    assert api.n == 1
-    st.session_state.pop(_SS_DURPAR, None)
 
 
-def test_descobrir_param_duracao_conta_sem_duracao():
-    import streamlit as st
-    from viz.export_wcs_multi import _descobrir_param_duracao, _SS_DURPAR
 
-    class SemDur:
-        def get_parameters(self):
-            return [{'name': 'total_distance'}, {'name': 'player_load'}]
-
-    st.session_state.pop(_SS_DURPAR, None)
-    assert _descobrir_param_duracao(SemDur()) is False
-    st.session_state.pop(_SS_DURPAR, None)
-
-
-def test_disjuntor_para_de_tentar_apos_timeout():
-    """Após um timeout, não insiste nas atividades seguintes (era o que fazia o
-    app 'carregar para sempre': 20 s x 6 candidatos x N atividades)."""
-    import streamlit as st
-    from viz.export_wcs_multi import _minutos_openfield, _SS_DUROFF
-
-    class Timeout:
-        def __init__(self):
-            self.n = 0
-
-        def get_stats(self, payload, timeout=20):
-            self.n += 1
-            raise TimeoutError('read timed out')
-
-    st.session_state.pop(_SS_DUROFF, None)
-    api = Timeout()
-    assert _minutos_openfield(api, 'total_duration', 1785005112, None) == ({}, None)
-    assert st.session_state.get(_SS_DUROFF) is True
-    # chamadas seguintes NÃO batem mais na API
-    assert _minutos_openfield(api, 'total_duration', 1785091512, None) == ({}, None)
-    assert api.n == 1
-    st.session_state.pop(_SS_DUROFF, None)
-
-
-def test_timeout_curto_no_stats():
-    """A sonda usa timeout curto (consulta opcional não trava o export)."""
-    import streamlit as st
-    from viz.export_wcs_multi import (_minutos_openfield, _TIMEOUT_STATS,
-                                      _SS_DUROFF)
-    assert _TIMEOUT_STATS < 20
-
-    _visto = {}
-
-    class Espia:
-        def get_stats(self, payload, timeout=20):
-            _visto['timeout'] = timeout
-            return []
-
-    st.session_state.pop(_SS_DUROFF, None)
-    _minutos_openfield(Espia(), 'total_duration', 1785005112, None)
-    assert _visto['timeout'] == _TIMEOUT_STATS
-    st.session_state.pop(_SS_DUROFF, None)

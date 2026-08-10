@@ -30,8 +30,8 @@ _CHAVE_LINHA = ['Atividade', 'Atleta', 'Escopo', 'Variavel', 'Janela_min']
 # antes de um deploy pode não ter as colunas novas (ex.: minutos) — nesse caso é
 # descartado, em vez de ser exibido incompleto e parecer um bug.
 _COLS_ESPERADAS = ['Atividade', 'Data', 'Equipe', 'Atleta', 'Posicao',
-                   'Minutos_OpenField', 'Minutos_sensor', 'Escopo',
-                   'Variavel', 'Janela_min', 'Valor']
+                   'Minutos', 'Minutos_dispositivo', 'Periodos_jogados',
+                   'Escopo', 'Variavel', 'Janela_min', 'Valor']
 
 
 def _fmt_data_br(valor) -> str:
@@ -56,112 +56,6 @@ def _fmt_data_br(valor) -> str:
         except ValueError:
             continue
     return s[:10]
-
-
-# Nomes candidatos do parâmetro de duração no /stats (varia por conta/versão).
-_DUR_PARAMS = ('total_duration', 'duration', 'total_time', 'time_on_field',
-               'athlete_duration', 'total_session_time')
-
-
-def _para_minutos(valor):
-    """Converte a duração do /stats para MINUTOS.
-
-    A API pode devolver segundos ou minutos dependendo do parâmetro; usa uma
-    heurística conservadora: > 300 é tratado como segundos (300 min = 5 h seria
-    implausível para uma partida), senão já está em minutos.
-    """
-    try:
-        _v = float(valor)
-    except (TypeError, ValueError):
-        return None
-    if _v <= 0:
-        return None
-    return round(_v / 60.0, 1) if _v > 300 else round(_v, 1)
-
-
-_SS_DURPAR = '_wcs_dur_param'      # nome do parâmetro de duração (ou False)
-_SS_DUROFF = '_wcs_dur_desligado'  # disjuntor: /stats falhou, não insistir
-_TIMEOUT_STATS = 12                # s — consulta OPCIONAL, não trava o export
-
-
-def _descobrir_param_duracao(api):
-    """Nome do parâmetro de duração NA CONTA, via GET /parameters (cacheado).
-
-    Antes tentávamos 6 nomes candidatos com POST /stats por atividade — cada
-    tentativa podia estourar 20 s de timeout (2 min por atividade, >1 h em 30
-    atividades: o app "carregando para sempre"). Agora descobrimos o nome UMA
-    vez, num GET cacheado, e guardamos na sessão (False = a conta não expõe).
-    """
-    if _SS_DURPAR in st.session_state:
-        return st.session_state[_SS_DURPAR]
-    _achado = False
-    try:
-        _raw = api.get_parameters() or []
-        _lst = _raw if isinstance(_raw, list) else (_raw or {}).get('data', [])
-        _nomes = []
-        for _p in (_lst or []):
-            if isinstance(_p, dict):
-                _nomes.append(str(_p.get('name') or _p.get('slug')
-                                  or _p.get('parameter') or ''))
-            elif isinstance(_p, str):
-                _nomes.append(_p)
-        for _c in _DUR_PARAMS:                    # candidatos conhecidos primeiro
-            if _c in _nomes:
-                _achado = _c
-                break
-        if not _achado:                           # senão, qualquer duração plausível
-            for _n in _nomes:
-                _l = _n.lower()
-                if (('duration' in _l or 'time_on' in _l)
-                        and 'zone' not in _l and 'band' not in _l):
-                    _achado = _n
-                    break
-    except Exception:
-        _applog.log_debug_exc()
-    st.session_state[_SS_DURPAR] = _achado
-    return _achado
-
-
-def _minutos_openfield(api, param, epoch_ini, epoch_fim):
-    """{atleta: minutos} OFICIAIS do OpenField via POST /stats na janela da
-    atividade, usando o `param` já descoberto. Retorna ({}, None) se indisponível
-    — o export cai na duração do sensor (coluna separada), sem inventar valor.
-
-    Tem DISJUNTOR: se o /stats falhar (ex.: timeout), marca na sessão e não
-    tenta mais nas atividades seguintes do lote.
-    """
-    if not epoch_ini or not param or st.session_state.get(_SS_DUROFF):
-        return {}, None
-    try:
-        _r = api.get_stats({
-            "group_by": ["athlete"],
-            "source": "cached_stats",
-            "start_time": int(epoch_ini),
-            "end_time": int(epoch_fim or (epoch_ini + 86400)),
-            "parameters": [param],
-        }, timeout=_TIMEOUT_STATS)
-    except Exception:
-        _applog.log_debug_exc()
-        st.session_state[_SS_DUROFF] = True
-        return {}, None
-    if _r is None:                                 # falhou/timeout dentro do client
-        st.session_state[_SS_DUROFF] = True
-        return {}, None
-    _rows = _r if isinstance(_r, list) else (_r or {}).get('data', [])
-    _out = {}
-    for _d in (_rows or []):
-        if not isinstance(_d, dict):
-            continue
-        _nm = str(_d.get('athlete') or _d.get('athlete_name')
-                  or _d.get('name') or '')
-        _p = _d.get('parameters') or {}
-        _val = (_p.get(param) if isinstance(_p, dict) else None)
-        if _val is None:
-            _val = _d.get(param)
-        _mm = _para_minutos(_val)
-        if _nm and _mm:
-            _out[_nm] = _mm
-    return _out, (param if _out else None)
 
 
 def _mapa_posicoes(api):
@@ -226,6 +120,123 @@ def _atletas_da_atividade(api, activity_id, pos_map, eq_map):
     return pd.DataFrame(_rows)
 
 
+def duracoes_periodos(dados_sensor, hz=10.0):
+    """{período: duração em minutos} pela janela de tempo do período.
+
+    Replica o "Minutos" do OpenField, que é UNIFORME por período (ex.: 51,40233
+    no 1º tempo e 55,7 no 2º para todos os atletas) — ou seja, é a duração do
+    período, não o tempo de bola rolando de cada atleta. Usa a união dos
+    timestamps de todos os atletas do período.
+    """
+    _out = {}
+    for _pnm, _pdados in (dados_sensor or {}).items():
+        _mn = _mx = None
+        for _pts in (_pdados or {}).values():
+            if not _pts:
+                continue
+            for _p in (_pts[0], _pts[-1]):
+                try:
+                    _t = float(_p.get('ts') or 0) + float(_p.get('cs') or 0) / 100.0
+                except (TypeError, ValueError):
+                    continue
+                if _t <= 0:
+                    continue
+                if _mn is None or _t < _mn:
+                    _mn = _t
+                if _mx is None or _t > _mx:
+                    _mx = _t
+        _out[_pnm] = (round((_mx - _mn) / 60.0, 5)
+                      if (_mn is not None and _mx is not None and _mx > _mn)
+                      else 0.0)
+    return _out
+
+
+def _participantes_por_periodo(api, period_ids, id_para_nome):
+    """{período: set(nomes)} pela lista OFICIAL de participantes da API
+    (/periods/{id}/athletes) — a mesma fonte que o OpenField usa para decidir
+    quem entra no export de cada tempo.
+
+    Valor None para um período = a API não informou; nesse caso o chamador NÃO
+    filtra por lista (e avisa), para não descartar dado por falha de rede.
+    """
+    _out = {}
+    for _pnm, _pid in (period_ids or {}).items():
+        if not _pid:
+            _out[_pnm] = None
+            continue
+        try:
+            _resp = api.get_athletes_in_period(_pid)
+        except Exception:
+            _applog.log_debug_exc()
+            _out[_pnm] = None
+            continue
+        _lst = (_resp if isinstance(_resp, list)
+                else (_resp or {}).get('data', (_resp or {}).get('items', [])))
+        if not _lst:
+            _out[_pnm] = None
+            continue
+        _nomes = set()
+        for _a in _lst:
+            if not isinstance(_a, dict):
+                continue
+            _aid = _a.get('id') or _a.get('athlete_id')
+            _nm = id_para_nome.get(str(_aid)) if _aid else None
+            if not _nm:                        # nome direto, se vier no payload
+                _nm = (f"{_a.get('first_name', '')} "
+                       f"{_a.get('last_name', '')}").strip() or _a.get('name')
+            if _nm:
+                _nomes.add(str(_nm))
+        _out[_pnm] = _nomes or None
+    return _out
+
+
+# Piso de participação (m/min): usado SÓ quando a API não informa o elenco do
+# período. No export do OpenField, reservas com o dispositivo ligado ficam em
+# ~2–3 m/min (ex.: 136 m em 51 min), enquanto quem entra em campo passa de
+# 60 m/min (ex.: 5187 m em 55,7 min). 25 m/min separa os dois casos com folga e
+# é interpretável — melhor que uma fração da mediana, que o próprio reserva
+# distorce quando há muitos no banco.
+_PISO_M_POR_MIN = 25.0
+
+
+def _dist_total_m(sensor_points, hz=10.0):
+    """Distância total (m) de uma série do sensor — para o piso de participação."""
+    _tot = 0.0
+    _prev = None
+    for _p in (sensor_points or []):
+        try:
+            _v = float(_p.get('v') or 0.0)
+        except (TypeError, ValueError):
+            _v = 0.0
+        if _prev is not None:
+            _tot += ((_prev + _v) / 2.0) / hz
+        _prev = _v
+    return _tot
+
+
+def participou_do_periodo(nome, periodo, dados_sensor, participantes, hz=10.0,
+                          duracoes=None):
+    """Se o atleta PARTICIPOU do período (critério do OpenField).
+
+    1) Lista oficial da API, quando disponível — critério primário.
+    2) Senão, piso de intensidade em m/min (_PISO_M_POR_MIN): o dispositivo
+       ligado no banco fica uma ordem de grandeza abaixo de quem entra em campo.
+    Evita gerar linhas que sugerem presença num tempo em que o atleta não jogou.
+    """
+    _sp = (dados_sensor.get(periodo) or {}).get(nome) or []
+    if not _sp:
+        return False
+    _oficial = (participantes or {}).get(periodo)
+    if _oficial is not None:
+        return nome in _oficial
+    _dur_min = (duracoes or {}).get(periodo)
+    if not _dur_min:
+        _dur_min = len(_sp) / hz / 60.0 if hz > 0 else 0.0
+    if _dur_min <= 0:
+        return False
+    return (_dist_total_m(_sp, hz) / _dur_min) >= _PISO_M_POR_MIN
+
+
 def pivotar_variaveis(df):
     """Converte o formato longo em VARIÁVEIS COMO COLUNAS (atletas nas linhas).
 
@@ -235,8 +246,8 @@ def pivotar_variaveis(df):
     if df is None or getattr(df, 'empty', True):
         return df
     _idx = [_c for _c in ('Atividade', 'Data', 'Equipe', 'Atleta', 'Posicao',
-                          'Minutos_OpenField', 'Minutos_sensor', 'Escopo',
-                          'Janela_min') if _c in df.columns]
+                          'Minutos', 'Minutos_dispositivo', 'Periodos_jogados',
+                          'Escopo', 'Janela_min') if _c in df.columns]
     _p = df.pivot_table(index=_idx, columns='Variavel', values='Valor',
                         aggfunc='first').reset_index()
     _p.columns.name = None
@@ -248,40 +259,61 @@ def pivotar_variaveis(df):
 
 def _linhas_wcs_atividade(act_nome, act_data, dados_sensor, info_atl,
                           variaveis, janelas, escopos, hz, cortes,
-                          min_map=None):
+                          participantes=None, duracoes=None):
     """Linhas tidy de WCS para UMA atividade já carregada.
 
     info_atl: {nome: (posicao, equipe)} vindo da API (ver _atletas_da_atividade).
-    min_map: {nome: minutos} oficiais do OpenField (/stats). A duração derivada
-    do sensor entra numa coluna separada, para conferência.
+    participantes: {período: set(nomes)} da API (None por período = desconhecido).
+    duracoes: {período: minutos} (ver duracoes_periodos).
+
+    Só gera linhas dos períodos em que o atleta PARTICIPOU — sem isso, um atleta
+    que ficou no banco no 1º tempo (dispositivo ligado) aparecia como se tivesse
+    jogado. `Minutos` replica o OpenField: soma das durações dos períodos
+    participados (no escopo de período, a duração daquele período).
+    Retorna (linhas, n_pares_excluidos).
     """
     _rows = []
     _info = info_atl or {}
-    _mins = min_map or {}
+    _dur = duracoes or {}
     _atletas = sorted({_a for _p in dados_sensor.values() for _a in _p.keys()})
+    _excluidos = 0
 
     for _atl in _atletas:
         _pos, _eq = _info.get(_atl, ('', ''))
-        # Duração pelo sinal do sensor (10 Hz): amostras únicas de todos os
-        # períodos — referência para conferir o Minutos oficial.
-        _n_amostras = sum(len(_p.get(_atl, [])) for _p in dados_sensor.values())
-        _min_sensor = round(_n_amostras / hz / 60.0, 1) if hz > 0 else 0.0
-        _min_of = _mins.get(_atl)
+
+        # Períodos em que ESTE atleta participou (critério do OpenField)
+        _peri_ok = []
+        for _pnm in dados_sensor.keys():
+            if participou_do_periodo(_atl, _pnm, dados_sensor, participantes,
+                                     hz, _dur):
+                _peri_ok.append(_pnm)
+            elif (dados_sensor.get(_pnm) or {}).get(_atl):
+                _excluidos += 1
+        if not _peri_ok:
+            continue                       # não jogou nada nesta atividade
+
+        # Minutos do atleta = soma das durações dos períodos participados
+        _min_total = round(sum(_dur.get(_p, 0.0) for _p in _peri_ok), 5)
+        _n_amostras = sum(len((dados_sensor.get(_p) or {}).get(_atl) or [])
+                          for _p in _peri_ok)
+        _min_disp = round(_n_amostras / hz / 60.0, 1) if hz > 0 else 0.0
 
         _escopo_series = []
         if 'Partida inteira' in escopos:
-            _sp = (combinar_periodos_continuo(dados_sensor, _atl)
-                   if len(dados_sensor) > 1
-                   else next(iter(dados_sensor.values()), {}).get(_atl, []))
+            # Encadeia SÓ os períodos participados
+            _ds_ok = {_p: dados_sensor[_p] for _p in _peri_ok}
+            _sp = (combinar_periodos_continuo(_ds_ok, _atl)
+                   if len(_ds_ok) > 1
+                   else next(iter(_ds_ok.values()), {}).get(_atl, []))
             if _sp:
-                _escopo_series.append(('Partida inteira', _sp))
+                _escopo_series.append(('Partida inteira', _sp, _min_total))
         if 'Por período' in escopos:
-            for _pnm, _pdados in dados_sensor.items():
-                _sp_p = _pdados.get(_atl, [])
+            for _pnm in _peri_ok:
+                _sp_p = (dados_sensor.get(_pnm) or {}).get(_atl) or []
                 if _sp_p:
-                    _escopo_series.append((_pnm, _sp_p))
+                    _escopo_series.append((_pnm, _sp_p, _dur.get(_pnm, 0.0)))
 
-        for _escopo, _sp in _escopo_series:
+        for _escopo, _sp, _min_escopo in _escopo_series:
             _picos = _wx.calcular_wcs(_sp, variaveis, janelas, hz, **cortes)
             for (_var, _wmin), _val in _picos.items():
                 _rows.append({
@@ -290,14 +322,15 @@ def _linhas_wcs_atividade(act_nome, act_data, dados_sensor, info_atl,
                     'Equipe': _eq,
                     'Atleta': _atl,
                     'Posicao': _pos,
-                    'Minutos_OpenField': _min_of if _min_of else '',
-                    'Minutos_sensor': _min_sensor,
+                    'Minutos': _min_escopo,
+                    'Minutos_dispositivo': _min_disp,
+                    'Periodos_jogados': len(_peri_ok),
                     'Escopo': _escopo,
                     'Variavel': _var,
                     'Janela_min': _wmin,
                     'Valor': _val,
                 })
-    return _rows
+    return _rows, _excluidos
 
 
 def render_export_wcs_multi(api):
@@ -382,14 +415,6 @@ def render_export_wcs_multi(api):
     st.caption(f"**{len(_sel)}** atividade(s) selecionada(s) · {len(_vars_sel)} "
                f"variável(is) · janelas {_jan_sel} · escopo(s) {len(_esc_sel)}")
 
-    _buscar_min = st.checkbox(
-        "⏱️ Buscar minutos oficiais do OpenField (/stats)", value=True,
-        key='wcs_multi_min',
-        help="Consulta o parâmetro de duração da conta. Se a conta não expuser "
-             "ou o /stats demorar, o export NÃO trava: segue com a coluna "
-             "Minutos_sensor (derivada do sinal 10 Hz) e avisa no log. "
-             "Desmarque para pular a consulta e ganhar tempo em lotes grandes.")
-
     _acumular = st.checkbox(
         "➕ Acumular com o resultado já calculado", value=False,
         key='wcs_multi_acum',
@@ -410,10 +435,6 @@ def render_export_wcs_multi(api):
         _prog = st.progress(0.0, text="Buscando posições e equipes na API...")
         _pos_map = _mapa_posicoes(api)
         _eq_map = _mapa_equipes(api)
-        # Minutos oficiais: descobre o parâmetro UMA vez (GET /parameters) e
-        # rearma o disjuntor para este lote.
-        st.session_state.pop(_SS_DUROFF, None)
-        _dur_par = _descobrir_param_duracao(api) if _buscar_min else False
 
         # `carregar_dados` lê o elenco destas duas chaves (definidas pela barra
         # lateral). Trocamos por atividade — para carregar o elenco CORRETO de
@@ -448,17 +469,17 @@ def render_export_wcs_multi(api):
                     if not _sensor:
                         _log.append(f"⚠️ {_nm}: sem dados de sensor — ignorada.")
                         continue
-                    # Minutos OFICIAIS do OpenField (/stats) para esta atividade
-                    _ep = None
-                    try:
-                        _ep = float(_epoch) if _epoch else None
-                    except (TypeError, ValueError):
-                        _ep = None
-                    _min_map, _par_dur = _minutos_openfield(
-                        api, _dur_par, _ep, (_ep + 86400) if _ep else None)
-                    _novas = _linhas_wcs_atividade(
+                    # Participacao por periodo (lista oficial da API) +
+                    # duracao de cada periodo => Minutos igual ao OpenField.
+                    _id2nome = {str(_r['id']): _r['nome']
+                                for _, _r in _df_atl.iterrows() if _r.get('id')}
+                    _partic = _participantes_por_periodo(api, _pids, _id2nome)
+                    _duracs = duracoes_periodos(_sensor, 10.0)
+                    _sem_lista = [_p for _p, _v in _partic.items() if _v is None]
+                    _novas, _excl = _linhas_wcs_atividade(
                         _nm, _dt, _sensor, _info_atl, _vars_sel, _jan_sel,
-                        _esc_sel, 10.0, _cortes, min_map=_min_map)
+                        _esc_sel, 10.0, _cortes,
+                        participantes=_partic, duracoes=_duracs)
                     _rows += _novas
                     _n_sem_pos = sum(1 for _v in _info_atl.values() if not _v[0])
                     _log.append(
@@ -466,12 +487,11 @@ def render_export_wcs_multi(api):
                         f"{len(_info_atl)} atleta(s) no elenco"
                         + (f" — ⚠️ {_n_sem_pos} sem posição na API"
                            if _n_sem_pos else "")
-                        + (f" · Minutos via /stats ('{_par_dur}'): "
-                           f"{len(_min_map)} atleta(s)" if _par_dur else
-                           (" · ⚠️ /stats indisponível (timeout) — usando "
-                            "Minutos_sensor"
-                            if st.session_state.get(_SS_DUROFF) else
-                            " · Minutos_sensor (conta não expõe duração)")))
+                        + (f" · {_excl} par(es) atleta×período excluído(s) "
+                           "por não participação" if _excl else "")
+                        + (f" · ⚠️ sem lista oficial de participantes em: "
+                           f"{', '.join(_sem_lista)} (usado piso de "
+                           "participação)" if _sem_lista else ""))
                 except Exception as _e:
                     _applog.log_exc(f"export WCS multi — atividade {_nm}")
                     _log.append(f"❌ {_nm}: falhou ({type(_e).__name__}).")
