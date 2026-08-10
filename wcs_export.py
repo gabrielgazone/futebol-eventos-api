@@ -3,12 +3,12 @@
 
 Calcula o pico de pior cenário (worst-case scenario) por atleta, variável e
 janela temporal (1/3/5 min), no MESMO método canônico da aba WCS:
-séries por amostra → `metrics.rolling_sum` + argmax (ou rolling-max para
-velocidade máxima). Funções puras (sem Streamlit) — cobertas por testes.
+séries por amostra → `metrics.rolling_sum` + argmax. Funções puras (sem
+Streamlit) — cobertas por testes.
 
-Variáveis suportadas (ver VARIAVEIS): distância total e relativa (m/min),
-distância em alta velocidade (HSR) e sprint, velocidade máxima, PlayerLoad e
-contagem de acelerações/desacelerações.
+Variáveis suportadas (ver VARIAVEIS): distância total, distância em alta
+velocidade (HSR) e sprint, PlayerLoad e contagem de acelerações/desacelerações
+POR BANDA (B2, B3 e B2+ = B2+B3), classificadas pelo pico da ação.
 """
 from __future__ import annotations
 
@@ -17,26 +17,47 @@ from collections import deque
 import numpy as np
 
 import metrics as _mtr
-from analysis import detectar_eventos_acc
+
 
 # Rótulos das variáveis exportáveis (ordem de exibição/coluna).
+# Nota: não há "distância relativa" — a distância JÁ é relativa dentro de uma
+# janela de duração fixa (m por 1/3/5 min), então seria a mesma variável.
 VAR_DIST      = 'Distância (m)'
-VAR_DIST_REL  = 'Distância relativa (m/min)'
 VAR_HSR       = 'Distância HSR (m)'
 VAR_SPRINT    = 'Distância Sprint (m)'
-VAR_VMAX      = 'Velocidade Máx (km/h)'
 VAR_PL        = 'PlayerLoad'
-VAR_ACC       = 'Acelerações (n)'
-VAR_DEC       = 'Desacelerações (n)'
+# Ações de acel/desacel contadas POR BANDA (classificadas pelo pico da ação).
+# "B2+" = B2 + B3 (as duas bandas somadas).
+VAR_ACC_B2    = 'Acelerações B2 (n)'
+VAR_ACC_B3    = 'Acelerações B3 (n)'
+VAR_ACC_B2P   = 'Acelerações B2+ (n)'
+VAR_DEC_B2    = 'Desacelerações B2 (n)'
+VAR_DEC_B3    = 'Desacelerações B3 (n)'
+VAR_DEC_B2P   = 'Desacelerações B2+ (n)'
 
-VARIAVEIS = [VAR_DIST, VAR_DIST_REL, VAR_HSR, VAR_SPRINT, VAR_VMAX, VAR_PL,
-             VAR_ACC, VAR_DEC]
+VARIAVEIS = [VAR_DIST, VAR_HSR, VAR_SPRINT, VAR_PL,
+             VAR_ACC_B2, VAR_ACC_B3, VAR_ACC_B2P,
+             VAR_DEC_B2, VAR_DEC_B3, VAR_DEC_B2P]
 
-# Cortes padrão (editáveis pela UI); HSR/Sprint em km/h, acc/dec em m/s².
+# Cortes padrão (editáveis pela UI); HSR/Sprint em km/h.
 DEFAULT_HSR_KMH    = 19.8
 DEFAULT_SPRINT_KMH = 25.2
-DEFAULT_ACC_MS2    = 3.0
-DEFAULT_DEC_MS2    = 3.0
+
+# Bandas de acel/desacel em m/s² (mesmos limites de config._DEFAULT_ACCELERATION_ZONES).
+DEFAULT_ACC_B2 = (3.0, 4.0)
+DEFAULT_ACC_B3 = (4.0, 10.0)
+DEFAULT_DEC_B2 = (-4.0, -3.0)
+DEFAULT_DEC_B3 = (-10.0, -4.0)
+
+# Variável → bandas que a compõem (chaves resolvidas em serie_por_amostra).
+_VAR_BANDAS = {
+    VAR_ACC_B2:  ('acc_b2',),
+    VAR_ACC_B3:  ('acc_b3',),
+    VAR_ACC_B2P: ('acc_b2', 'acc_b3'),
+    VAR_DEC_B2:  ('dec_b2',),
+    VAR_DEC_B3:  ('dec_b3',),
+    VAR_DEC_B2P: ('dec_b2', 'dec_b3'),
+}
 
 
 def _vel_kmh(sensor_points):
@@ -44,20 +65,69 @@ def _vel_kmh(sensor_points):
     return [float(_p.get('v') or 0.0) * 3.6 for _p in sensor_points]
 
 
+def _acoes_nas_bandas(acc_arr, faixas_alvo, faixas_todas, min_frames, positivo):
+    """Frames de início das ações cujo PICO cai em `faixas_alvo`.
+
+    Detalhe metodológico importante: o scan usa SEMPRE o limiar da UNIÃO de
+    `faixas_todas` (a banda mais baixa, ex.: B2), e só depois classifica a ação
+    pelo pico. Se cada banda fosse escaneada com o próprio limiar, as fronteiras
+    da ação mudariam por banda e ações se perderiam (uma ação sustentada acima de
+    3 m/s² com pico -5 não sustenta o limiar de B3 nem cai na faixa de B2).
+    Assim as fronteiras são idênticas para B2, B3 e B2+, e vale o invariante
+    B2+ = B2 + B3. Mesma semântica de `metrics.detect_actions` (classificação
+    pelo pico no momento em que a ação se confirma) + saturação na banda extrema,
+    para não descartar picos além do limite superior configurado.
+    """
+    if acc_arr is None or len(acc_arr) == 0 or not faixas_alvo:
+        return []
+    _thr = min(abs(_lo) if positivo else abs(_hi)
+               for _lo, _hi in faixas_todas)
+    # Borda extrema do conjunto-alvo (satura: pico além dela ainda conta).
+    _ext_alvo = (max(_hi for _, _hi in faixas_alvo) if positivo
+                 else min(_lo for _lo, _ in faixas_alvo))
+    _ext_todas = (max(_hi for _, _hi in faixas_todas) if positivo
+                  else min(_lo for _lo, _ in faixas_todas))
+    _alvo_tem_extremo = (_ext_alvo == _ext_todas)
+
+    _starts = []
+    _run, _start_i, _peak, _counted = 0, -1, 0.0, False
+    for _i in range(len(acc_arr)):
+        _v = float(acc_arr[_i])
+        _cond = (_v >= _thr) if positivo else (_v <= -_thr)
+        if _cond:
+            if _run == 0:
+                _start_i, _peak = _i, _v
+            _run += 1
+            if (_v > _peak) if positivo else (_v < _peak):
+                _peak = _v
+            if _run >= min_frames and not _counted:
+                _ok = any(_lo <= _peak < _hi for _lo, _hi in faixas_alvo)
+                if not _ok and _alvo_tem_extremo:
+                    _ok = (_peak >= _ext_alvo) if positivo else (_peak <= _ext_alvo)
+                if _ok:
+                    _starts.append(_start_i)
+                _counted = True
+        else:
+            _run, _counted, _peak = 0, False, 0.0
+    return _starts
+
+
 def serie_por_amostra(sensor_points, variavel, hz=10.0, *,
                       hsr_kmh=DEFAULT_HSR_KMH, sprint_kmh=DEFAULT_SPRINT_KMH,
-                      acc_ms2=DEFAULT_ACC_MS2, dec_ms2=DEFAULT_DEC_MS2,
+                      acc_b2=DEFAULT_ACC_B2, acc_b3=DEFAULT_ACC_B3,
+                      dec_b2=DEFAULT_DEC_B2, dec_b3=DEFAULT_DEC_B3,
                       min_dur_acc_s=0.6):
-    """Valor por amostra da `variavel`, pronto para a janela rolante.
+    """Valor por amostra da `variavel`, pronto para a janela rolante (SOMA).
 
-    Para variáveis acumulativas (distância, PlayerLoad, contagens) o valor é a
-    contribuição da amostra — a janela SOMA. Para velocidade máxima é a própria
-    velocidade — a janela pega o MÁXIMO.
+    Distância/HSR/Sprint: metros contribuídos pela amostra. PlayerLoad: o 'pl'
+    do sensor. Ações de acel/desacel por banda: 1.0 no frame de início de cada
+    ação, classificada pelo PICO na banda (via metrics.detect_actions — o mesmo
+    motor da aba WCS/Neuromuscular). Bandas em m/s², como (min, max).
     """
     if not sensor_points:
         return []
 
-    if variavel in (VAR_DIST, VAR_DIST_REL):
+    if variavel == VAR_DIST:
         return [_v / (3.6 * hz) for _v in _vel_kmh(sensor_points)]
 
     if variavel == VAR_HSR:
@@ -68,21 +138,27 @@ def serie_por_amostra(sensor_points, variavel, hz=10.0, *,
         return [(_v / (3.6 * hz)) if _v >= sprint_kmh else 0.0
                 for _v in _vel_kmh(sensor_points)]
 
-    if variavel == VAR_VMAX:
-        return _vel_kmh(sensor_points)
-
     if variavel == VAR_PL:
         return [float(_p.get('pl') or 0.0) for _p in sensor_points]
 
-    if variavel in (VAR_ACC, VAR_DEC):
+    if variavel in _VAR_BANDAS:
         _acc = np.asarray([float(_p.get('a') or 0.0) for _p in sensor_points],
                           dtype=float)
         if not _acc.size:
             return []
-        _mask = detectar_eventos_acc(
-            _acc, acc_ms2 if variavel == VAR_ACC else dec_ms2,
-            min_dur_s=min_dur_acc_s, acima=(variavel == VAR_ACC), freq_hz=hz)
-        return [1.0 if _b else 0.0 for _b in _mask]
+        _disp = {'acc_b2': acc_b2, 'acc_b3': acc_b3,
+                 'dec_b2': dec_b2, 'dec_b3': dec_b3}
+        _pos = variavel in (VAR_ACC_B2, VAR_ACC_B3, VAR_ACC_B2P)
+        _todas = [_disp['acc_b2'], _disp['acc_b3']] if _pos else \
+                 [_disp['dec_b2'], _disp['dec_b3']]
+        _alvo = [_disp[_k] for _k in _VAR_BANDAS[variavel]]
+        _min_frames = max(1, int(round(float(min_dur_acc_s) * float(hz))))
+        _idxs = _acoes_nas_bandas(_acc, _alvo, _todas, _min_frames, _pos)
+        _sv = [0.0] * len(_acc)
+        for _ix in _idxs:
+            if 0 <= _ix < len(_sv):
+                _sv[_ix] += 1.0
+        return _sv
 
     raise ValueError(f"variável desconhecida: {variavel}")
 
@@ -130,18 +206,13 @@ def calcular_wcs(sensor_points, variaveis, janelas_min, hz=10.0, **cortes):
     """
     _out = {}
     for _var in variaveis:
-        # m/min deriva da distância na janela (mesma série, normalizada no fim)
-        _base_var = VAR_DIST if _var == VAR_DIST_REL else _var
-        _sv = serie_por_amostra(sensor_points, _base_var, hz, **cortes)
+        _sv = serie_por_amostra(sensor_points, _var, hz, **cortes)
         if not _sv:
             continue
-        _is_max = (_var == VAR_VMAX)
         for _wmin in janelas_min:
             _n = int(round(_wmin * 60 * hz))
             if _n < 1 or len(_sv) < _n:
                 continue
-            _val, _, _ = pico_janela(_sv, _n, _is_max)
-            if _var == VAR_DIST_REL:
-                _val = _val / float(_wmin) if _wmin > 0 else 0.0
+            _val, _, _ = pico_janela(_sv, _n)
             _out[(_var, _wmin)] = round(float(_val), 2)
     return _out

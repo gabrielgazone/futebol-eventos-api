@@ -163,10 +163,10 @@ def render_export_wcs_multi(api):
     _c1, _c2 = st.columns(2)
     with _c1:
         _vars_sel = st.multiselect(
-            "Variáveis:", _wx.VARIAVEIS,
-            default=[_wx.VAR_DIST, _wx.VAR_DIST_REL, _wx.VAR_HSR,
-                     _wx.VAR_SPRINT, _wx.VAR_VMAX],
-            key='wcs_multi_vars')
+            "Variáveis:", _wx.VARIAVEIS, default=list(_wx.VARIAVEIS),
+            key='wcs_multi_vars',
+            help="Acelerações/desacelerações são contadas por banda "
+                 "(B2, B3 e B2+ = B2+B3), classificadas pelo pico da ação.")
         _jan_sel = st.multiselect(
             "Janelas (min):", [1, 3, 5, 10], default=[1, 3, 5],
             key='wcs_multi_jan')
@@ -181,10 +181,20 @@ def render_export_wcs_multi(api):
                                    _wx.DEFAULT_HSR_KMH, 0.1, key='wcs_multi_hsr')
             _spr = st.number_input("Sprint ≥ (km/h)", 15.0, 40.0,
                                    _wx.DEFAULT_SPRINT_KMH, 0.1, key='wcs_multi_spr')
-            _acc = st.number_input("Aceleração ≥ (m/s²)", 0.5, 10.0,
-                                   _wx.DEFAULT_ACC_MS2, 0.1, key='wcs_multi_acc')
-            _dec = st.number_input("Desaceleração ≤ -(m/s²)", 0.5, 10.0,
-                                   _wx.DEFAULT_DEC_MS2, 0.1, key='wcs_multi_dec')
+            st.caption("Bandas de aceleração (m/s²) — B2+ soma B2 e B3:")
+            _a2i = st.number_input("Acc B2: de", 0.5, 10.0,
+                                   _wx.DEFAULT_ACC_B2[0], 0.1, key='wcs_m_a2i')
+            _a2f = st.number_input("Acc B2: até (= início do B3)", 0.5, 12.0,
+                                   _wx.DEFAULT_ACC_B2[1], 0.1, key='wcs_m_a2f')
+            _a3f = st.number_input("Acc B3: até", 1.0, 20.0,
+                                   _wx.DEFAULT_ACC_B3[1], 0.5, key='wcs_m_a3f')
+            st.caption("Desaceleração — informe a MAGNITUDE (positiva):")
+            _d2i = st.number_input("Dec B2: de", 0.5, 10.0,
+                                   abs(_wx.DEFAULT_DEC_B2[1]), 0.1, key='wcs_m_d2i')
+            _d2f = st.number_input("Dec B2: até (= início do B3)", 0.5, 12.0,
+                                   abs(_wx.DEFAULT_DEC_B2[0]), 0.1, key='wcs_m_d2f')
+            _d3f = st.number_input("Dec B3: até", 1.0, 20.0,
+                                   abs(_wx.DEFAULT_DEC_B3[0]), 0.5, key='wcs_m_d3f')
 
     if not _sel:
         st.info("Selecione ao menos uma atividade acima.")
@@ -199,8 +209,11 @@ def render_export_wcs_multi(api):
     # ── Cálculo (sob demanda — não roda a cada rerun) ────────────────────────
     if st.button("🚀 Carregar atividades e calcular WCS", type="primary",
                  key='wcs_multi_run'):
+        # Desaceleração: a UI pede magnitude; o motor espera bandas negativas
+        # ordenadas (min, max), ex.: B2 = (-4, -3) e B3 = (-10, -4).
         _cortes = {'hsr_kmh': _hsr, 'sprint_kmh': _spr,
-                   'acc_ms2': _acc, 'dec_ms2': _dec}
+                   'acc_b2': (_a2i, _a2f), 'acc_b3': (_a2f, _a3f),
+                   'dec_b2': (-_d2f, -_d2i), 'dec_b3': (-_d3f, -_d2f)}
         _rows, _log = [], []
         _prog = st.progress(0.0, text="Buscando posições e equipes na API...")
         _pos_map = _mapa_posicoes(api)

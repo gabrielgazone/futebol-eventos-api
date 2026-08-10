@@ -43,18 +43,41 @@ def test_serie_sprint_corte_mais_alto():
     assert sum(sv) == 0.0
 
 
-def test_serie_vmax_e_playerload():
-    # tolerância: km/h → m/s → km/h introduz erro de ponto flutuante
-    assert abs(wx.serie_por_amostra(_pts([18.0, 30.0]), wx.VAR_VMAX)[1] - 30.0) < 1e-9
+def test_serie_playerload():
     sv = wx.serie_por_amostra(_pts([10.0] * 3, pl=[1.0, 2.0, 3.0]), wx.VAR_PL)
     assert sv == [1.0, 2.0, 3.0]
 
 
-def test_serie_acc_e_dec_contam_acoes():
-    acc = [0.0] * 5 + [3.5] * 8 + [0.0] * 5 + [-3.5] * 8 + [0.0] * 4
+def test_serie_acc_por_banda_b2_vs_b3():
+    # pico 3.5 -> banda B2 (3-4); pico 5.0 -> banda B3 (4-10)
+    acc = [0.0] * 5 + [3.5] * 8 + [0.0] * 5 + [5.0] * 8 + [0.0] * 4
     pts = _pts([10.0] * len(acc), acc=acc)
-    assert sum(wx.serie_por_amostra(pts, wx.VAR_ACC, hz=10, acc_ms2=3.0)) == 1.0
-    assert sum(wx.serie_por_amostra(pts, wx.VAR_DEC, hz=10, dec_ms2=3.0)) == 1.0
+    assert sum(wx.serie_por_amostra(pts, wx.VAR_ACC_B2, hz=10)) == 1.0
+    assert sum(wx.serie_por_amostra(pts, wx.VAR_ACC_B3, hz=10)) == 1.0
+    # B2+ = B2 + B3
+    assert sum(wx.serie_por_amostra(pts, wx.VAR_ACC_B2P, hz=10)) == 2.0
+
+
+def test_serie_dec_por_banda_b2_vs_b3():
+    acc = [0.0] * 5 + [-3.5] * 8 + [0.0] * 5 + [-5.0] * 8 + [0.0] * 4
+    pts = _pts([10.0] * len(acc), acc=acc)
+    assert sum(wx.serie_por_amostra(pts, wx.VAR_DEC_B2, hz=10)) == 1.0
+    assert sum(wx.serie_por_amostra(pts, wx.VAR_DEC_B3, hz=10)) == 1.0
+    assert sum(wx.serie_por_amostra(pts, wx.VAR_DEC_B2P, hz=10)) == 2.0
+
+
+def test_b2mais_e_soma_de_b2_e_b3():
+    """Invariante: B2+ == B2 + B3 (acel e desacel), para qualquer sinal."""
+    import numpy as _np
+    rng = _np.random.default_rng(11)
+    acc = (rng.random(3000) * 12 - 6).tolist()
+    pts = _pts([10.0] * len(acc), acc=acc)
+    for b2, b3, b2p in ((wx.VAR_ACC_B2, wx.VAR_ACC_B3, wx.VAR_ACC_B2P),
+                        (wx.VAR_DEC_B2, wx.VAR_DEC_B3, wx.VAR_DEC_B2P)):
+        n2 = sum(wx.serie_por_amostra(pts, b2, hz=10))
+        n3 = sum(wx.serie_por_amostra(pts, b3, hz=10))
+        n2p = sum(wx.serie_por_amostra(pts, b2p, hz=10))
+        assert n2p == n2 + n3, f"{b2p}: {n2p} != {n2} + {n3}"
 
 
 def test_serie_variavel_desconhecida():
@@ -95,12 +118,11 @@ def test_pico_bate_com_rolling_sum_canonico():
 
 
 # ── calcular_wcs ─────────────────────────────────────────────────────────────
-def test_calcular_wcs_multi_janela_e_relativa():
+def test_calcular_wcs_distancia_na_janela():
     # 60 s a 36 km/h (10 m/s) = 600 m em 1 min
     pts = _pts([36.0] * 600)
-    r = wx.calcular_wcs(pts, [wx.VAR_DIST, wx.VAR_DIST_REL], [1], hz=10)
+    r = wx.calcular_wcs(pts, [wx.VAR_DIST], [1], hz=10)
     assert abs(r[(wx.VAR_DIST, 1)] - 600.0) < 0.5
-    assert abs(r[(wx.VAR_DIST_REL, 1)] - 600.0) < 0.5   # 600 m / 1 min
 
 
 def test_calcular_wcs_omite_janela_maior_que_serie():
@@ -111,11 +133,32 @@ def test_calcular_wcs_omite_janela_maior_que_serie():
     assert (wx.VAR_DIST, 5) not in r
 
 
-def test_calcular_wcs_relativa_3min():
-    # 3 min a 36 km/h → 1800 m na janela; relativa = 600 m/min
-    r = wx.calcular_wcs(_pts([36.0] * 1800), [wx.VAR_DIST_REL], [3], hz=10)
-    assert abs(r[(wx.VAR_DIST_REL, 3)] - 600.0) < 1.0
-
-
 def test_calcular_wcs_vazio():
     assert wx.calcular_wcs([], [wx.VAR_DIST], [1]) == {}
+
+
+def test_variaveis_sem_relativa_e_sem_vmax():
+    """Distância relativa e velocidade máxima foram removidas do export."""
+    assert not hasattr(wx, 'VAR_DIST_REL')
+    assert not hasattr(wx, 'VAR_VMAX')
+    assert len(wx.VARIAVEIS) == 10
+    for _v in wx.VARIAVEIS:
+        assert 'relativa' not in _v.lower() and 'máx' not in _v.lower()
+
+
+def test_b2mais_equivale_ao_motor_do_app():
+    """B2+ (união das bandas) deve casar com metrics.detect_actions — garante
+    que o export não divirja do que as outras abas do app mostram."""
+    import numpy as _np
+    import metrics as _mtr
+    rng = _np.random.default_rng(23)
+    acc = (rng.random(4000) * 14 - 7).tolist()
+    pts = _pts([10.0] * len(acc), acc=acc)
+
+    for b2p, bandas, in ((wx.VAR_ACC_B2P, [wx.DEFAULT_ACC_B2, wx.DEFAULT_ACC_B3]),
+                         (wx.VAR_DEC_B2P, [wx.DEFAULT_DEC_B2, wx.DEFAULT_DEC_B3])):
+        meu = sum(wx.serie_por_amostra(pts, b2p, hz=10, min_dur_acc_s=0.6))
+        app = len(_mtr.detect_actions(
+            _np.asarray(acc), [{'min': lo, 'max': hi} for lo, hi in bandas],
+            min_dur_s=0.6, hz=10))
+        assert meu == app, f"{b2p}: export={meu} vs app={app}"
