@@ -30,8 +30,8 @@ _CHAVE_LINHA = ['Atividade', 'Atleta', 'Escopo', 'Variavel', 'Janela_min']
 # antes de um deploy pode não ter as colunas novas (ex.: minutos) — nesse caso é
 # descartado, em vez de ser exibido incompleto e parecer um bug.
 _COLS_ESPERADAS = ['Atividade', 'Data', 'Equipe', 'Atleta', 'Posicao',
-                   'Minutos', 'Minutos_dispositivo', 'Periodos_jogados',
-                   'Escopo', 'Variavel', 'Janela_min', 'Valor']
+                   'Minutos', 'Periodos_jogados', 'Escopo', 'Variavel',
+                   'Janela_min', 'Valor']
 
 
 def _fmt_data_br(valor) -> str:
@@ -318,6 +318,47 @@ def participou_do_periodo(nome, periodo, dados_sensor, participantes, hz=10.0,
     return (_dist_total_m(_sp, hz) / _dur_min) >= _PISO_M_POR_MIN
 
 
+def _cols_id(df):
+    """Colunas identificadoras presentes (na ordem de exibição)."""
+    return [_c for _c in ('Atividade', 'Data', 'Equipe', 'Atleta', 'Posicao',
+                          'Minutos', 'Periodos_jogados',
+                          'Escopo') if _c in df.columns]
+
+
+def pivotar_variaveis_x_janelas(df):
+    """UMA linha por atleta (× atividade/escopo) e uma coluna por
+    VARIÁVEL × JANELA — ex.: "Distância (m) 1min", "Distância (m) 3min", ...
+
+    Evita as 3 linhas por atleta (uma por janela): as janelas viram colunas,
+    agrupadas por variável e em ordem crescente de janela.
+    """
+    if df is None or getattr(df, 'empty', True):
+        return df
+    _idx = _cols_id(df)
+    _p = df.pivot_table(index=_idx, columns=['Variavel', 'Janela_min'],
+                        values='Valor', aggfunc='first').reset_index()
+    # Achata o cabeçalho de 2 níveis: ('Distância (m)', 1) -> 'Distância (m) 1min'
+    _novos = []
+    for _c in _p.columns:
+        if isinstance(_c, tuple):
+            _var, _jan = _c[0], _c[1]
+            _novos.append(f"{_var} {int(_jan)}min" if _var and _jan != ''
+                          else str(_var or _jan))
+        else:
+            _novos.append(str(_c))
+    _p.columns = _novos
+    # Ordena: identificadores, depois variável (ordem de VARIAVEIS) × janela
+    _janelas = sorted({int(_j) for _j in df['Janela_min'].unique()})
+    _ordem_vars = []
+    for _v in _wx.VARIAVEIS:
+        for _j in _janelas:
+            _nome = f"{_v} {_j}min"
+            if _nome in _p.columns:
+                _ordem_vars.append(_nome)
+    _outras = [_c for _c in _p.columns if _c not in _ordem_vars]
+    return _p[_outras + _ordem_vars]
+
+
 def pivotar_variaveis(df):
     """Converte o formato longo em VARIÁVEIS COMO COLUNAS (atletas nas linhas).
 
@@ -327,7 +368,7 @@ def pivotar_variaveis(df):
     if df is None or getattr(df, 'empty', True):
         return df
     _idx = [_c for _c in ('Atividade', 'Data', 'Equipe', 'Atleta', 'Posicao',
-                          'Minutos', 'Minutos_dispositivo', 'Periodos_jogados',
+                          'Minutos', 'Periodos_jogados',
                           'Escopo', 'Janela_min') if _c in df.columns]
     _p = df.pivot_table(index=_idx, columns='Variavel', values='Valor',
                         aggfunc='first').reset_index()
@@ -375,9 +416,6 @@ def _linhas_wcs_atividade(act_nome, act_data, dados_sensor, info_atl,
 
         # Minutos do atleta = soma das durações dos períodos participados
         _min_total = round(sum(_dur.get(_p, 0.0) for _p in _peri_ok), 5)
-        _n_amostras = sum(len((dados_sensor.get(_p) or {}).get(_atl) or [])
-                          for _p in _peri_ok)
-        _min_disp = round(_n_amostras / hz / 60.0, 1) if hz > 0 else 0.0
 
         _escopo_series = []
         if 'Partida inteira' in escopos:
@@ -404,7 +442,6 @@ def _linhas_wcs_atividade(act_nome, act_data, dados_sensor, info_atl,
                     'Atleta': _atl,
                     'Posicao': _pos,
                     'Minutos': _min_escopo,
-                    'Minutos_dispositivo': _min_disp,
                     'Periodos_jogados': len(_peri_ok),
                     'Escopo': _escopo,
                     'Variavel': _var,
@@ -669,12 +706,23 @@ def render_export_wcs_multi(api):
 
     _fmt_out = st.radio(
         "Formato da tabela:",
-        ["Variáveis em colunas", "Longo (tidy)"],
+        ["Variáveis × janelas em colunas", "Variáveis em colunas",
+         "Longo (tidy)"],
         horizontal=True, key='wcs_multi_fmt',
-        help="Variáveis em colunas: 1 linha por atleta (× atividade, escopo e "
-             "janela), uma coluna por variável. Longo: 1 linha por variável.")
+        help="Variáveis × janelas em colunas: 1 linha por atleta, com 3 colunas "
+             "por variável (1/3/5 min) — sem repetir o atleta em 3 linhas. "
+             "Variáveis em colunas: 1 linha por atleta E janela. "
+             "Longo: 1 linha por variável (para modelos mistos).")
 
-    if _fmt_out == "Variáveis em colunas":
+    if _fmt_out == "Variáveis × janelas em colunas":
+        _dfx = pivotar_variaveis_x_janelas(_df)
+        _nome_csv = "wcs_multi_atividades_var_x_janelas.csv"
+        _legenda = (
+            "Cada linha é um **atleta** numa atividade/escopo; cada variável tem "
+            "**uma coluna por janela** (ex.: `Distância (m) 1min`, "
+            "`Distância (m) 3min`, `Distância (m) 5min`). Formato direto para "
+            "comparar janelas lado a lado no jamovi.")
+    elif _fmt_out == "Variáveis em colunas":
         _dfx = pivotar_variaveis(_df)
         _nome_csv = "wcs_multi_atividades_variaveis_em_colunas.csv"
         _legenda = (

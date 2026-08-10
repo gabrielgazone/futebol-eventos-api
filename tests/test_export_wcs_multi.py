@@ -111,7 +111,7 @@ def test_fmt_data_br_iso_e_vazio():
 
 
 
-def test_linhas_incluem_minutos_e_dispositivo():
+def test_linhas_incluem_minutos_do_openfield():
     pts = [{'v': 10.0} for _ in range(600)]     # 600 amostras a 10 Hz = 1 min
     rows, _ = _linhas_wcs_atividade(
         'Jogo A', '25/07/2026', {'1T': {'João Silva': pts}},
@@ -119,7 +119,7 @@ def test_linhas_incluem_minutos_e_dispositivo():
         [wx.VAR_DIST], [1], ['Partida inteira'], 10.0, {},
         participantes={'1T': {'João Silva'}}, duracoes={'1T': 51.4})
     assert rows[0]['Minutos'] == 51.4           # duração do período (OpenField)
-    assert rows[0]['Minutos_dispositivo'] == 1.0   # tempo de sinal do sensor
+    assert 'Minutos_dispositivo' not in rows[0]  # removida (minutos vêm da API)
     assert rows[0]['Periodos_jogados'] == 1
     assert rows[0]['Data'] == '25/07/2026'
 
@@ -129,7 +129,7 @@ def test_pivotar_variaveis_colunas_e_linhas():
     import pandas as pd
     from viz.export_wcs_multi import pivotar_variaveis
     base = {'Atividade': 'J1', 'Data': '25/07/2026', 'Equipe': 'Vasco',
-            'Posicao': 'Meia', 'Minutos': 90.0, 'Minutos_dispositivo': 89.5,
+            'Posicao': 'Meia', 'Minutos': 90.0,
             'Periodos_jogados': 2, 'Escopo': 'Partida inteira', 'Janela_min': 1}
     df = pd.DataFrame([
         dict(base, Atleta='A', Variavel=wx.VAR_DIST, Valor=180.0),
@@ -159,3 +159,68 @@ def test_pivotar_variaveis_df_vazio():
 
 
 
+
+
+# ── Formato: variáveis × janelas em colunas (1 linha por atleta) ─────────────
+def _df_tres_janelas():
+    import pandas as pd
+    base = {'Atividade': 'J1', 'Data': '25/07/2026', 'Equipe': 'Resende',
+            'Posicao': 'Volante', 'Minutos': 55.7,
+            'Periodos_jogados': 1, 'Escopo': 'Partida inteira'}
+    _rows = []
+    for _jan, _dist, _hsr in ((1, 215.1, 76.9), (3, 547.8, 112.8),
+                              (5, 846.1, 136.4)):
+        _rows.append(dict(base, Atleta='Enzo', Variavel=wx.VAR_DIST,
+                          Janela_min=_jan, Valor=_dist))
+        _rows.append(dict(base, Atleta='Enzo', Variavel=wx.VAR_HSR,
+                          Janela_min=_jan, Valor=_hsr))
+    return pd.DataFrame(_rows)
+
+
+def test_pivot_var_x_janelas_uma_linha_por_atleta():
+    from viz.export_wcs_multi import pivotar_variaveis_x_janelas
+    p = pivotar_variaveis_x_janelas(_df_tres_janelas())
+    assert len(p) == 1                       # 1 linha (antes: 3, uma por janela)
+    assert 'Janela_min' not in p.columns
+    assert 'Variavel' not in p.columns and 'Valor' not in p.columns
+
+
+def test_pivot_var_x_janelas_tres_colunas_por_variavel():
+    from viz.export_wcs_multi import pivotar_variaveis_x_janelas
+    p = pivotar_variaveis_x_janelas(_df_tres_janelas())
+    for _v in (wx.VAR_DIST, wx.VAR_HSR):
+        for _j in (1, 3, 5):
+            assert f"{_v} {_j}min" in p.columns
+    _l = p.iloc[0]
+    assert _l[f"{wx.VAR_DIST} 1min"] == 215.1
+    assert _l[f"{wx.VAR_DIST} 3min"] == 547.8
+    assert _l[f"{wx.VAR_DIST} 5min"] == 846.1
+    assert _l[f"{wx.VAR_HSR} 5min"] == 136.4
+
+
+def test_pivot_var_x_janelas_ordem_das_colunas():
+    """Identificadores primeiro; depois cada variável com suas 3 janelas juntas."""
+    from viz.export_wcs_multi import pivotar_variaveis_x_janelas
+    _cols = list(pivotar_variaveis_x_janelas(_df_tres_janelas()).columns)
+    assert _cols.index('Atleta') < _cols.index(f"{wx.VAR_DIST} 1min")
+    assert _cols.index('Minutos') < _cols.index(f"{wx.VAR_DIST} 1min")
+    # janelas em ordem crescente dentro da variável
+    assert (_cols.index(f"{wx.VAR_DIST} 1min")
+            < _cols.index(f"{wx.VAR_DIST} 3min")
+            < _cols.index(f"{wx.VAR_DIST} 5min"))
+    # variáveis agrupadas (todas as janelas de Distância antes de HSR)
+    assert _cols.index(f"{wx.VAR_DIST} 5min") < _cols.index(f"{wx.VAR_HSR} 1min")
+
+
+def test_pivot_var_x_janelas_preserva_minutos_e_escopo():
+    from viz.export_wcs_multi import pivotar_variaveis_x_janelas
+    _l = pivotar_variaveis_x_janelas(_df_tres_janelas()).iloc[0]
+    assert _l['Minutos'] == 55.7
+    assert _l['Escopo'] == 'Partida inteira'
+    assert _l['Periodos_jogados'] == 1
+
+
+def test_pivot_var_x_janelas_df_vazio():
+    import pandas as pd
+    from viz.export_wcs_multi import pivotar_variaveis_x_janelas
+    assert getattr(pivotar_variaveis_x_janelas(pd.DataFrame()), 'empty', False)
