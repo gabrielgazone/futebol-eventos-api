@@ -90,3 +90,101 @@ def test_linhas_wcs_atleta_sem_info_nao_quebra():
         [wx.VAR_DIST], [1], ['Partida inteira'], 10.0, {})
     assert len(rows) == 1
     assert rows[0]['Posicao'] == '' and rows[0]['Equipe'] == ''
+
+
+# ── Data (bug do epoch cru) ──────────────────────────────────────────────────
+def test_fmt_data_br_epoch_unix():
+    from viz.export_wcs_multi import _fmt_data_br
+    # 1785005112 = 25/07/2026 (era exibido cru na coluna Data)
+    assert _fmt_data_br(1785005112) == '25/07/2026'
+    assert _fmt_data_br('1785005112') == '25/07/2026'
+
+
+def test_fmt_data_br_iso_e_vazio():
+    from viz.export_wcs_multi import _fmt_data_br
+    assert _fmt_data_br('2026-07-25T10:00:00Z') == '25/07/2026'
+    assert _fmt_data_br('2026-07-25') == '25/07/2026'
+    assert _fmt_data_br(None) == '' and _fmt_data_br('') == ''
+
+
+# ── Minutos oficiais (/stats) ────────────────────────────────────────────────
+def test_para_minutos_segundos_e_minutos():
+    from viz.export_wcs_multi import _para_minutos
+    assert _para_minutos(5400) == 90.0        # segundos → minutos
+    assert _para_minutos(90) == 90.0          # já em minutos
+    assert _para_minutos(0) is None and _para_minutos(None) is None
+
+
+def test_minutos_openfield_encontra_parametro():
+    from viz.export_wcs_multi import _minutos_openfield
+
+    class StatsApi:
+        def __init__(self):
+            self.pedidos = []
+
+        def get_stats(self, payload):
+            self.pedidos.append(payload['parameters'][0])
+            if payload['parameters'][0] != 'total_duration':
+                return None                    # só este parâmetro existe
+            return [{'athlete': 'João Silva', 'parameters': {'total_duration': 5400}},
+                    {'athlete': 'Ana Souza', 'parameters': {'total_duration': 2700}}]
+
+    api = StatsApi()
+    mins, par = _minutos_openfield(api, 1785005112, 1785091512)
+    assert par == 'total_duration'
+    assert mins == {'João Silva': 90.0, 'Ana Souza': 45.0}
+
+
+def test_minutos_openfield_sem_resposta():
+    from viz.export_wcs_multi import _minutos_openfield
+
+    class Vazio:
+        def get_stats(self, payload):
+            return None
+
+    assert _minutos_openfield(Vazio(), 1785005112, None) == ({}, None)
+    # sem epoch → nem tenta
+    assert _minutos_openfield(Vazio(), None, None) == ({}, None)
+
+
+def test_linhas_incluem_minutos_of_e_sensor():
+    pts = [{'v': 10.0} for _ in range(600)]     # 600 amostras a 10 Hz = 1 min
+    rows = _linhas_wcs_atividade(
+        'Jogo A', '25/07/2026', {'1T': {'João Silva': pts}},
+        {'João Silva': ('Zagueiro', 'Vasco')},
+        [wx.VAR_DIST], [1], ['Partida inteira'], 10.0, {},
+        min_map={'João Silva': 90.0})
+    assert rows[0]['Minutos_OpenField'] == 90.0
+    assert rows[0]['Minutos_sensor'] == 1.0     # derivado das amostras
+    assert rows[0]['Data'] == '25/07/2026'
+
+
+# ── Pivô: variáveis em colunas ───────────────────────────────────────────────
+def test_pivotar_variaveis_colunas_e_linhas():
+    import pandas as pd
+    from viz.export_wcs_multi import pivotar_variaveis
+    base = {'Atividade': 'J1', 'Data': '25/07/2026', 'Equipe': 'Vasco',
+            'Posicao': 'Meia', 'Minutos_OpenField': 90.0,
+            'Minutos_sensor': 89.5, 'Escopo': 'Partida inteira', 'Janela_min': 1}
+    df = pd.DataFrame([
+        dict(base, Atleta='A', Variavel=wx.VAR_DIST, Valor=180.0),
+        dict(base, Atleta='A', Variavel=wx.VAR_HSR, Valor=40.0),
+        dict(base, Atleta='B', Variavel=wx.VAR_DIST, Valor=170.0),
+        dict(base, Atleta='B', Variavel=wx.VAR_HSR, Valor=35.0),
+    ])
+    p = pivotar_variaveis(df)
+    assert len(p) == 2                          # 1 linha por ATLETA
+    assert wx.VAR_DIST in p.columns and wx.VAR_HSR in p.columns
+    assert 'Variavel' not in p.columns and 'Valor' not in p.columns
+    linha_a = p[p['Atleta'] == 'A'].iloc[0]
+    assert linha_a[wx.VAR_DIST] == 180.0 and linha_a[wx.VAR_HSR] == 40.0
+    assert linha_a['Minutos_OpenField'] == 90.0
+    # identificadores vêm antes das variáveis
+    assert list(p.columns).index('Atleta') < list(p.columns).index(wx.VAR_DIST)
+
+
+def test_pivotar_variaveis_df_vazio():
+    import pandas as pd
+    from viz.export_wcs_multi import pivotar_variaveis
+    vazio = pd.DataFrame()
+    assert getattr(pivotar_variaveis(vazio), 'empty', False)

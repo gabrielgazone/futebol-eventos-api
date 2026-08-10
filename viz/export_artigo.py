@@ -19,7 +19,7 @@ from bands import (_bandas_vel_ativas, _bandas_acc_ativas, _fmt_num_banda,
 from analysis import acc_series_from_vel, get_min_dur_s
 from diagnostics import _diag_log
 from config import _CHAVE_COMBINADO
-from viz.export_wcs_multi import render_export_wcs_multi
+from viz.export_wcs_multi import render_export_wcs_multi, _fmt_data_br
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -38,29 +38,6 @@ _EXPORT_ARTIGO_COLS = [
     "Deceleration B3 Efforts (Gen 2)",
 ]
 
-
-def _fmt_data_br(valor) -> str:
-    """Formata a data da atividade para DD/MM/AAAA (aceita epoch, ISO ou str)."""
-    from datetime import datetime as _dt
-    if valor is None or valor == '':
-        return ''
-    try:
-        fv = float(valor)
-        if fv > 1e8:
-            return _dt.fromtimestamp(fv).strftime('%d/%m/%Y')
-    except (TypeError, ValueError):
-        pass
-    s = str(valor)
-    try:
-        return _dt.fromisoformat(s.replace('Z', '').split('.')[0]).strftime('%d/%m/%Y')
-    except Exception:
-        _applog.log_debug_exc()
-    for _f in ('%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y'):
-        try:
-            return _dt.strptime(s[:10], _f).strftime('%d/%m/%Y')
-        except ValueError:
-            continue
-    return s[:10]
 
 
 def _dist_por_banda_vel(sensor_points, n_bandas=6):

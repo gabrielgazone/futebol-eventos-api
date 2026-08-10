@@ -22,6 +22,92 @@ _SS_RES = '_wcs_multi_resultado'      # DataFrame tidy calculado
 _SS_LOG = '_wcs_multi_log'            # avisos por atividade
 
 
+def _fmt_data_br(valor) -> str:
+    """Formata a data da atividade para DD/MM/AAAA (aceita epoch, ISO ou str)."""
+    from datetime import datetime as _dt
+    if valor is None or valor == '':
+        return ''
+    try:
+        fv = float(valor)
+        if fv > 1e8:
+            return _dt.fromtimestamp(fv).strftime('%d/%m/%Y')
+    except (TypeError, ValueError):
+        pass
+    s = str(valor)
+    try:
+        return _dt.fromisoformat(s.replace('Z', '').split('.')[0]).strftime('%d/%m/%Y')
+    except Exception:
+        _applog.log_debug_exc()
+    for _f in ('%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y'):
+        try:
+            return _dt.strptime(s[:10], _f).strftime('%d/%m/%Y')
+        except ValueError:
+            continue
+    return s[:10]
+
+
+# Nomes candidatos do parâmetro de duração no /stats (varia por conta/versão).
+_DUR_PARAMS = ('total_duration', 'duration', 'total_time', 'time_on_field',
+               'athlete_duration', 'total_session_time')
+
+
+def _para_minutos(valor):
+    """Converte a duração do /stats para MINUTOS.
+
+    A API pode devolver segundos ou minutos dependendo do parâmetro; usa uma
+    heurística conservadora: > 300 é tratado como segundos (300 min = 5 h seria
+    implausível para uma partida), senão já está em minutos.
+    """
+    try:
+        _v = float(valor)
+    except (TypeError, ValueError):
+        return None
+    if _v <= 0:
+        return None
+    return round(_v / 60.0, 1) if _v > 300 else round(_v, 1)
+
+
+def _minutos_openfield(api, epoch_ini, epoch_fim):
+    """{atleta: minutos} OFICIAIS do OpenField via POST /stats para a janela da
+    atividade. Retorna também o nome do parâmetro que respondeu (para o log).
+
+    O nome do parâmetro de duração varia por conta, então tentamos os candidatos
+    de `_DUR_PARAMS`. Se nenhum responder, devolve ({}, None) e o export cai na
+    duração derivada do sensor (coluna separada), sem inventar valor.
+    """
+    if not epoch_ini:
+        return {}, None
+    _payload_base = {
+        "group_by": ["athlete"],
+        "source": "cached_stats",
+        "start_time": int(epoch_ini),
+        "end_time": int(epoch_fim or (epoch_ini + 86400)),
+    }
+    for _par in _DUR_PARAMS:
+        try:
+            _r = api.get_stats(dict(_payload_base, parameters=[_par]))
+        except Exception:
+            _applog.log_debug_exc()
+            continue
+        _rows = _r if isinstance(_r, list) else (_r or {}).get('data', [])
+        _out = {}
+        for _d in (_rows or []):
+            if not isinstance(_d, dict):
+                continue
+            _nm = str(_d.get('athlete') or _d.get('athlete_name')
+                      or _d.get('name') or '')
+            _p = _d.get('parameters') or {}
+            _val = (_p.get(_par) if isinstance(_p, dict) else None)
+            if _val is None:
+                _val = _d.get(_par)
+            _mm = _para_minutos(_val)
+            if _nm and _mm:
+                _out[_nm] = _mm
+        if _out:
+            return _out, _par
+    return {}, None
+
+
 def _mapa_posicoes(api):
     """{position_id: nome} direto da API (/positions). Cacheado no _api_fetch."""
     _out = {}
@@ -84,18 +170,47 @@ def _atletas_da_atividade(api, activity_id, pos_map, eq_map):
     return pd.DataFrame(_rows)
 
 
+def pivotar_variaveis(df):
+    """Converte o formato longo em VARIÁVEIS COMO COLUNAS (atletas nas linhas).
+
+    Índice: Atividade, Data, Equipe, Atleta, Posicao, Minutos*, Escopo,
+    Janela_min. Uma coluna por variável, na ordem de `wcs_export.VARIAVEIS`.
+    """
+    if df is None or getattr(df, 'empty', True):
+        return df
+    _idx = [_c for _c in ('Atividade', 'Data', 'Equipe', 'Atleta', 'Posicao',
+                          'Minutos_OpenField', 'Minutos_sensor', 'Escopo',
+                          'Janela_min') if _c in df.columns]
+    _p = df.pivot_table(index=_idx, columns='Variavel', values='Valor',
+                        aggfunc='first').reset_index()
+    _p.columns.name = None
+    # Ordena as colunas de variáveis como em VARIAVEIS (o resto vem antes)
+    _vars_ord = [_v for _v in _wx.VARIAVEIS if _v in _p.columns]
+    _outras = [_c for _c in _p.columns if _c not in _vars_ord]
+    return _p[_outras + _vars_ord]
+
+
 def _linhas_wcs_atividade(act_nome, act_data, dados_sensor, info_atl,
-                          variaveis, janelas, escopos, hz, cortes):
+                          variaveis, janelas, escopos, hz, cortes,
+                          min_map=None):
     """Linhas tidy de WCS para UMA atividade já carregada.
 
     info_atl: {nome: (posicao, equipe)} vindo da API (ver _atletas_da_atividade).
+    min_map: {nome: minutos} oficiais do OpenField (/stats). A duração derivada
+    do sensor entra numa coluna separada, para conferência.
     """
     _rows = []
     _info = info_atl or {}
+    _mins = min_map or {}
     _atletas = sorted({_a for _p in dados_sensor.values() for _a in _p.keys()})
 
     for _atl in _atletas:
         _pos, _eq = _info.get(_atl, ('', ''))
+        # Duração pelo sinal do sensor (10 Hz): amostras únicas de todos os
+        # períodos — referência para conferir o Minutos oficial.
+        _n_amostras = sum(len(_p.get(_atl, [])) for _p in dados_sensor.values())
+        _min_sensor = round(_n_amostras / hz / 60.0, 1) if hz > 0 else 0.0
+        _min_of = _mins.get(_atl)
 
         _escopo_series = []
         if 'Partida inteira' in escopos:
@@ -119,6 +234,8 @@ def _linhas_wcs_atividade(act_nome, act_data, dados_sensor, info_atl,
                     'Equipe': _eq,
                     'Atleta': _atl,
                     'Posicao': _pos,
+                    'Minutos_OpenField': _min_of if _min_of else '',
+                    'Minutos_sensor': _min_sensor,
                     'Escopo': _escopo,
                     'Variavel': _var,
                     'Janela_min': _wmin,
@@ -134,8 +251,9 @@ def render_export_wcs_multi(api):
     st.caption(
         "Escolha **várias atividades** (independente do filtro da barra lateral) "
         "e exporte os picos de **pior cenário** por atleta, variável e janela "
-        "(1/3/5 min) em formato **longo/tidy** — pronto para jamovi, R ou SPSS. "
-        "O cálculo usa o **mesmo método da aba WCS**.")
+        "(1/3/5 min) — pronto para jamovi, R ou SPSS. O cálculo usa o **mesmo "
+        "método da aba WCS**. **Você define os limiares** de HSR, Sprint e das "
+        "bandas de aceleração/desaceleração (B2/B3) em *Cortes das variáveis*.")
 
     if api is None:
         st.info("Conecte-se à API (barra lateral) para usar o export multi-atividade.")
@@ -150,10 +268,12 @@ def render_export_wcs_multi(api):
     _opts, _meta = [], {}
     for _, _r in _dfa.iterrows():
         _nm = str(_r.get('nome') or '(sem nome)')
-        _dt = str(_r.get('data') or '')
-        _lbl = f"{_nm} — {_dt[:10]}" if _dt else _nm
+        # A API devolve start_time como epoch Unix — formata para DD/MM/AAAA
+        # (antes o corte [:10] deixava o número cru na coluna Data).
+        _dt = _fmt_data_br(_r.get('data'))
+        _lbl = f"{_nm} — {_dt}" if _dt else _nm
         _opts.append(_lbl)
-        _meta[_lbl] = (_r.get('id'), _nm, _dt[:10])
+        _meta[_lbl] = (_r.get('id'), _nm, _dt, _r.get('data'))
 
     _sel = st.multiselect(
         "Atividades a exportar (busque por nome/data):", _opts,
@@ -227,7 +347,7 @@ def render_export_wcs_multi(api):
         _bkp_filt = st.session_state.get('atletas_filtrados')
         try:
             for _i, _lbl in enumerate(_sel, 1):
-                _aid, _nm, _dt = _meta[_lbl]
+                _aid, _nm, _dt, _epoch = _meta[_lbl]
                 _prog.progress((_i - 1) / len(_sel),
                                text=f"({_i}/{len(_sel)}) {_nm}")
                 try:
@@ -252,16 +372,28 @@ def render_export_wcs_multi(api):
                     if not _sensor:
                         _log.append(f"⚠️ {_nm}: sem dados de sensor — ignorada.")
                         continue
+                    # Minutos OFICIAIS do OpenField (/stats) para esta atividade
+                    _ep = None
+                    try:
+                        _ep = float(_epoch) if _epoch else None
+                    except (TypeError, ValueError):
+                        _ep = None
+                    _min_map, _par_dur = _minutos_openfield(
+                        api, _ep, (_ep + 86400) if _ep else None)
                     _novas = _linhas_wcs_atividade(
                         _nm, _dt, _sensor, _info_atl, _vars_sel, _jan_sel,
-                        _esc_sel, 10.0, _cortes)
+                        _esc_sel, 10.0, _cortes, min_map=_min_map)
                     _rows += _novas
                     _n_sem_pos = sum(1 for _v in _info_atl.values() if not _v[0])
                     _log.append(
                         f"✅ {_nm}: {len(_novas)} linha(s), "
                         f"{len(_info_atl)} atleta(s) no elenco"
                         + (f" — ⚠️ {_n_sem_pos} sem posição na API"
-                           if _n_sem_pos else ""))
+                           if _n_sem_pos else "")
+                        + (f" · Minutos via /stats ('{_par_dur}'): "
+                           f"{len(_min_map)} atleta(s)" if _par_dur else
+                           " · ⚠️ /stats não retornou duração — use "
+                           "Minutos_sensor"))
                 except Exception as _e:
                     _applog.log_exc(f"export WCS multi — atividade {_nm}")
                     _log.append(f"❌ {_nm}: falhou ({type(_e).__name__}).")
@@ -293,14 +425,32 @@ def render_export_wcs_multi(api):
 
     st.success(f"**{len(_df)}** linhas · {_df['Atleta'].nunique()} atleta(s) · "
                f"{_df['Atividade'].nunique()} atividade(s)")
-    st.dataframe(_df, use_container_width=True, height=380, hide_index=True)
 
+    _fmt_out = st.radio(
+        "Formato da tabela:",
+        ["Variáveis em colunas", "Longo (tidy)"],
+        horizontal=True, key='wcs_multi_fmt',
+        help="Variáveis em colunas: 1 linha por atleta (× atividade, escopo e "
+             "janela), uma coluna por variável. Longo: 1 linha por variável.")
+
+    if _fmt_out == "Variáveis em colunas":
+        _dfx = pivotar_variaveis(_df)
+        _nome_csv = "wcs_multi_atividades_variaveis_em_colunas.csv"
+        _legenda = (
+            "Cada linha é um **atleta** numa atividade/escopo/janela; cada "
+            "**variável é uma coluna**. Filtre `Janela_min` (1/3/5) e `Escopo` "
+            "no jamovi para a análise desejada.")
+    else:
+        _dfx = _df
+        _nome_csv = "wcs_multi_atividades_tidy.csv"
+        _legenda = (
+            "Formato longo: 1 linha por atividade × atleta × escopo × variável × "
+            "janela. Use **Variavel**, **Janela_min**, **Escopo**, **Equipe** e "
+            "**Posicao** como fatores e **Valor** como variável dependente.")
+
+    st.dataframe(_dfx, use_container_width=True, height=380, hide_index=True)
     st.download_button(
-        "📥 Baixar CSV (tidy — jamovi/R/SPSS)",
-        _df.to_csv(index=False).encode('utf-8'),
-        "wcs_multi_atividades_tidy.csv", mime='text/csv',
-        key='wcs_multi_dl', type="primary")
-    st.caption(
-        "Formato longo: 1 linha por atividade × atleta × escopo × variável × "
-        "janela. No jamovi, use **Variavel**, **Janela_min**, **Escopo**, "
-        "**Equipe** e **Posicao** como fatores e **Valor** como variável dependente.")
+        "📥 Baixar CSV (jamovi/R/SPSS)",
+        _dfx.to_csv(index=False).encode('utf-8'),
+        _nome_csv, mime='text/csv', key='wcs_multi_dl', type="primary")
+    st.caption(_legenda)
