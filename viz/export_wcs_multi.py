@@ -21,6 +21,7 @@ from data_loader import carregar_dados
 _SS_RES = '_wcs_multi_resultado'      # DataFrame tidy calculado
 _SS_LOG = '_wcs_multi_log'            # avisos por atividade
 _SS_ACTS = '_wcs_multi_acts_calc'     # atividades que geraram o resultado atual
+_SS_PERIODOS = '_wcs_multi_periodos'  # {atividade: {periodo: id}} descobertos
 
 # Colunas que identificam uma linha unicamente (usadas para deduplicar ao
 # acumular lotes de atividades).
@@ -118,6 +119,20 @@ def _atletas_da_atividade(api, activity_id, pos_map, eq_map):
             'equipe': eq_map.get(_aid, '') or '',
         })
     return pd.DataFrame(_rows)
+
+
+def filtrar_periodos(pids, incluir):
+    """Mantém em `pids` ({nome: id}) só os períodos cujo nome está em `incluir`.
+
+    `incluir=None` = sem filtro (todos entram). Usado na etapa intermediária de
+    seleção: filtrar ANTES de carregar evita baixar o sinal 10 Hz dos períodos
+    descartados (a parte lenta) e mantém "Partida inteira" e "Minutos"
+    restritos ao que o usuário escolheu.
+    """
+    if incluir is None:
+        return dict(pids or {})
+    _inc = set(incluir)
+    return {_k: _v for _k, _v in (pids or {}).items() if _k in _inc}
 
 
 def _nome_do_atleta(_a):
@@ -517,6 +532,55 @@ def render_export_wcs_multi(api):
         key='wcs_multi_acts',
         help="Digite para filtrar. Selecione todas as partidas do estudo.")
 
+    # ── Etapa intermediária: quais PERÍODOS entram no estudo ────────────────
+    # Filtrar aqui (antes de carregar) evita baixar o sinal 10 Hz dos períodos
+    # descartados — que é a parte lenta. Também mantém "Partida inteira" e o
+    # cálculo de Minutos restritos aos períodos escolhidos.
+    if _sel and st.button("🔍 Buscar períodos das atividades selecionadas",
+                          key='wcs_multi_busca_per'):
+        _mapa_p = {}
+        _pb = st.progress(0.0, text="Buscando períodos...")
+        for _i_p, _lbl_p in enumerate(_sel, 1):
+            _aid_p = _meta[_lbl_p][0]
+            _pb.progress((_i_p - 1) / len(_sel),
+                         text=f"({_i_p}/{len(_sel)}) {_meta[_lbl_p][1]}")
+            try:
+                _praw_p = api.get_activity_periods(_aid_p) or []
+                _mapa_p[_lbl_p] = {
+                    (_p.get('name') or f"Período {_j + 1}"): _p.get('id')
+                    for _j, _p in enumerate(
+                        _praw_p if isinstance(_praw_p, list) else [])
+                    if isinstance(_p, dict) and _p.get('id')}
+            except Exception:
+                _applog.log_debug_exc()
+                _mapa_p[_lbl_p] = {}
+        _pb.progress(1.0, text="Períodos encontrados.")
+        st.session_state[_SS_PERIODOS] = _mapa_p
+
+    _mapa_per = st.session_state.get(_SS_PERIODOS) or {}
+    _per_sel = None
+    if _mapa_per:
+        _nomes_per = sorted({_n for _m in _mapa_per.values() for _n in _m})
+        if _nomes_per:
+            _per_sel = st.multiselect(
+                "Períodos a INCLUIR na exportação:", _nomes_per,
+                default=_nomes_per, key='wcs_multi_per_sel',
+                help="Desmarque aquecimento, treinos ou tempos que não entram no "
+                     "estudo. O sinal dos períodos excluídos nem é baixado, e "
+                     "'Partida inteira' e 'Minutos' passam a considerar só os "
+                     "períodos marcados.")
+            _n_fora = sum(1 for _m in _mapa_per.values() for _n in _m
+                          if _n not in (_per_sel or []))
+            st.caption(
+                f"{len(_nomes_per)} período(s) distinto(s) nas atividades "
+                f"selecionadas · **{len(_per_sel or [])}** incluído(s)"
+                + (f" · {_n_fora} par(es) atividade×período fora" if _n_fora else ""))
+        else:
+            st.warning("Nenhum período encontrado nas atividades selecionadas.")
+    elif _sel:
+        st.caption("Sem filtro de períodos: **todos** serão incluídos. Clique em "
+                   "*Buscar períodos* para escolher.")
+
     _c1, _c2 = st.columns(2)
     with _c1:
         _vars_sel = st.multiselect(
@@ -616,6 +680,14 @@ def render_export_wcs_multi(api):
                     for _p in (_praw if isinstance(_praw, list) else []):
                         if _p.get('id'):
                             _pids[_p.get('name') or f"Período {len(_pids)+1}"] = _p['id']
+                    # Filtro da etapa intermediária: só os períodos escolhidos
+                    # (o sinal dos demais nem é baixado).
+                    if _per_sel is not None:
+                        _pids = filtrar_periodos(_pids, _per_sel)
+                        if not _pids:
+                            _log.append(f"⏭️ {_nm}: nenhum período selecionado "
+                                        "nesta atividade — ignorada.")
+                            continue
                     if not _pids:
                         _pids = {'Atividade Completa': None}
                     _carga = carregar_dados(api, _aid, _pids, list(_pids.keys()))

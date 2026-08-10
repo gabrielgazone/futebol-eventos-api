@@ -231,3 +231,40 @@ def test_deep_periodo_com_period_athletes_e_athlete_id():
     dur, part, _ = ler_atividade_profunda(resp)
     assert abs(dur['2 Tempo'] - 55.7) < 0.01
     assert part['2 Tempo'] == {'Enzo Zaidan'}
+
+
+# ── Etapa intermediária: seleção de períodos a incluir ──────────────────────
+def test_filtrar_periodos_mantem_so_os_escolhidos():
+    from viz.export_wcs_multi import filtrar_periodos
+    pids = {'Aquecimento': 'p0', '1 Tempo': 'p1', '2 Tempo': 'p2'}
+    assert filtrar_periodos(pids, ['1 Tempo', '2 Tempo']) == {
+        '1 Tempo': 'p1', '2 Tempo': 'p2'}          # aquecimento fora
+
+
+def test_filtrar_periodos_sem_filtro_mantem_todos():
+    from viz.export_wcs_multi import filtrar_periodos
+    pids = {'1 Tempo': 'p1', '2 Tempo': 'p2'}
+    assert filtrar_periodos(pids, None) == pids     # None = todos
+    assert filtrar_periodos(pids, None) is not pids  # copia (não muta)
+
+
+def test_filtrar_periodos_nenhum_coincide():
+    from viz.export_wcs_multi import filtrar_periodos
+    assert filtrar_periodos({'1 Tempo': 'p1'}, ['Treino']) == {}
+    assert filtrar_periodos({}, ['1 Tempo']) == {}
+
+
+def test_minutos_ignoram_periodo_excluido():
+    """Se o aquecimento não é carregado, ele não entra nos Minutos nem em
+    'Partida inteira'."""
+    ds, part, dur = _cenario_enzo()
+    # simula exclusão do 1º tempo: ele não chega em dados_sensor
+    ds_filtrado = {'2 Tempo': ds['2 Tempo']}
+    dur_f = duracoes_periodos(ds_filtrado, _HZ)
+    rows, _ = _linhas_wcs_atividade(
+        'Jogo', '25/07/2026', ds_filtrado, {}, [wx.VAR_DIST], [1],
+        ['Partida inteira'], _HZ, {},
+        participantes={'2 Tempo': part['2 Tempo']}, duracoes=dur_f)
+    _tit = [r for r in rows if r['Atleta'] == 'Titular'][0]
+    assert _tit['Periodos_jogados'] == 1                 # só o 2º tempo
+    assert abs(_tit['Minutos'] - dur_f['2 Tempo']) < 0.01
