@@ -22,30 +22,76 @@ _SS_RES = '_wcs_multi_resultado'      # DataFrame tidy calculado
 _SS_LOG = '_wcs_multi_log'            # avisos por atividade
 
 
-def _nome_atleta(_m):
-    """Nome do atleta num dict de métricas (tolerante à chave)."""
-    for _k in ('Atleta', 'atleta', 'Nome', 'nome', 'Athlete'):
-        if _m.get(_k):
-            return str(_m[_k])
-    return ''
-
-
-def _mapa_atleta_info(resultados_por_periodo):
-    """{atleta: (posição, equipe)} a partir dos resultados carregados."""
+def _mapa_posicoes(api):
+    """{position_id: nome} direto da API (/positions). Cacheado no _api_fetch."""
     _out = {}
-    for _lst in (resultados_por_periodo or {}).values():
-        for _m in (_lst or []):
-            _nm = _nome_atleta(_m)
-            if _nm and _nm not in _out:
-                _out[_nm] = (_m.get('Posição') or '', _m.get('Equipe') or '')
+    try:
+        for _p in (api.get_positions() or []):
+            if _p.get('id'):
+                _out[_p['id']] = _p.get('name') or ''
+    except Exception:
+        _applog.log_debug_exc()
     return _out
 
 
-def _linhas_wcs_atividade(act_nome, act_data, dados_sensor, resultados,
-                          variaveis, janelas, escopos, hz, cortes):
-    """Linhas tidy de WCS para UMA atividade já carregada."""
+def _mapa_equipes(api):
+    """{athlete_id: nome da equipe} direto da API (/teams + /teams/x/athletes).
+    Independente do filtro da barra lateral."""
+    _out = {}
+    try:
+        for _t in (api.get_teams() or []):
+            _tid, _tnm = _t.get('id'), _t.get('name') or ''
+            if not _tid:
+                continue
+            try:
+                for _a in (api.get_team_athletes(_tid) or []):
+                    if _a.get('id'):
+                        _out[_a['id']] = _tnm
+            except Exception:
+                _applog.log_debug_exc()
+    except Exception:
+        _applog.log_debug_exc()
+    return _out
+
+
+def _atletas_da_atividade(api, activity_id, pos_map, eq_map):
+    """Elenco da atividade DIRETO da API, com posição resolvida via /positions.
+
+    Retorna DataFrame no mesmo formato de `atletas_filtrados` (id, nome, posicao,
+    equipe) — é o que `carregar_dados` consome. Buscar por atividade (em vez de
+    usar a seleção da barra lateral) garante o elenco correto de CADA jogo e a
+    posição vinda da API, mesmo em clubes diferentes.
+    """
+    try:
+        _raw = api.get_activity_athletes(activity_id) or []
+    except Exception:
+        _applog.log_exc(f"elenco da atividade {activity_id}")
+        return pd.DataFrame()
     _rows = []
-    _info = _mapa_atleta_info(resultados)
+    for _a in (_raw if isinstance(_raw, list) else []):
+        _nm = f"{_a.get('first_name', '')} {_a.get('last_name', '')}".strip()
+        if not _nm:
+            _nm = _a.get('name') or ''
+        if not _nm:
+            continue
+        _aid = _a.get('id')
+        _rows.append({
+            'id': _aid,
+            'nome': _nm,
+            'posicao': pos_map.get(_a.get('position_id'), '') or '',
+            'equipe': eq_map.get(_aid, '') or '',
+        })
+    return pd.DataFrame(_rows)
+
+
+def _linhas_wcs_atividade(act_nome, act_data, dados_sensor, info_atl,
+                          variaveis, janelas, escopos, hz, cortes):
+    """Linhas tidy de WCS para UMA atividade já carregada.
+
+    info_atl: {nome: (posicao, equipe)} vindo da API (ver _atletas_da_atividade).
+    """
+    _rows = []
+    _info = info_atl or {}
     _atletas = sorted({_a for _p in dados_sensor.values() for _a in _p.keys()})
 
     for _atl in _atletas:
@@ -156,32 +202,62 @@ def render_export_wcs_multi(api):
         _cortes = {'hsr_kmh': _hsr, 'sprint_kmh': _spr,
                    'acc_ms2': _acc, 'dec_ms2': _dec}
         _rows, _log = [], []
-        _prog = st.progress(0.0, text="Carregando atividades...")
-        for _i, _lbl in enumerate(_sel, 1):
-            _aid, _nm, _dt = _meta[_lbl]
-            _prog.progress((_i - 1) / len(_sel),
-                           text=f"({_i}/{len(_sel)}) {_nm}")
-            try:
-                _praw = api.get_activity_periods(_aid) or []
-                _pids = {}
-                for _p in (_praw if isinstance(_praw, list) else []):
-                    if _p.get('id'):
-                        _pids[_p.get('name') or f"Período {len(_pids)+1}"] = _p['id']
-                if not _pids:
-                    _pids = {'Atividade Completa': None}
-                _carga = carregar_dados(api, _aid, _pids, list(_pids.keys()))
-                _res, _sensor = _carga[0], _carga[1]
-                if not _sensor:
-                    _log.append(f"⚠️ {_nm}: sem dados de sensor — ignorada.")
-                    continue
-                _novas = _linhas_wcs_atividade(
-                    _nm, _dt, _sensor, _res, _vars_sel, _jan_sel, _esc_sel,
-                    10.0, _cortes)
-                _rows += _novas
-                _log.append(f"✅ {_nm}: {len(_novas)} linha(s).")
-            except Exception as _e:
-                _applog.log_exc(f"export WCS multi — atividade {_nm}")
-                _log.append(f"❌ {_nm}: falhou ({type(_e).__name__}).")
+        _prog = st.progress(0.0, text="Buscando posições e equipes na API...")
+        _pos_map = _mapa_posicoes(api)
+        _eq_map = _mapa_equipes(api)
+
+        # `carregar_dados` lê o elenco destas duas chaves (definidas pela barra
+        # lateral). Trocamos por atividade — para carregar o elenco CORRETO de
+        # cada jogo, com posição da API — e restauramos ao final, para não
+        # perturbar o resto do app.
+        _bkp_sel = st.session_state.get('atletas_sel')
+        _bkp_filt = st.session_state.get('atletas_filtrados')
+        try:
+            for _i, _lbl in enumerate(_sel, 1):
+                _aid, _nm, _dt = _meta[_lbl]
+                _prog.progress((_i - 1) / len(_sel),
+                               text=f"({_i}/{len(_sel)}) {_nm}")
+                try:
+                    _df_atl = _atletas_da_atividade(api, _aid, _pos_map, _eq_map)
+                    if _df_atl.empty:
+                        _log.append(f"⚠️ {_nm}: API não retornou elenco — ignorada.")
+                        continue
+                    _info_atl = {_r['nome']: (_r['posicao'], _r['equipe'])
+                                 for _, _r in _df_atl.iterrows()}
+                    st.session_state['atletas_filtrados'] = _df_atl
+                    st.session_state['atletas_sel'] = _df_atl['nome'].tolist()
+
+                    _praw = api.get_activity_periods(_aid) or []
+                    _pids = {}
+                    for _p in (_praw if isinstance(_praw, list) else []):
+                        if _p.get('id'):
+                            _pids[_p.get('name') or f"Período {len(_pids)+1}"] = _p['id']
+                    if not _pids:
+                        _pids = {'Atividade Completa': None}
+                    _carga = carregar_dados(api, _aid, _pids, list(_pids.keys()))
+                    _sensor = _carga[1]
+                    if not _sensor:
+                        _log.append(f"⚠️ {_nm}: sem dados de sensor — ignorada.")
+                        continue
+                    _novas = _linhas_wcs_atividade(
+                        _nm, _dt, _sensor, _info_atl, _vars_sel, _jan_sel,
+                        _esc_sel, 10.0, _cortes)
+                    _rows += _novas
+                    _n_sem_pos = sum(1 for _v in _info_atl.values() if not _v[0])
+                    _log.append(
+                        f"✅ {_nm}: {len(_novas)} linha(s), "
+                        f"{len(_info_atl)} atleta(s) no elenco"
+                        + (f" — ⚠️ {_n_sem_pos} sem posição na API"
+                           if _n_sem_pos else ""))
+                except Exception as _e:
+                    _applog.log_exc(f"export WCS multi — atividade {_nm}")
+                    _log.append(f"❌ {_nm}: falhou ({type(_e).__name__}).")
+        finally:
+            # Restaura a seleção da barra lateral (sempre, mesmo em erro)
+            if _bkp_sel is not None:
+                st.session_state['atletas_sel'] = _bkp_sel
+            if _bkp_filt is not None:
+                st.session_state['atletas_filtrados'] = _bkp_filt
         _prog.progress(1.0, text="Concluído.")
         st.session_state[_SS_RES] = (pd.DataFrame(_rows) if _rows
                                      else pd.DataFrame())
