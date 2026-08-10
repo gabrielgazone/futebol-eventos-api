@@ -224,3 +224,56 @@ def test_pivot_var_x_janelas_df_vazio():
     import pandas as pd
     from viz.export_wcs_multi import pivotar_variaveis_x_janelas
     assert getattr(pivotar_variaveis_x_janelas(pd.DataFrame()), 'empty', False)
+
+
+# ── Contagem no feedback: nome de atividade repetido em datas diferentes ─────
+def _df_dois_palmeiras():
+    """Cenário real: duas partidas com o MESMO nome, datas diferentes."""
+    import pandas as pd
+    base = {'Equipe': 'Vasco', 'Posicao': 'Meia', 'Minutos': 90.0,
+            'Periodos_jogados': 2, 'Escopo': 'Partida inteira',
+            'Variavel': wx.VAR_DIST, 'Janela_min': 1, 'Valor': 200.0}
+    return pd.DataFrame([
+        dict(base, Atividade='Jogo x Cuiabá', Data='01/08/2026', Atleta='A'),
+        dict(base, Atividade='Jogo x Palmeiras', Data='02/08/2026', Atleta='A'),
+        dict(base, Atividade='Jogo x Palmeiras', Data='05/08/2026', Atleta='A'),
+        dict(base, Atividade='Jogo x Botafogo', Data='08/08/2026', Atleta='A'),
+    ])
+
+
+def test_contar_atividades_desambigua_por_data():
+    from viz.export_wcs_multi import contar_unicos
+    df = _df_dois_palmeiras()
+    assert contar_unicos(df, 'Atividade') == 4      # antes dizia 3
+    assert df['Atividade'].nunique() == 3           # o defeito antigo
+
+
+def test_contar_atletas_desambigua_por_equipe():
+    import pandas as pd
+    from viz.export_wcs_multi import contar_unicos
+    df = pd.DataFrame([
+        {'Atleta': 'João Silva', 'Equipe': 'Vasco'},
+        {'Atleta': 'João Silva', 'Equipe': 'Palmeiras'},   # homônimo
+        {'Atleta': 'Ana Souza', 'Equipe': 'Vasco'},
+    ])
+    assert contar_unicos(df, 'Atleta') == 3
+
+
+def test_contar_unicos_sem_coluna_ou_vazio():
+    import pandas as pd
+    from viz.export_wcs_multi import contar_unicos
+    assert contar_unicos(pd.DataFrame(), 'Atividade') == 0
+    assert contar_unicos(None, 'Atividade') == 0
+    # sem a coluna acompanhante, cai no nunique simples
+    assert contar_unicos(pd.DataFrame({'Atividade': ['A', 'A', 'B']}),
+                         'Atividade') == 2
+
+
+def test_chave_de_linha_inclui_data():
+    """Sem 'Data' na chave, o modo Acumular apagaria um dos jogos homonimos."""
+    from viz.export_wcs_multi import _CHAVE_LINHA
+    assert 'Data' in _CHAVE_LINHA
+    df = _df_dois_palmeiras()
+    assert len(df.drop_duplicates(subset=_CHAVE_LINHA)) == 4   # nada se perde
+    _sem_data = [_c for _c in _CHAVE_LINHA if _c != 'Data']
+    assert len(df.drop_duplicates(subset=_sem_data)) == 3      # perderia 1 jogo

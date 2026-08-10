@@ -25,7 +25,12 @@ _SS_PERIODOS = '_wcs_multi_periodos'  # {atividade: {periodo: id}} descobertos
 
 # Colunas que identificam uma linha unicamente (usadas para deduplicar ao
 # acumular lotes de atividades).
-_CHAVE_LINHA = ['Atividade', 'Atleta', 'Escopo', 'Variavel', 'Janela_min']
+# 'Data' É OBRIGATÓRIA na chave: duas partidas podem ter o mesmo NOME em datas
+# diferentes (ex.: "Jogo x Palmeiras" em 02/08 e 05/08). Sem a data, o
+# drop_duplicates do modo Acumular apagaria silenciosamente as linhas de um dos
+# dois jogos.
+_CHAVE_LINHA = ['Atividade', 'Data', 'Atleta', 'Escopo', 'Variavel',
+                'Janela_min']
 
 # Colunas que o resultado ATUAL precisa ter. Um resultado guardado na sessão de
 # antes de um deploy pode não ter as colunas novas (ex.: minutos) — nesse caso é
@@ -119,6 +124,21 @@ def _atletas_da_atividade(api, activity_id, pos_map, eq_map):
             'equipe': eq_map.get(_aid, '') or '',
         })
     return pd.DataFrame(_rows)
+
+
+def contar_unicos(df, coluna):
+    """Nº de valores distintos de `coluna` desambiguados pelo contexto.
+
+    Atividades: (nome, data) — duas partidas podem ter o mesmo nome em datas
+    diferentes. Atletas: (equipe, nome) — homônimos em clubes diferentes contam
+    separado. Contar só o nome subestimava o total.
+    """
+    if df is None or getattr(df, 'empty', True) or coluna not in df.columns:
+        return 0
+    _acomp = {'Atividade': 'Data', 'Atleta': 'Equipe'}.get(coluna)
+    if _acomp and _acomp in df.columns:
+        return int(df[[coluna, _acomp]].drop_duplicates().shape[0])
+    return int(df[coluna].nunique())
 
 
 def filtrar_periodos(pids, incluir):
@@ -810,8 +830,11 @@ def render_export_wcs_multi(api):
                + ("…" if len(_faltam) > 5 else "") if _faltam else "")
             + ". Clique em **🚀 Carregar atividades e calcular WCS** para atualizar.")
 
-    st.success(f"**{len(_df)}** linhas · {_df['Atleta'].nunique()} atleta(s) · "
-               f"{_df['Atividade'].nunique()} atividade(s) calculada(s)")
+    # Conta por (nome, data): duas partidas podem ter o MESMO nome em datas
+    # diferentes (ex.: "Jogo x Palmeiras" em 02/08 e 05/08) — contar só o nome
+    # dizia "3 atividades" quando eram 4.
+    st.success(f"**{len(_df)}** linhas · {contar_unicos(_df, 'Atleta')} atleta(s)"
+               f" · {contar_unicos(_df, 'Atividade')} atividade(s) calculada(s)")
 
     _fmt_out = st.radio(
         "Formato da tabela:",
