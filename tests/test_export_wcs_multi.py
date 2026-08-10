@@ -122,7 +122,7 @@ def test_minutos_openfield_encontra_parametro():
         def __init__(self):
             self.pedidos = []
 
-        def get_stats(self, payload):
+        def get_stats(self, payload, timeout=20):
             self.pedidos.append(payload['parameters'][0])
             if payload['parameters'][0] != 'total_duration':
                 return None                    # só este parâmetro existe
@@ -130,7 +130,8 @@ def test_minutos_openfield_encontra_parametro():
                     {'athlete': 'Ana Souza', 'parameters': {'total_duration': 2700}}]
 
     api = StatsApi()
-    mins, par = _minutos_openfield(api, 1785005112, 1785091512)
+    mins, par = _minutos_openfield(api, 'total_duration',
+                                   1785005112, 1785091512)
     assert par == 'total_duration'
     assert mins == {'João Silva': 90.0, 'Ana Souza': 45.0}
 
@@ -139,12 +140,14 @@ def test_minutos_openfield_sem_resposta():
     from viz.export_wcs_multi import _minutos_openfield
 
     class Vazio:
-        def get_stats(self, payload):
+        def get_stats(self, payload, timeout=20):
             return None
 
-    assert _minutos_openfield(Vazio(), 1785005112, None) == ({}, None)
-    # sem epoch → nem tenta
-    assert _minutos_openfield(Vazio(), None, None) == ({}, None)
+    assert _minutos_openfield(Vazio(), 'total_duration',
+                              1785005112, None) == ({}, None)
+    # sem epoch ou sem parâmetro → nem tenta
+    assert _minutos_openfield(Vazio(), 'total_duration', None, None) == ({}, None)
+    assert _minutos_openfield(Vazio(), False, 1785005112, None) == ({}, None)
 
 
 def test_linhas_incluem_minutos_of_e_sensor():
@@ -188,3 +191,84 @@ def test_pivotar_variaveis_df_vazio():
     from viz.export_wcs_multi import pivotar_variaveis
     vazio = pd.DataFrame()
     assert getattr(pivotar_variaveis(vazio), 'empty', False)
+
+
+# ── Descoberta do parâmetro de duração + disjuntor (bug do app travando) ─────
+def test_descobrir_param_duracao_via_parameters():
+    """Descobre o nome no GET /parameters (1 chamada) em vez de 6 POSTs cegos."""
+    import streamlit as st
+    from viz.export_wcs_multi import _descobrir_param_duracao, _SS_DURPAR
+
+    class ParApi:
+        def __init__(self):
+            self.n = 0
+
+        def get_parameters(self):
+            self.n += 1
+            return [{'name': 'total_distance'}, {'name': 'total_duration'},
+                    {'name': 'velocity_band1_duration'}]
+
+    st.session_state.pop(_SS_DURPAR, None)
+    api = ParApi()
+    assert _descobrir_param_duracao(api) == 'total_duration'
+    # 2ª chamada usa o cache da sessão (não repete a busca)
+    assert _descobrir_param_duracao(api) == 'total_duration'
+    assert api.n == 1
+    st.session_state.pop(_SS_DURPAR, None)
+
+
+def test_descobrir_param_duracao_conta_sem_duracao():
+    import streamlit as st
+    from viz.export_wcs_multi import _descobrir_param_duracao, _SS_DURPAR
+
+    class SemDur:
+        def get_parameters(self):
+            return [{'name': 'total_distance'}, {'name': 'player_load'}]
+
+    st.session_state.pop(_SS_DURPAR, None)
+    assert _descobrir_param_duracao(SemDur()) is False
+    st.session_state.pop(_SS_DURPAR, None)
+
+
+def test_disjuntor_para_de_tentar_apos_timeout():
+    """Após um timeout, não insiste nas atividades seguintes (era o que fazia o
+    app 'carregar para sempre': 20 s x 6 candidatos x N atividades)."""
+    import streamlit as st
+    from viz.export_wcs_multi import _minutos_openfield, _SS_DUROFF
+
+    class Timeout:
+        def __init__(self):
+            self.n = 0
+
+        def get_stats(self, payload, timeout=20):
+            self.n += 1
+            raise TimeoutError('read timed out')
+
+    st.session_state.pop(_SS_DUROFF, None)
+    api = Timeout()
+    assert _minutos_openfield(api, 'total_duration', 1785005112, None) == ({}, None)
+    assert st.session_state.get(_SS_DUROFF) is True
+    # chamadas seguintes NÃO batem mais na API
+    assert _minutos_openfield(api, 'total_duration', 1785091512, None) == ({}, None)
+    assert api.n == 1
+    st.session_state.pop(_SS_DUROFF, None)
+
+
+def test_timeout_curto_no_stats():
+    """A sonda usa timeout curto (consulta opcional não trava o export)."""
+    import streamlit as st
+    from viz.export_wcs_multi import (_minutos_openfield, _TIMEOUT_STATS,
+                                      _SS_DUROFF)
+    assert _TIMEOUT_STATS < 20
+
+    _visto = {}
+
+    class Espia:
+        def get_stats(self, payload, timeout=20):
+            _visto['timeout'] = timeout
+            return []
+
+    st.session_state.pop(_SS_DUROFF, None)
+    _minutos_openfield(Espia(), 'total_duration', 1785005112, None)
+    assert _visto['timeout'] == _TIMEOUT_STATS
+    st.session_state.pop(_SS_DUROFF, None)

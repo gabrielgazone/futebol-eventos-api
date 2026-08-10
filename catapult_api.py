@@ -204,13 +204,14 @@ class CatapultAPI:
         """Limiares individuais de velocidade/acc do atleta (GET /athletes/{id}/thresholds)."""
         return _api_fetch(self.base_url, self._token, f"athletes/{athlete_id}/thresholds")
 
-    def get_stats(self, payload):
+    def get_stats(self, payload, timeout=20):
         """Estatísticas agregadas por grupo (POST /stats), com retry/backoff.
-        Sem cache — dados dinâmicos."""
+        Sem cache — dados dinâmicos. `timeout` menor evita travar a UI quando a
+        consulta é opcional (ex.: sonda de parâmetro no export)."""
         try:
             r = _http('post', f"{self.base_url}/stats",
                       headers={**self.headers, "Content-Type": "application/json"},
-                      json=payload, timeout=20)
+                      json=payload, timeout=timeout)
             return r.json() if (r is not None and r.status_code == 200) else None
         except Exception:
             _applog.log_exc("Falha em POST /stats")

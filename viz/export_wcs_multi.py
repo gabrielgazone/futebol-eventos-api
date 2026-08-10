@@ -79,45 +79,89 @@ def _para_minutos(valor):
     return round(_v / 60.0, 1) if _v > 300 else round(_v, 1)
 
 
-def _minutos_openfield(api, epoch_ini, epoch_fim):
-    """{atleta: minutos} OFICIAIS do OpenField via POST /stats para a janela da
-    atividade. Retorna também o nome do parâmetro que respondeu (para o log).
+_SS_DURPAR = '_wcs_dur_param'      # nome do parâmetro de duração (ou False)
+_SS_DUROFF = '_wcs_dur_desligado'  # disjuntor: /stats falhou, não insistir
+_TIMEOUT_STATS = 12                # s — consulta OPCIONAL, não trava o export
 
-    O nome do parâmetro de duração varia por conta, então tentamos os candidatos
-    de `_DUR_PARAMS`. Se nenhum responder, devolve ({}, None) e o export cai na
-    duração derivada do sensor (coluna separada), sem inventar valor.
+
+def _descobrir_param_duracao(api):
+    """Nome do parâmetro de duração NA CONTA, via GET /parameters (cacheado).
+
+    Antes tentávamos 6 nomes candidatos com POST /stats por atividade — cada
+    tentativa podia estourar 20 s de timeout (2 min por atividade, >1 h em 30
+    atividades: o app "carregando para sempre"). Agora descobrimos o nome UMA
+    vez, num GET cacheado, e guardamos na sessão (False = a conta não expõe).
     """
-    if not epoch_ini:
+    if _SS_DURPAR in st.session_state:
+        return st.session_state[_SS_DURPAR]
+    _achado = False
+    try:
+        _raw = api.get_parameters() or []
+        _lst = _raw if isinstance(_raw, list) else (_raw or {}).get('data', [])
+        _nomes = []
+        for _p in (_lst or []):
+            if isinstance(_p, dict):
+                _nomes.append(str(_p.get('name') or _p.get('slug')
+                                  or _p.get('parameter') or ''))
+            elif isinstance(_p, str):
+                _nomes.append(_p)
+        for _c in _DUR_PARAMS:                    # candidatos conhecidos primeiro
+            if _c in _nomes:
+                _achado = _c
+                break
+        if not _achado:                           # senão, qualquer duração plausível
+            for _n in _nomes:
+                _l = _n.lower()
+                if (('duration' in _l or 'time_on' in _l)
+                        and 'zone' not in _l and 'band' not in _l):
+                    _achado = _n
+                    break
+    except Exception:
+        _applog.log_debug_exc()
+    st.session_state[_SS_DURPAR] = _achado
+    return _achado
+
+
+def _minutos_openfield(api, param, epoch_ini, epoch_fim):
+    """{atleta: minutos} OFICIAIS do OpenField via POST /stats na janela da
+    atividade, usando o `param` já descoberto. Retorna ({}, None) se indisponível
+    — o export cai na duração do sensor (coluna separada), sem inventar valor.
+
+    Tem DISJUNTOR: se o /stats falhar (ex.: timeout), marca na sessão e não
+    tenta mais nas atividades seguintes do lote.
+    """
+    if not epoch_ini or not param or st.session_state.get(_SS_DUROFF):
         return {}, None
-    _payload_base = {
-        "group_by": ["athlete"],
-        "source": "cached_stats",
-        "start_time": int(epoch_ini),
-        "end_time": int(epoch_fim or (epoch_ini + 86400)),
-    }
-    for _par in _DUR_PARAMS:
-        try:
-            _r = api.get_stats(dict(_payload_base, parameters=[_par]))
-        except Exception:
-            _applog.log_debug_exc()
+    try:
+        _r = api.get_stats({
+            "group_by": ["athlete"],
+            "source": "cached_stats",
+            "start_time": int(epoch_ini),
+            "end_time": int(epoch_fim or (epoch_ini + 86400)),
+            "parameters": [param],
+        }, timeout=_TIMEOUT_STATS)
+    except Exception:
+        _applog.log_debug_exc()
+        st.session_state[_SS_DUROFF] = True
+        return {}, None
+    if _r is None:                                 # falhou/timeout dentro do client
+        st.session_state[_SS_DUROFF] = True
+        return {}, None
+    _rows = _r if isinstance(_r, list) else (_r or {}).get('data', [])
+    _out = {}
+    for _d in (_rows or []):
+        if not isinstance(_d, dict):
             continue
-        _rows = _r if isinstance(_r, list) else (_r or {}).get('data', [])
-        _out = {}
-        for _d in (_rows or []):
-            if not isinstance(_d, dict):
-                continue
-            _nm = str(_d.get('athlete') or _d.get('athlete_name')
-                      or _d.get('name') or '')
-            _p = _d.get('parameters') or {}
-            _val = (_p.get(_par) if isinstance(_p, dict) else None)
-            if _val is None:
-                _val = _d.get(_par)
-            _mm = _para_minutos(_val)
-            if _nm and _mm:
-                _out[_nm] = _mm
-        if _out:
-            return _out, _par
-    return {}, None
+        _nm = str(_d.get('athlete') or _d.get('athlete_name')
+                  or _d.get('name') or '')
+        _p = _d.get('parameters') or {}
+        _val = (_p.get(param) if isinstance(_p, dict) else None)
+        if _val is None:
+            _val = _d.get(param)
+        _mm = _para_minutos(_val)
+        if _nm and _mm:
+            _out[_nm] = _mm
+    return _out, (param if _out else None)
 
 
 def _mapa_posicoes(api):
@@ -338,6 +382,14 @@ def render_export_wcs_multi(api):
     st.caption(f"**{len(_sel)}** atividade(s) selecionada(s) · {len(_vars_sel)} "
                f"variável(is) · janelas {_jan_sel} · escopo(s) {len(_esc_sel)}")
 
+    _buscar_min = st.checkbox(
+        "⏱️ Buscar minutos oficiais do OpenField (/stats)", value=True,
+        key='wcs_multi_min',
+        help="Consulta o parâmetro de duração da conta. Se a conta não expuser "
+             "ou o /stats demorar, o export NÃO trava: segue com a coluna "
+             "Minutos_sensor (derivada do sinal 10 Hz) e avisa no log. "
+             "Desmarque para pular a consulta e ganhar tempo em lotes grandes.")
+
     _acumular = st.checkbox(
         "➕ Acumular com o resultado já calculado", value=False,
         key='wcs_multi_acum',
@@ -358,6 +410,10 @@ def render_export_wcs_multi(api):
         _prog = st.progress(0.0, text="Buscando posições e equipes na API...")
         _pos_map = _mapa_posicoes(api)
         _eq_map = _mapa_equipes(api)
+        # Minutos oficiais: descobre o parâmetro UMA vez (GET /parameters) e
+        # rearma o disjuntor para este lote.
+        st.session_state.pop(_SS_DUROFF, None)
+        _dur_par = _descobrir_param_duracao(api) if _buscar_min else False
 
         # `carregar_dados` lê o elenco destas duas chaves (definidas pela barra
         # lateral). Trocamos por atividade — para carregar o elenco CORRETO de
@@ -399,7 +455,7 @@ def render_export_wcs_multi(api):
                     except (TypeError, ValueError):
                         _ep = None
                     _min_map, _par_dur = _minutos_openfield(
-                        api, _ep, (_ep + 86400) if _ep else None)
+                        api, _dur_par, _ep, (_ep + 86400) if _ep else None)
                     _novas = _linhas_wcs_atividade(
                         _nm, _dt, _sensor, _info_atl, _vars_sel, _jan_sel,
                         _esc_sel, 10.0, _cortes, min_map=_min_map)
@@ -412,8 +468,10 @@ def render_export_wcs_multi(api):
                            if _n_sem_pos else "")
                         + (f" · Minutos via /stats ('{_par_dur}'): "
                            f"{len(_min_map)} atleta(s)" if _par_dur else
-                           " · ⚠️ /stats não retornou duração — use "
-                           "Minutos_sensor"))
+                           (" · ⚠️ /stats indisponível (timeout) — usando "
+                            "Minutos_sensor"
+                            if st.session_state.get(_SS_DUROFF) else
+                            " · Minutos_sensor (conta não expõe duração)")))
                 except Exception as _e:
                     _applog.log_exc(f"export WCS multi — atividade {_nm}")
                     _log.append(f"❌ {_nm}: falhou ({type(_e).__name__}).")
