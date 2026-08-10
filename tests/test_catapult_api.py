@@ -73,3 +73,69 @@ def test_post_com_json(monkeypatch):
     monkeypatch.setattr(requests, 'post', fake_post)
     r = capi._http('post', 'http://x/stats', json={'p': [1]}, sleep=_NOSLEEP)
     assert r.status_code == 200 and got.get('json') == {'p': [1]}
+
+
+# ── Timeout não deve ser retentado 3x (travava a barra lateral) ──────────────
+def test_timeout_retenta_no_maximo_uma_vez(monkeypatch):
+    """Um GET que estoura timeout custava 60s x4 = ~4min por chamada. Agora:
+    1 nova tentativa no máximo."""
+    import requests as _rq
+    import catapult_api as _ca
+
+    _chamadas = {'n': 0}
+
+    def _boom(url, **kw):
+        _chamadas['n'] += 1
+        raise _rq.exceptions.ReadTimeout('read timed out')
+
+    monkeypatch.setattr(_ca.requests, 'get', _boom)
+    _esperas = []
+    try:
+        _ca._http('get', 'http://x', max_retries=3,
+                  sleep=lambda s: _esperas.append(s))
+        assert False, "deveria relancar o timeout"
+    except _rq.exceptions.ReadTimeout:
+        pass
+    assert _chamadas['n'] == 2          # 1 tentativa + 1 retry (antes: 4)
+    assert len(_esperas) == 1
+
+
+def test_erro_de_rede_nao_timeout_mantem_retry_completo(monkeypatch):
+    """ConnectionError (conexão recusada/DNS) é barato de repetir → 3 retries."""
+    import requests as _rq
+    import catapult_api as _ca
+
+    _chamadas = {'n': 0}
+
+    def _boom(url, **kw):
+        _chamadas['n'] += 1
+        raise _rq.exceptions.ConnectionError('recusada')
+
+    monkeypatch.setattr(_ca.requests, 'get', _boom)
+    try:
+        _ca._http('get', 'http://x', max_retries=3, sleep=lambda s: None)
+        assert False, "deveria relancar"
+    except _rq.exceptions.ConnectionError:
+        pass
+    assert _chamadas['n'] == 4          # 1 + 3 retries
+
+
+def test_get_cacheado_usa_timeout_curto(monkeypatch):
+    """O GET da API não deve mais usar 60s (era o multiplicador do travamento)."""
+    import catapult_api as _ca
+    _visto = {}
+
+    def _fake_http(method, url, **kw):
+        _visto['timeout'] = kw.get('timeout')
+
+        class _R:
+            status_code = 200
+
+            def json(self):
+                return {'ok': True}
+        return _R()
+
+    monkeypatch.setattr(_ca, '_http', _fake_http)
+    _ca._api_fetch.clear()
+    _ca._api_fetch('http://b', 'tok', 'teams')
+    assert _visto['timeout'] <= 30

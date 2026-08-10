@@ -44,10 +44,17 @@ def _http(method: str, url: str, *, headers=None, params=None, json=None,
                 sleep(min(wait, 10)); delay *= 2
                 continue
             return r
-        except requests.RequestException:
-            if attempt < max_retries:
-                _applog.log_warn(f"Rede falhou — retry {attempt+1}/{max_retries} "
-                                 f"em {delay:.1f}s")
+        except requests.RequestException as _exc:
+            # TIMEOUT é tratado diferente de falha de rede: se o servidor não
+            # respondeu em `timeout`s, repetir 3x com o MESMO timeout multiplica
+            # a espera (60s x4 = 4min por chamada) e travava a barra lateral.
+            # Timeout → no máximo 1 nova tentativa; outros erros de rede
+            # (conexão recusada, DNS) seguem com o retry completo.
+            _lim = 1 if isinstance(_exc, requests.Timeout) else max_retries
+            if attempt < _lim:
+                _applog.log_warn(
+                    f"{'Timeout' if _lim == 1 else 'Rede falhou'} — retry "
+                    f"{attempt+1}/{_lim} em {delay:.1f}s")
                 sleep(delay); delay *= 2
                 continue
             raise
@@ -64,7 +71,7 @@ def _api_fetch(base_url: str, token: str, path: str,
     headers = {'Authorization': f'Bearer {token}'}
     try:
         r = _http('get', f"{base_url}/{path}", headers=headers,
-                  params=dict(params), timeout=60)
+                  params=dict(params), timeout=25)
         if r is not None and r.status_code == 200:
             return r.json()
         # Salva o status de erro para exibir ao usuário + loga (P3).

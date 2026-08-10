@@ -791,11 +791,13 @@ Escolha um ou mais atletas para análise simultânea.
                         for a in atletas
                     }
                     try:
+                        # Vmáx automático é um EXTRA: timeout curto para não
+                        # travar o carregamento se o /stats estiver lento.
                         _stats_auto = api.get_stats({
                             "group_by": ["athlete"],
                             "parameters": ["max_velocity"],
                             "source": "cached_stats",
-                        })
+                        }, timeout=8)
                         if _stats_auto:
                             _sa_list = (_stats_auto if isinstance(_stats_auto, list)
                                         else _stats_auto.get('data', []))
