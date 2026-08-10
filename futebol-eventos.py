@@ -1739,7 +1739,8 @@ Escolha um ou mais atletas para análise simultânea.
             with _main_tabs[4]:
                 render_export_artigo(resultados_por_periodo,
                                      dados_sensor_por_atleta_por_periodo,
-                                     dados_efforts_acc_por_periodo)
+                                     dados_efforts_acc_por_periodo,
+                                     api)
             with _main_tabs[5]:
                 render_monitoramento()
 

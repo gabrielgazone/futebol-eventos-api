@@ -19,6 +19,7 @@ from bands import (_bandas_vel_ativas, _bandas_acc_ativas, _fmt_num_banda,
 from analysis import acc_series_from_vel, get_min_dur_s
 from diagnostics import _diag_log
 from config import _CHAVE_COMBINADO
+from viz.export_wcs_multi import render_export_wcs_multi
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -89,7 +90,7 @@ def _contar_efforts_acc_por_caixa(acc_efforts) -> dict:
 
 
 def render_export_artigo(resultados_por_periodo, dados_sensor_por_atleta_por_periodo,
-                         dados_efforts_acc_por_periodo):
+                         dados_efforts_acc_por_periodo, api=None):
     """Aba 📤 Exportação para Artigo — tabela no formato do export Catapult."""
     st.markdown("### 📤 Exportação para Artigo")
     st.caption("Monta uma tabela no **mesmo formato do export OpenField/Catapult** "
@@ -349,3 +350,6 @@ def render_export_artigo(resultados_por_periodo, dados_sensor_por_atleta_por_per
                             _merged.to_csv(index=False).encode('utf-8'),
                             "validacao_app_vs_oficial.csv", mime='text/csv',
                             key="dl_val_csv")
+
+    # ── Export WCS multi-atividade (artigo) ──────────────────────────────
+    render_export_wcs_multi(api)
