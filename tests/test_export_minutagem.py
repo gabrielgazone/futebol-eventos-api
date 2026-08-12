@@ -183,21 +183,21 @@ def _deep_resp():
 
 def test_deep_duracoes_batem_com_openfield():
     from viz.export_wcs_multi import ler_atividade_profunda
-    dur, part, info = ler_atividade_profunda(_deep_resp())
+    dur, part, info, _pids = ler_atividade_profunda(_deep_resp())
     assert abs(dur['1 Tempo'] - 51.40233) < 0.01     # como no export do site
     assert abs(dur['2 Tempo'] - 55.7) < 0.01
 
 
 def test_deep_participacao_exclui_enzo_do_primeiro_tempo():
     from viz.export_wcs_multi import ler_atividade_profunda
-    _, part, _ = ler_atividade_profunda(_deep_resp())
+    _, part, _, _ = ler_atividade_profunda(_deep_resp())
     assert part['1 Tempo'] == {'Matheus Goiano'}      # Enzo ausente
     assert part['2 Tempo'] == {'Enzo Zaidan', 'Matheus Goiano'}
 
 
 def test_deep_traz_posicao_e_equipe():
     from viz.export_wcs_multi import ler_atividade_profunda
-    _, _, info = ler_atividade_profunda(_deep_resp())
+    _, _, info, _ = ler_atividade_profunda(_deep_resp())
     assert info['Enzo Zaidan'] == ('Volante', 'Resende FC')
     assert info['Matheus Goiano'][0] == 'Atacante'
 
@@ -205,7 +205,7 @@ def test_deep_traz_posicao_e_equipe():
 def test_deep_minutos_totais_por_atleta():
     """Enzo = só 2o tempo (55,7); Matheus = os dois (107,10233)."""
     from viz.export_wcs_multi import ler_atividade_profunda
-    dur, part, _ = ler_atividade_profunda(_deep_resp())
+    dur, part, _, _ = ler_atividade_profunda(_deep_resp())
     _min_enzo = sum(d for p, d in dur.items() if 'Enzo Zaidan' in (part[p] or ()))
     _min_mat = sum(d for p, d in dur.items()
                    if 'Matheus Goiano' in (part[p] or ()))
@@ -215,9 +215,9 @@ def test_deep_minutos_totais_por_atleta():
 
 def test_deep_resposta_vazia_ou_invalida():
     from viz.export_wcs_multi import ler_atividade_profunda
-    assert ler_atividade_profunda([]) == ({}, {}, {})
-    assert ler_atividade_profunda(None) == ({}, {}, {})
-    assert ler_atividade_profunda({'periods': []}) == ({}, {}, {})
+    assert ler_atividade_profunda([]) == ({}, {}, {}, {})
+    assert ler_atividade_profunda(None) == ({}, {}, {}, {})
+    assert ler_atividade_profunda({'periods': []}) == ({}, {}, {}, {})
 
 
 def test_deep_periodo_com_period_athletes_e_athlete_id():
@@ -228,7 +228,7 @@ def test_deep_periodo_com_period_athletes_e_athlete_id():
         'periods': [{'name': '2 Tempo', 'start_time': 1000, 'end_time': 4342,
                      'period_athletes': [{'athlete_id': 'a1'}]}],
     }
-    dur, part, _ = ler_atividade_profunda(resp)
+    dur, part, _, _ = ler_atividade_profunda(resp)
     assert abs(dur['2 Tempo'] - 55.7) < 0.01
     assert part['2 Tempo'] == {'Enzo Zaidan'}
 
@@ -349,3 +349,92 @@ def test_atleta_dos_dois_tempos_recebe_os_dois():
     _pi = [r for r in rows if r['Escopo'] == 'Partida inteira'][0]
     assert _pi['Periodos_jogados'] == 2
     assert abs(_pi['Minutos'] - 95.0) < 0.01           # 50 + 45
+
+
+# ── Períodos HOMÔNIMOS (hierarquia da Catapult) — o bug do 2º tempo sumindo ──
+def test_rotular_periodos_nao_perde_homonimos():
+    """CAUSA RAIZ: indexar por nome fazia o 2º "2 TEMPO" (sub-período do
+    substituto) sobrescrever o 1º — e os atletas dele sumiam do export."""
+    from viz.export_wcs_multi import rotular_periodos
+    lista = [
+        {'id': 'p1', 'name': '1 TEMPO'},
+        {'id': 'p2', 'name': '2 TEMPO'},
+        {'id': 'p3', 'name': '2 TEMPO'},      # sub-período do substituto
+    ]
+    r = rotular_periodos(lista)
+    assert len(r) == 3                        # antes virava 2 (p2 perdido)
+    assert r['1 TEMPO'] == 'p1'
+    assert r['2 TEMPO'] == 'p2'
+    assert r['2 TEMPO (2)'] == 'p3'
+    assert set(r.values()) == {'p1', 'p2', 'p3'}   # nenhum id se perde
+
+
+def test_rotular_periodos_ignora_sem_id():
+    from viz.export_wcs_multi import rotular_periodos
+    assert rotular_periodos([{'name': 'X'}, {'id': 'p1', 'name': 'Y'}]) == {
+        'Y': 'p1'}
+    assert rotular_periodos(None) == {}
+
+
+def test_nome_base_remove_sufixo():
+    from viz.export_wcs_multi import nome_base
+    assert nome_base('2 TEMPO (2)') == '2 TEMPO'
+    assert nome_base('2 TEMPO') == '2 TEMPO'
+    assert nome_base('JOGO (FINAL)') == 'JOGO (FINAL)'   # não é número → mantém
+
+
+def test_filtro_por_nome_base_inclui_subperiodo():
+    """Marcar "2 TEMPO" no seletor tem de incluir também "2 TEMPO (2)" —
+    senão o substituto continuaria sumindo."""
+    from viz.export_wcs_multi import filtrar_periodos
+    pids = {'1 TEMPO': 'p1', '2 TEMPO': 'p2', '2 TEMPO (2)': 'p3'}
+    r = filtrar_periodos(pids, ['1 TEMPO', '2 TEMPO'])
+    assert r == pids                          # os 3 entram
+    r2 = filtrar_periodos(pids, ['2 TEMPO'])
+    assert r2 == {'2 TEMPO': 'p2', '2 TEMPO (2)': 'p3'}
+
+
+def test_deep_activity_com_periodos_homonimos():
+    """A atividade profunda também precisa manter os dois "2 TEMPO", com
+    durações e participantes próprios."""
+    from viz.export_wcs_multi import ler_atividade_profunda
+    resp = {
+        'athletes': [
+            {'id': 'a1', 'first_name': 'Titular', 'last_name': 'Um'},
+            {'id': 'a2', 'first_name': 'Substituto', 'last_name': 'Dois'},
+        ],
+        'periods': [
+            {'id': 'p1', 'name': '1 TEMPO', 'start_time': 1000,
+             'end_time': 1000 + 3000, 'athletes': [{'id': 'a1'}]},
+            {'id': 'p2', 'name': '2 TEMPO', 'start_time': 5000,
+             'end_time': 5000 + 3000, 'athletes': [{'id': 'a1'}]},
+            {'id': 'p3', 'name': '2 TEMPO', 'start_time': 6200,
+             'end_time': 8000, 'athletes': [{'id': 'a2'}]},   # substituto
+        ],
+    }
+    dur, part, _info, pids = ler_atividade_profunda(resp)
+    assert set(pids) == {'1 TEMPO', '2 TEMPO', '2 TEMPO (2)'}
+    assert pids['2 TEMPO (2)'] == 'p3'
+    assert part['2 TEMPO'] == {'Titular Um'}
+    assert part['2 TEMPO (2)'] == {'Substituto Dois'}         # não se perdeu
+    assert abs(dur['2 TEMPO'] - 50.0) < 0.01
+    assert abs(dur['2 TEMPO (2)'] - 30.0) < 0.01
+
+
+def test_titular_soma_os_dois_tempos_com_homonimos_presentes():
+    """Com os homônimos preservados, quem jogou os 2 tempos recebe os 2."""
+    from viz.export_wcs_multi import ler_atividade_profunda
+    resp = {
+        'athletes': [{'id': 'a1', 'first_name': 'Titular', 'last_name': 'Um'}],
+        'periods': [
+            {'id': 'p1', 'name': '1 TEMPO', 'start_time': 1000,
+             'end_time': 4000, 'athletes': [{'id': 'a1'}]},
+            {'id': 'p2', 'name': '2 TEMPO', 'start_time': 5000,
+             'end_time': 8000, 'athletes': [{'id': 'a1'}]},
+            {'id': 'p3', 'name': '2 TEMPO', 'start_time': 6200,
+             'end_time': 8000, 'athletes': []},
+        ],
+    }
+    dur, part, _i, _p = ler_atividade_profunda(resp)
+    _min = sum(d for p, d in dur.items() if 'Titular Um' in (part.get(p) or ()))
+    assert abs(_min - 100.0) < 0.02            # 50 + 50, não 50

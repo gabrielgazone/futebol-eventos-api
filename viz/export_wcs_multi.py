@@ -153,7 +153,39 @@ def filtrar_periodos(pids, incluir):
     if incluir is None:
         return dict(pids or {})
     _inc = set(incluir)
-    return {_k: _v for _k, _v in (pids or {}).items() if _k in _inc}
+    # Compara pelo nome BASE: marcar "2 TEMPO" inclui também "2 TEMPO (2)"
+    # (o sub-período do substituto), senão ele seria descartado em silêncio.
+    return {_k: _v for _k, _v in (pids or {}).items()
+            if _k in _inc or nome_base(_k) in _inc}
+
+
+def rotular_periodos(lista):
+    """{rótulo_único: id} a partir da lista de períodos da API.
+
+    Períodos da Catapult são hierárquicos e PODEM REPETIR o mesmo `name`
+    (ex.: "2 TEMPO" do tempo inteiro e "2 TEMPO" do sub-período do substituto).
+    Indexar por nome fazia um sobrescrever o outro — e os atletas do período
+    perdido sumiam do export. Aqui a 2ª ocorrência vira "2 TEMPO (2)".
+    """
+    _out, _vistos = {}, {}
+    for _i, _p in enumerate(lista if isinstance(lista, list) else []):
+        if not isinstance(_p, dict) or not _p.get('id'):
+            continue
+        _base = str(_p.get('name') or f"Período {_i + 1}")
+        _vistos[_base] = _vistos.get(_base, 0) + 1
+        _rot = _base if _vistos[_base] == 1 else f"{_base} ({_vistos[_base]})"
+        _out[_rot] = _p['id']
+    return _out
+
+
+def nome_base(rotulo):
+    """'2 TEMPO (2)' -> '2 TEMPO' (para o filtro por nome do usuário)."""
+    _r = str(rotulo or '')
+    if _r.endswith(')') and ' (' in _r:
+        _cauda = _r.rsplit(' (', 1)[1][:-1]
+        if _cauda.isdigit():
+            return _r.rsplit(' (', 1)[0]
+    return _r
 
 
 def _nome_do_atleta(_a):
@@ -170,16 +202,24 @@ def ler_atividade_profunda(resp):
     atletas do período — exatamente o que o OpenField usa para o export de cada
     tempo. Duração = end − start; participação = presença na lista do período.
 
-    Retorna (duracoes, participantes, info_atl):
-      duracoes     {nome_do_periodo: minutos}
-      participantes{nome_do_periodo: set(nomes) | None}
+    ATENÇÃO (docs Catapult): períodos são HIERÁRQUICOS (lft/rgt/period_depth_id
+    = nested set) e o mesmo `name` pode se repetir em profundidades diferentes —
+    ex.: "2 TEMPO" (todos que jogam o tempo inteiro) e outro "2 TEMPO" que é o
+    sub-período do substituto. Por isso os rótulos aqui são ÚNICOS (o 2º
+    "2 TEMPO" vira "2 TEMPO (2)"): indexar por nome fazia um período sobrescrever
+    o outro e os atletas dele sumiam do export.
+
+    Retorna (duracoes, participantes, info_atl, pids):
+      duracoes     {rotulo_unico: minutos}
+      participantes{rotulo_unico: set(nomes) | None}
       info_atl     {nome: (posicao, equipe)}
+      pids         {rotulo_unico: period_id}
     """
     _obj = resp
     if isinstance(_obj, list):
         _obj = _obj[0] if _obj else {}
     if not isinstance(_obj, dict):
-        return {}, {}, {}
+        return {}, {}, {}, {}
     _obj = _obj.get('data', _obj) if isinstance(_obj.get('data'), dict) else _obj
 
     # Posição/equipe dos atletas da atividade
@@ -207,11 +247,18 @@ def ler_atividade_profunda(resp):
         if isinstance(_a, dict) and _a.get('id'):
             _id2nome[str(_a['id'])] = _nome_do_atleta(_a)
 
-    _duracoes, _partic = {}, {}
+    _duracoes, _partic, _pids = {}, {}, {}
+    _vistos = {}
     for _p in (_obj.get('periods') or []):
         if not isinstance(_p, dict):
             continue
-        _pnm = str(_p.get('name') or f"Período {len(_duracoes) + 1}")
+        _base = str(_p.get('name') or f"Período {len(_duracoes) + 1}")
+        # Rótulo ÚNICO: o mesmo nome pode aparecer em profundidades diferentes
+        # (sub-período do substituto). Sem isto, um sobrescrevia o outro.
+        _vistos[_base] = _vistos.get(_base, 0) + 1
+        _pnm = _base if _vistos[_base] == 1 else f"{_base} ({_vistos[_base]})"
+        if _p.get('id'):
+            _pids[_pnm] = _p['id']
         try:
             _ini = (float(_p.get('start_time') or 0)
                     + float(_p.get('start_centiseconds') or 0) / 100.0)
@@ -234,7 +281,7 @@ def ler_atividade_profunda(resp):
                 if _nm:
                     _nomes.add(_nm)
         _partic[_pnm] = _nomes or None
-    return _duracoes, _partic, _info
+    return _duracoes, _partic, _info, _pids
 
 
 def duracoes_periodos(dados_sensor, hz=10.0):
@@ -591,11 +638,7 @@ def render_export_wcs_multi(api):
                          text=f"({_i_p}/{len(_sel)}) {_meta[_lbl_p][1]}")
             try:
                 _praw_p = api.get_activity_periods(_aid_p) or []
-                _mapa_p[_lbl_p] = {
-                    (_p.get('name') or f"Período {_j + 1}"): _p.get('id')
-                    for _j, _p in enumerate(
-                        _praw_p if isinstance(_praw_p, list) else [])
-                    if isinstance(_p, dict) and _p.get('id')}
+                _mapa_p[_lbl_p] = rotular_periodos(_praw_p)
             except Exception:
                 _applog.log_debug_exc()
                 _mapa_p[_lbl_p] = {}
@@ -605,7 +648,8 @@ def render_export_wcs_multi(api):
     _mapa_per = st.session_state.get(_SS_PERIODOS) or {}
     _per_sel = None
     if _mapa_per:
-        _nomes_per = sorted({_n for _m in _mapa_per.values() for _n in _m})
+        _nomes_per = sorted({nome_base(_n) for _m in _mapa_per.values()
+                             for _n in _m})
         if _nomes_per:
             _per_sel = st.multiselect(
                 "Períodos a INCLUIR na exportação:", _nomes_per,
@@ -728,11 +772,29 @@ def render_export_wcs_multi(api):
                     st.session_state['atletas_filtrados'] = _df_atl
                     st.session_state['atletas_sel'] = _df_atl['nome'].tolist()
 
-                    _praw = api.get_activity_periods(_aid) or []
-                    _pids = {}
-                    for _p in (_praw if isinstance(_praw, list) else []):
-                        if _p.get('id'):
-                            _pids[_p.get('name') or f"Período {len(_pids)+1}"] = _p['id']
+                    # Atividade profunda PRIMEIRO: dela saem os períodos (com
+                    # rótulos únicos), as durações e a participação — tudo da
+                    # MESMA fonte, para os rótulos não desalinharem.
+                    _duracs, _partic, _info_deep, _pids_deep = {}, {}, {}, {}
+                    _fonte_min = 'sensor'
+                    try:
+                        _deep = api.get_deep_activity(_aid)
+                        if _deep:
+                            (_duracs, _partic, _info_deep,
+                             _pids_deep) = ler_atividade_profunda(_deep)
+                            if _duracs:
+                                _fonte_min = 'API (deep activity)'
+                    except Exception:
+                        _applog.log_debug_exc()
+                    if _info_deep:                 # posição/equipe da mesma fonte
+                        for _k, _v in _info_deep.items():
+                            _info_atl.setdefault(_k, _v)
+
+                    if _pids_deep:
+                        _pids = dict(_pids_deep)
+                    else:
+                        _pids = rotular_periodos(
+                            api.get_activity_periods(_aid) or [])
                     # Filtro da etapa intermediária: só os períodos escolhidos
                     # (o sinal dos demais nem é baixado).
                     if _per_sel is not None:
@@ -748,23 +810,6 @@ def render_export_wcs_multi(api):
                     if not _sensor:
                         _log.append(f"⚠️ {_nm}: sem dados de sensor — ignorada.")
                         continue
-                    # Duração e participação AUTORITATIVAS: 1 chamada
-                    # /activities/{id}?include=all (períodos com start/end_time
-                    # + atletas de cada período). Fallback: /periods/{id}/
-                    # athletes + timestamps do sensor.
-                    _duracs, _partic, _info_deep = {}, {}, {}
-                    _fonte_min = 'sensor'
-                    try:
-                        _deep = api.get_deep_activity(_aid)
-                        if _deep:
-                            _duracs, _partic, _info_deep = ler_atividade_profunda(_deep)
-                            if _duracs:
-                                _fonte_min = 'API (deep activity)'
-                    except Exception:
-                        _applog.log_debug_exc()
-                    if _info_deep:                 # posição/equipe da mesma fonte
-                        for _k, _v in _info_deep.items():
-                            _info_atl.setdefault(_k, _v)
                     if not _duracs:
                         _id2nome = {str(_r['id']): _r['nome']
                                     for _, _r in _df_atl.iterrows() if _r.get('id')}
