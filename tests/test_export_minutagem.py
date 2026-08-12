@@ -268,3 +268,84 @@ def test_minutos_ignoram_periodo_excluido():
     _tit = [r for r in rows if r['Atleta'] == 'Titular'][0]
     assert _tit['Periodos_jogados'] == 1                 # só o 2º tempo
     assert abs(_tit['Minutos'] - dur_f['2 Tempo']) < 0.01
+
+
+# ── Critério de participação: pico de 1 min (independente da duração) ────────
+def _serie_mista(vel_jogando, min_jogando, min_parado, ts0=1000.0):
+    """Dispositivo ligado o período todo, mas o atleta só joga parte dele."""
+    pts = []
+    _i = 0
+    for _ in range(int(min_parado * 60 * _HZ)):
+        pts.append({'v': 0.05, 'ts': ts0 + _i / _HZ, 'cs': 0}); _i += 1
+    for _ in range(int(min_jogando * 60 * _HZ)):
+        pts.append({'v': vel_jogando / 3.6, 'ts': ts0 + _i / _HZ, 'cs': 0}); _i += 1
+    return pts
+
+
+def test_substituto_que_jogou_10min_de_50_e_incluido():
+    """REGRESSÃO: o critério antigo (m/min sobre a duração do PERÍODO) descartava
+    quem entrou no meio — 900 m / 50 min = 18 m/min, abaixo do piso de 25."""
+    from viz.export_wcs_multi import participou_do_periodo
+    sub = _serie_mista(vel_jogando=13.0, min_jogando=10, min_parado=40)
+    ds = {'2 TEMPO': {'Substituto': sub}}
+    dur = {'2 TEMPO': 50.0}                    # período longo
+    assert participou_do_periodo('Substituto', '2 TEMPO', ds, {'2 TEMPO': None},
+                                 _HZ, dur) is True
+
+
+def test_reserva_no_banco_continua_excluido():
+    from viz.export_wcs_multi import participou_do_periodo
+    banco = _serie_mista(vel_jogando=0.4, min_jogando=50, min_parado=0)
+    ds = {'1 TEMPO': {'Reserva': banco}}
+    assert participou_do_periodo('Reserva', '1 TEMPO', ds, {'1 TEMPO': None},
+                                 _HZ, {'1 TEMPO': 50.0}) is False
+
+
+def test_pico_1min_independe_do_tempo_ligado():
+    """Mesmo trecho de jogo, dispositivo ligado por tempos diferentes → mesma
+    decisão (o critério antigo mudava de resposta)."""
+    from viz.export_wcs_multi import participou_do_periodo
+    curto = _serie_mista(13.0, min_jogando=10, min_parado=0)
+    longo = _serie_mista(13.0, min_jogando=10, min_parado=60)
+    for _nm, _s in (('A', curto), ('B', longo)):
+        ds = {'P': {_nm: _s}}
+        assert participou_do_periodo(_nm, 'P', ds, {'P': None}, _HZ,
+                                     {'P': 70.0}) is True
+
+
+def test_desligar_filtro_inclui_todo_periodo_com_sinal():
+    """Escape para o prazo: exigir=False aceita qualquer período com dados."""
+    from viz.export_wcs_multi import participou_do_periodo
+    banco = _serie_mista(vel_jogando=0.4, min_jogando=50, min_parado=0)
+    ds = {'1 TEMPO': {'Reserva': banco}}
+    assert participou_do_periodo('Reserva', '1 TEMPO', ds, {'1 TEMPO': None},
+                                 _HZ, {}, exigir=False) is True
+    # sem sinal continua fora, mesmo sem exigir
+    assert participou_do_periodo('Ninguem', '1 TEMPO', ds, {}, _HZ, {},
+                                 exigir=False) is False
+
+
+def test_lista_oficial_ainda_tem_prioridade():
+    from viz.export_wcs_multi import participou_do_periodo
+    sub = _serie_mista(13.0, min_jogando=10, min_parado=40)
+    ds = {'2 TEMPO': {'Substituto': sub}}
+    # a API diz que participou → entra
+    assert participou_do_periodo('Substituto', '2 TEMPO', ds,
+                                 {'2 TEMPO': {'Substituto'}}, _HZ, {}) is True
+    # a API diz que NÃO participou → fica fora
+    assert participou_do_periodo('Substituto', '2 TEMPO', ds,
+                                 {'2 TEMPO': {'Outro'}}, _HZ, {}) is False
+
+
+def test_atleta_dos_dois_tempos_recebe_os_dois():
+    """O sintoma relatado: quem jogou os 2 tempos deve ter Periodos_jogados=2."""
+    jogo = _serie_mista(13.0, min_jogando=45, min_parado=0)
+    ds = {'1 TEMPO': {'Titular': jogo}, '2 TEMPO': {'Titular': jogo}}
+    dur = {'1 TEMPO': 50.0, '2 TEMPO': 45.0}
+    rows, _ = _linhas_wcs_atividade(
+        'J', '23/07/2026', ds, {}, [wx.VAR_DIST], [1],
+        ['Partida inteira', 'Por período'], _HZ, {},
+        participantes={'1 TEMPO': None, '2 TEMPO': None}, duracoes=dur)
+    _pi = [r for r in rows if r['Escopo'] == 'Partida inteira'][0]
+    assert _pi['Periodos_jogados'] == 2
+    assert abs(_pi['Minutos'] - 95.0) < 0.01           # 50 + 45

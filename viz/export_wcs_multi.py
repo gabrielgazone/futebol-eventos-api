@@ -14,6 +14,7 @@ import pandas as pd
 import streamlit as st
 
 import applog as _applog
+import metrics as _mtr
 import wcs_export as _wx
 from analysis import combinar_periodos_continuo
 from data_loader import carregar_dados
@@ -306,13 +307,12 @@ def _participantes_por_periodo(api, period_ids, id_para_nome):
     return _out
 
 
-# Piso de participação (m/min): usado SÓ quando a API não informa o elenco do
-# período. No export do OpenField, reservas com o dispositivo ligado ficam em
-# ~2–3 m/min (ex.: 136 m em 51 min), enquanto quem entra em campo passa de
-# 60 m/min (ex.: 5187 m em 55,7 min). 25 m/min separa os dois casos com folga e
-# é interpretável — melhor que uma fração da mediana, que o próprio reserva
-# distorce quando há muitos no banco.
-_PISO_M_POR_MIN = 25.0
+# Piso de participação (m no melhor bloco de 1 min): usado SÓ quando a API não
+# informa o elenco do período. Quem entrou em campo supera 100 m no seu melhor
+# minuto (trote já dá ~150); dispositivo ligado no banco não chega. Usar o PICO
+# em vez de m/min médio torna o critério independente da duração — um substituto
+# que jogou 10 min de um tempo de 50 não é mais confundido com reserva.
+_PISO_PICO_1MIN_M = 100.0
 
 
 def _dist_total_m(sensor_points, hz=10.0):
@@ -330,27 +330,51 @@ def _dist_total_m(sensor_points, hz=10.0):
     return _tot
 
 
+def _pico_1min_m(sensor_points, hz=10.0):
+    """Maior distância (m) num bloco de 1 min — discriminador de participação
+    INDEPENDENTE de quanto tempo o dispositivo ficou ligado."""
+    _n = int(round(60 * hz))
+    if not sensor_points or len(sensor_points) < _n:
+        # Série menor que 1 min: usa o que há, extrapolado para 1 min
+        _d = _dist_total_m(sensor_points, hz)
+        _min = len(sensor_points) / hz / 60.0 if hz > 0 else 0.0
+        return (_d / _min) if _min > 0 else 0.0
+    _sv = [0.0]
+    _prev = None
+    for _p in sensor_points:
+        try:
+            _v = float(_p.get('v') or 0.0)
+        except (TypeError, ValueError):
+            _v = 0.0
+        if _prev is not None:
+            _sv.append(((_prev + _v) / 2.0) / hz)
+        _prev = _v
+    _rw = _mtr.rolling_sum(_sv, _n)
+    return float(max(_rw)) if _rw else 0.0
+
+
 def participou_do_periodo(nome, periodo, dados_sensor, participantes, hz=10.0,
-                          duracoes=None):
+                          duracoes=None, exigir=True):
     """Se o atleta PARTICIPOU do período (critério do OpenField).
 
     1) Lista oficial da API, quando disponível — critério primário.
-    2) Senão, piso de intensidade em m/min (_PISO_M_POR_MIN): o dispositivo
-       ligado no banco fica uma ordem de grandeza abaixo de quem entra em campo.
-    Evita gerar linhas que sugerem presença num tempo em que o atleta não jogou.
+    2) Senão, PICO de 1 min: quem entrou em campo passa de 100 m no seu melhor
+       minuto; dispositivo ligado no banco não chega perto. Este critério NÃO
+       depende da duração — a versão anterior dividia a distância pela duração do
+       PERÍODO, então um substituto que jogou 10 min de um tempo de 50 caía para
+       ~18 m/min e era descartado apesar de ter jogado.
+    `exigir=False` desliga o filtro: qualquer período com sinal entra (escape
+    para quando a API não informa participação de forma confiável).
     """
     _sp = (dados_sensor.get(periodo) or {}).get(nome) or []
     if not _sp:
         return False
+    if not exigir:
+        return True
     _oficial = (participantes or {}).get(periodo)
     if _oficial is not None:
         return nome in _oficial
-    _dur_min = (duracoes or {}).get(periodo)
-    if not _dur_min:
-        _dur_min = len(_sp) / hz / 60.0 if hz > 0 else 0.0
-    if _dur_min <= 0:
-        return False
-    return (_dist_total_m(_sp, hz) / _dur_min) >= _PISO_M_POR_MIN
+    return _pico_1min_m(_sp, hz) >= _PISO_PICO_1MIN_M
 
 
 def _cols_id(df):
@@ -443,7 +467,8 @@ def pivotar_variaveis(df, pct=90):
 
 def _linhas_wcs_atividade(act_nome, act_data, dados_sensor, info_atl,
                           variaveis, janelas, escopos, hz, cortes,
-                          participantes=None, duracoes=None, pct=0.90):
+                          participantes=None, duracoes=None, pct=0.90,
+                          exigir_participacao=True):
     """Linhas tidy de WCS para UMA atividade já carregada.
 
     info_atl: {nome: (posicao, equipe)} vindo da API (ver _atletas_da_atividade).
@@ -469,7 +494,7 @@ def _linhas_wcs_atividade(act_nome, act_data, dados_sensor, info_atl,
         _peri_ok = []
         for _pnm in dados_sensor.keys():
             if participou_do_periodo(_atl, _pnm, dados_sensor, participantes,
-                                     hz, _dur):
+                                     hz, _dur, exigir_participacao):
                 _peri_ok.append(_pnm)
             elif (dados_sensor.get(_pnm) or {}).get(_atl):
                 _excluidos += 1
@@ -653,6 +678,14 @@ def render_export_wcs_multi(api):
     st.caption(f"**{len(_sel)}** atividade(s) selecionada(s) · {len(_vars_sel)} "
                f"variável(is) · janelas {_jan_sel} · escopo(s) {len(_esc_sel)}")
 
+    _exigir_part = st.checkbox(
+        "Filtrar por participação oficial no período (recomendado)", value=True,
+        key='wcs_multi_exigir_part',
+        help="Ligado: só entram os períodos em que a API confirma que o atleta "
+             "participou (espelha o OpenField). DESLIGUE se atletas que jogaram "
+             "estiverem faltando — aí todo período com sinal entra, e você filtra "
+             "depois pelas colunas Minutos/Periodos_jogados.")
+
     _acumular = st.checkbox(
         "➕ Acumular com o resultado já calculado", value=False,
         key='wcs_multi_acum',
@@ -746,11 +779,20 @@ def render_export_wcs_multi(api):
                             _partic.setdefault(_pn_s, None)
                     _sem_lista = [_p for _p in _sensor.keys()
                                   if _partic.get(_p) is None]
+                    # Diagnóstico decisivo: quantos atletas voltaram POR PERÍODO.
+                    # Se um período aparece com 0, o problema está na carga/API
+                    # (não no filtro de participação) — e o log já mostra qual.
+                    _det_per = " · ".join(
+                        f"{_pn}: {len(_sensor.get(_pn) or {})} atl"
+                        + (f"/{len(_partic[_pn])} oficiais"
+                           if _partic.get(_pn) is not None else "/sem lista")
+                        for _pn in _pids.keys())
                     _novas, _excl = _linhas_wcs_atividade(
                         _nm, _dt, _sensor, _info_atl, _vars_sel, _jan_sel,
                         _esc_sel, 10.0, _cortes,
                         participantes=_partic, duracoes=_duracs,
-                        pct=_pct_ocor / 100.0)
+                        pct=_pct_ocor / 100.0,
+                        exigir_participacao=_exigir_part)
                     _rows += _novas
                     _n_sem_pos = sum(1 for _v in _info_atl.values() if not _v[0])
                     _log.append(
@@ -759,6 +801,7 @@ def render_export_wcs_multi(api):
                         + (f" — ⚠️ {_n_sem_pos} sem posição na API"
                            if _n_sem_pos else "")
                         + f" · Minutos: {_fonte_min}"
+                        + (f" · períodos → {_det_per}" if _det_per else "")
                         + (f" · {_excl} par(es) atleta×período excluído(s) "
                            "por não participação" if _excl else "")
                         + (f" · ⚠️ sem lista oficial de participantes em: "
