@@ -111,9 +111,39 @@ class CatapultAPI:
     def get_team_athletes(self, team_id):
         return _api_fetch(self.base_url, self._token, f"teams/{team_id}/athletes")
 
-    def get_activities(self):
-        return _api_fetch(self.base_url, self._token, "activities",
-                          params=(("page_size", "500"),))
+    def get_activities(self, page_size=500, max_paginas=20):
+        """TODAS as atividades da conta, paginando.
+
+        Antes pedia UMA página de 500: contas com mais atividades perdiam as
+        MAIS ANTIGAS (a API devolve as recentes primeiro), então jogos de meses
+        anteriores simplesmente não apareciam na lista.
+
+        A paginação é defensiva — não depende de a API suportar `page`: se a
+        página seguinte repetir os mesmos ids (parâmetro ignorado) ou vier
+        incompleta/vazia, para. `max_paginas` limita o pior caso.
+        """
+        _todas, _vistos = [], set()
+        for _pg in range(1, int(max_paginas) + 1):
+            _r = _api_fetch(self.base_url, self._token, "activities",
+                            params=(("page_size", str(page_size)),
+                                    ("page", str(_pg))))
+            _lst = _r if isinstance(_r, list) else (_r or {}).get('data', [])
+            if not _lst:
+                break
+            _novos = 0
+            for _a in _lst:
+                _id = _a.get('id') if isinstance(_a, dict) else None
+                if _id is not None:
+                    if _id in _vistos:
+                        continue          # já vista (API ignorou 'page')
+                    _vistos.add(_id)
+                _todas.append(_a)
+                _novos += 1
+            if _novos == 0:
+                break                     # página repetida → não há mais
+            if len(_lst) < page_size:
+                break                     # última página
+        return _todas
 
     def get_activity_athletes(self, activity_id):
         return _api_fetch(self.base_url, self._token,
