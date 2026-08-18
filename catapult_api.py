@@ -151,6 +151,30 @@ class CatapultAPI:
         ("nulls",      "1"),
     )
 
+    # ── Sensor SEM cache (export em lote) ───────────────────────────────────
+    # O _api_fetch cacheia por 15 min. Isso é ótimo para navegar nas abas, mas
+    # no export de ~10 jogos manteria TODO o sinal 10 Hz na memória (dezenas de
+    # milhões de amostras) e estoura o limite do Streamlit Cloud. Estes métodos
+    # buscam sem reter nada: o export consome o sinal e descarta.
+    def _fetch_nc(self, path, params=()):
+        try:
+            r = _http('get', f"{self.base_url}/{path}", headers=self.headers,
+                      params=dict(params), timeout=25)
+            return r.json() if (r is not None and r.status_code == 200) else None
+        except Exception:
+            _applog.log_exc(f"Falha de rede em GET /{path} (sem cache)")
+            return None
+
+    def get_period_sensor_data_nc(self, period_id, athlete_id):
+        return self._fetch_nc(
+            f"periods/{period_id}/athletes/{athlete_id}/sensor",
+            self._SENSOR_PARAMS)
+
+    def get_sensor_data_nc(self, activity_id, athlete_id):
+        return self._fetch_nc(
+            f"activities/{activity_id}/athletes/{athlete_id}/sensor",
+            self._SENSOR_PARAMS)
+
     def get_sensor_data(self, activity_id, athlete_id):
         return _api_fetch(self.base_url, self._token,
                           f"activities/{activity_id}/athletes/{athlete_id}/sensor",

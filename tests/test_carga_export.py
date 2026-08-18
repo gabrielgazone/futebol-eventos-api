@@ -99,3 +99,27 @@ def test_sem_tarefas_retorna_vazio():
     assert carregar_sensor_export(api, 'act', {}, _ATLETAS) == {}
     assert carregar_sensor_export(api, 'act', {'1T': 'p1'}, []) == {}
     assert api.sensor == []
+
+
+def test_prefere_endpoint_sem_cache_para_nao_estourar_memoria():
+    """Com ~10 jogos, o cache de 15 min do _api_fetch reteria todo o sinal
+    10 Hz na memória. O export deve usar a variante SEM cache quando existe."""
+    class ApiComNC(SpyApi):
+        def __init__(self):
+            super().__init__()
+            self.nc = 0
+
+        def get_period_sensor_data_nc(self, pid, aid):
+            self.nc += 1
+            return [{'data': [{'v': 5.0, 'ts': 1000, 'cs': 0}]}]
+
+    api = ApiComNC()
+    carregar_sensor_export(api, 'act', {'1T': 'p1'}, _ATLETAS)
+    assert api.nc == 2                 # usou a versão sem cache
+    assert api.sensor == []            # NÃO usou a cacheada
+
+
+def test_cai_para_endpoint_cacheado_se_nao_houver_nc():
+    api = SpyApi()                      # sem os métodos _nc
+    carregar_sensor_export(api, 'act', {'1T': 'p1'}, _ATLETAS)
+    assert len(api.sensor) == 2         # compatível com APIs antigas

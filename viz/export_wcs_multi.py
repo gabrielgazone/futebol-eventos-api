@@ -10,6 +10,8 @@ O cálculo delega para `wcs_export` (mesmo método canônico da aba WCS).
 """
 from __future__ import annotations
 
+import gc as _gc
+
 import pandas as pd
 import streamlit as st
 
@@ -153,11 +155,15 @@ def carregar_sensor_export(api, activity_id, pids, atletas, participantes=None,
     if not _tarefas:
         return {}
 
+    # Prefere a versão SEM CACHE: com ~10 jogos, o cache de 15 min do
+    # _api_fetch reteria todo o sinal 10 Hz na memória e derruba o app.
+    _f_per = getattr(api, 'get_period_sensor_data_nc', None) or         api.get_period_sensor_data
+    _f_ativ = getattr(api, 'get_sensor_data_nc', None) or api.get_sensor_data
+
     def _busca(_t):
         _pnome, _nome, _pid, _aid = _t
         try:
-            _resp = (api.get_period_sensor_data(_pid, _aid) if _pid
-                     else api.get_sensor_data(activity_id, _aid))
+            _resp = (_f_per(_pid, _aid) if _pid else _f_ativ(activity_id, _aid))
             return _pnome, _nome, (extrair_dados_sensor(_resp) or [])
         except Exception:
             _applog.log_debug_exc()
@@ -890,6 +896,10 @@ def render_export_wcs_multi(api):
                         pct=_pct_ocor / 100.0,
                         exigir_participacao=_exigir_part)
                     _rows += _novas
+                    # Libera o sinal desta atividade antes da próxima: com ~10
+                    # jogos o acúmulo de amostras 10 Hz estoura a memória.
+                    _sensor = None
+                    _gc.collect()
                     _n_sem_pos = sum(1 for _v in _info_atl.values() if not _v[0])
                     _log.append(
                         f"✅ {_nm}: {len(_novas)} linha(s), "
