@@ -16,8 +16,10 @@ import streamlit as st
 import applog as _applog
 import metrics as _mtr
 import wcs_export as _wx
+from concurrent.futures import ThreadPoolExecutor
+
 from analysis import combinar_periodos_continuo
-from data_loader import carregar_dados
+from field import extrair_dados_sensor
 
 _SS_RES = '_wcs_multi_resultado'      # DataFrame tidy calculado
 _SS_LOG = '_wcs_multi_log'            # avisos por atividade
@@ -125,6 +127,55 @@ def _atletas_da_atividade(api, activity_id, pos_map, eq_map):
             'equipe': eq_map.get(_aid, '') or '',
         })
     return pd.DataFrame(_rows)
+
+
+def carregar_sensor_export(api, activity_id, pids, atletas, participantes=None,
+                           max_workers=8):
+    """Carrega SÓ o sinal do sensor (v/a/pl/ts), em PARALELO.
+
+    O carregador geral do app faz até 6 chamadas por atleta×período (sensor,
+    efforts, eventos de futebol, limiares, perfil e resumo) porque as abas
+    precisam disso. O export WCS usa apenas o sinal — então aqui é 1 chamada por
+    atleta×período, sem processamento extra e sem escrever na tela (o que também
+    evita inflar o DOM com 10 jogos). Em 10 jogos isso corta ~3.600 chamadas
+    sequenciais para ~600 concorrentes.
+
+    `participantes` ({período: set(nomes)|None}) evita baixar quem não jogou o
+    período — economia direta de chamadas. Retorna {período: {atleta: pontos}}.
+    """
+    _tarefas = []
+    for _pnome, _pid in (pids or {}).items():
+        _ofic = (participantes or {}).get(_pnome)
+        for _nome, _aid in atletas:
+            if _ofic is not None and _nome not in _ofic:
+                continue                      # não participou: nem baixa
+            _tarefas.append((_pnome, _nome, _pid, _aid))
+    if not _tarefas:
+        return {}
+
+    def _busca(_t):
+        _pnome, _nome, _pid, _aid = _t
+        try:
+            _resp = (api.get_period_sensor_data(_pid, _aid) if _pid
+                     else api.get_sensor_data(activity_id, _aid))
+            return _pnome, _nome, (extrair_dados_sensor(_resp) or [])
+        except Exception:
+            _applog.log_debug_exc()
+            return _pnome, _nome, []
+
+    _out = {}
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as _ex:
+            for _pnome, _nome, _pts in _ex.map(_busca, _tarefas):
+                if _pts:
+                    _out.setdefault(_pnome, {})[_nome] = _pts
+    except Exception:
+        _applog.log_exc("carga paralela do sensor (export)")
+        for _t in _tarefas:                   # degrada para sequencial
+            _pnome, _nome, _pts = _busca(_t)
+            if _pts:
+                _out.setdefault(_pnome, {})[_nome] = _pts
+    return _out
 
 
 def contar_unicos(df, coluna):
@@ -769,8 +820,6 @@ def render_export_wcs_multi(api):
                         continue
                     _info_atl = {_r['nome']: (_r['posicao'], _r['equipe'])
                                  for _, _r in _df_atl.iterrows()}
-                    st.session_state['atletas_filtrados'] = _df_atl
-                    st.session_state['atletas_sel'] = _df_atl['nome'].tolist()
 
                     # Atividade profunda PRIMEIRO: dela saem os períodos (com
                     # rótulos únicos), as durações e a participação — tudo da
@@ -805,8 +854,10 @@ def render_export_wcs_multi(api):
                             continue
                     if not _pids:
                         _pids = {'Atividade Completa': None}
-                    _carga = carregar_dados(api, _aid, _pids, list(_pids.keys()))
-                    _sensor = _carga[1]
+                    _atl_pares = [(_r['nome'], _r['id'])
+                                  for _, _r in _df_atl.iterrows() if _r.get('id')]
+                    _sensor = carregar_sensor_export(
+                        api, _aid, _pids, _atl_pares, _partic)
                     if not _sensor:
                         _log.append(f"⚠️ {_nm}: sem dados de sensor — ignorada.")
                         continue
