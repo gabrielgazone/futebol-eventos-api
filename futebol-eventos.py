@@ -405,6 +405,7 @@ from viz.campo import render_campo  # noqa: E402
 from viz.janelas import render_janelas  # noqa: E402
 from viz.neuromuscular import render_neuromuscular  # noqa: E402
 from viz.acc_vel import render_acc_vel  # noqa: E402
+from viz.acc_profile import render_acc_profile  # noqa: E402
 from viz.fc import render_fc  # noqa: E402
 from viz.por_posicao import render_por_posicao  # noqa: E402
 from viz.wcs import render_wcs  # noqa: E402
@@ -1741,7 +1742,7 @@ Escolha um ou mais atletas para análise simultânea.
                 # Campo & GPS agora abriga também as antigas sub-abas de Carga Física
                 _sub_campo = st.tabs(["🗺️ Campo de Futebol", "⚡ WCS",
                                       "💪 Neuromuscular", "📊 Janelas Temporais",
-                                      "🏎️ Acc-Vel", "❤️ FC"])
+                                      "🏎️ Acc-Vel", "🚀 Perfil ES", "❤️ FC"])
             with _main_tabs[2]:
                 render_tatica_coletiva(dados_posicao_por_periodo, periodos_selecionados, st.session_state.atletas_sel)
             with _main_tabs[4]:
@@ -1759,7 +1760,8 @@ Escolha um ou mais atletas para análise simultânea.
                 _sub_campo[3],    # 2: Janelas Temporais       → Campo & GPS
                 _sub_campo[2],    # 3: Neuromuscular           → mesma aba (Esforços Neuromusculares)
                 _sub_campo[4],    # 4: Acc-Vel                 → Campo & GPS
-                _sub_campo[5],    # 5: FC (TRIMP + Zonas)      → Campo & GPS
+                _sub_campo[6],    # 5: FC (TRIMP + Zonas)      → Campo & GPS
+                                  #    (índice 5 = 🚀 Perfil ES, renderizado abaixo)
                 _sub_resumo[1],   # 6: Por Posição             → Resumo ✓
                 _sub_campo[0],    # 7: (removido — antiga História do Jogo)
                 _main_tabs[3],    # 8: Ao Vivo                → Ao Vivo (tab principal)
@@ -1788,6 +1790,10 @@ Escolha um ou mais atletas para análise simultânea.
             # ==================== ABA 5: PERFIL ACELERAÇÃO-VELOCIDADE ====================
             with abas[4]:
                 render_acc_vel(dados_sensor_por_atleta_por_periodo, resultados_por_periodo)
+
+            # ========= PERFIL DE ACELERAÇÃO POR VELOCIDADE DE ENTRADA (ES1–ES4) =========
+            with _sub_campo[5]:
+                render_acc_profile(dados_sensor_por_atleta_por_periodo, _SENSOR_HZ)
 
             # ══════════════════════════════════════════════════════════════
             # ABA 6: FC — TRIMP & ZONAS DE FREQUÊNCIA CARDÍACA
